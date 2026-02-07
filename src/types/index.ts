@@ -67,6 +67,49 @@ export interface Action {
   confidence?: number;
 }
 
+// Agent System Types
+export interface AgentActionDefinition {
+  type: string;
+  keywords: string[];
+  description: string;
+  priority?: number;
+}
+
+export interface AgentConfig {
+  id: string;
+  name: string;
+  description: string;
+  model: string;
+  systemPrompt: string;
+  actions?: AgentActionDefinition[];
+  temperature?: number;
+  maxTokens?: number;
+  enabled?: boolean;
+}
+
+export interface AgentResponse {
+  response: string;
+  action?: string | null;
+  conversationId?: string;
+  agent: {
+    id: string;
+    name: string;
+  };
+  tokenCount?: number;
+  processingTime?: number;
+}
+
+export interface AgentListItem {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  actions?: Array<{
+    type: string;
+    description: string;
+  }>;
+}
+
 // Intent Types
 export type IntentType =
   | 'register'

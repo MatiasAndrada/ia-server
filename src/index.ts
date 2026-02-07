@@ -27,6 +27,12 @@ import {
   batchHandler,
 } from './controllers/chat.controller';
 import { healthHandler, statsHandler } from './controllers/health.controller';
+import {
+  listAgentsHandler,
+  getAgentHandler,
+  agentChatHandler,
+  clearConversationHandler as agentClearConversationHandler,
+} from './controllers/agent.controller';
 
 // Load and validate environment variables
 function getEnvConfig(): EnvConfig {
@@ -138,7 +144,7 @@ async function initializeApp() {
     // Apply general rate limiter to all API routes
     app.use('/api', generalRateLimiter);
 
-    // API Routes
+    // API Routes - Legacy (para compatibilidad)
     app.post('/api/chat', validate(chatSchema), chatHandler);
 
     app.post('/api/analyze-intent', validate(intentSchema), analyzeIntentHandler);
@@ -146,6 +152,15 @@ async function initializeApp() {
     app.delete('/api/conversations/:phone', validatePhoneParam, clearConversationHandler);
 
     app.post('/api/batch', batchRateLimiter, validate(batchSchema), batchHandler);
+
+    // API Routes - Agentes (nuevo sistema multi-agente)
+    app.get('/api/agents', listAgentsHandler);
+    
+    app.get('/api/agents/:agentId', getAgentHandler);
+    
+    app.post('/api/agents/:agentId/chat', agentChatHandler);
+    
+    app.delete('/api/agents/:agentId/conversations/:conversationId', agentClearConversationHandler);
 
     // 404 handler
     app.use((req: Request, res: Response) => {

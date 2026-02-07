@@ -18,15 +18,17 @@ API REST en Node.js/Express que funciona como backend de inteligencia artificial
 ## ✨ Características
 
 - 🤖 **Procesamiento de IA con Ollama**: Usa Llama 3.2 para respuestas naturales
-- 💬 **Gestión de Conversaciones**: Mantiene historial de últimos 10 mensajes por teléfono
-- 🎯 **Análisis de Intenciones**: Clasifica mensajes en acciones específicas
+- 🎭 **Sistema Multi-Agente**: Múltiples agentes especializados con diferentes propósitos ([Ver AGENTS.md](AGENTS.md))
+- 💬 **Gestión de Conversaciones**: Mantiene historial de últimos 10 mensajes por conversación
+- 🎯 **Análisis de Intenciones**: Clasifica mensajes en acciones específicas automáticamente
 - ⚡ **Procesamiento por Lotes**: Endpoint batch para múltiples mensajes
 - 🔒 **Seguridad**: Autenticación con API Key, CORS, Helmet, Rate Limiting
-- 📊 **Cache Inteligente**: Redis para conversaciones y contexto de negocios
+- 📊 **Cache Inteligente**: Redis para conversaciones y contexto
 - 🔄 **Retry Logic**: Reintentos automáticos en fallos de Ollama
 - 📝 **Logging Estructurado**: Winston para logs detallados
 - ✅ **Validación Robusta**: Zod para validación de esquemas
 - 🚀 **Process Management**: PM2 para producción con cluster mode
+- 🔌 **API Flexible**: Soporte para múltiples agentes y casos de uso
 
 ## 🏗️ Arquitectura
 
@@ -325,6 +327,72 @@ Procesa múltiples mensajes en batch (máx. 50).
   "failedCount": 0
 }
 ```
+
+---
+
+## 🎭 Sistema Multi-Agente (Nuevo)
+
+El servidor ahora soporta múltiples agentes especializados. **Ver [AGENTS.md](AGENTS.md) para documentación completa**.
+
+### 6. GET `/api/agents`
+
+Lista todos los agentes disponibles.
+
+**Example:**
+```bash
+curl -H "Authorization: Bearer YOUR_API_KEY" \
+  http://localhost:4000/api/agents
+```
+
+### 7. GET `/api/agents/:agentId`
+
+Obtiene detalles de un agente específico.
+
+**Example:**
+```bash
+curl -H "Authorization: Bearer YOUR_API_KEY" \
+  http://localhost:4000/api/agents/waitlist
+```
+
+### 8. POST `/api/agents/:agentId/chat`
+
+Genera una respuesta usando un agente específico.
+
+**Example:**
+```bash
+curl -X POST \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Hola, cuál es mi posición?",
+    "conversationId": "user-123",
+    "context": {"phone": "+1234567890"}
+  }' \
+  http://localhost:4000/api/agents/waitlist/chat
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "response": "Hola! Con gusto te ayudo...",
+    "action": "CHECK_STATUS",
+    "conversationId": "user-123",
+    "agent": {
+      "id": "waitlist",
+      "name": "Asistente de Lista de Espera"
+    },
+    "processingTime": 1245
+  }
+}
+```
+
+### 9. DELETE `/api/agents/:agentId/conversations/:conversationId`
+
+Limpia el historial de una conversación específica.
+
+---
 
 ## 🔌 Integración con Next.js
 
