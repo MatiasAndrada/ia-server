@@ -50,21 +50,7 @@ export function parseActions(responseText: string): Action[] {
 function inferActionFromText(text: string): Action | null {
   const lowerText = text.toLowerCase();
 
-  // Check for registration intent
-  if (
-    lowerText.includes('anot') ||
-    lowerText.includes('registr') ||
-    lowerText.includes('list') ||
-    (lowerText.includes('nombre') && lowerText.includes('personas'))
-  ) {
-    return {
-      type: 'REGISTER',
-      data: { inferred: true },
-      confidence: 0.6,
-    };
-  }
-
-  // Check for status query
+  // Check for status query first (more specific)
   if (
     lowerText.includes('posición') ||
     lowerText.includes('posicion') ||
@@ -76,6 +62,20 @@ function inferActionFromText(text: string): Action | null {
       type: 'CHECK_STATUS',
       data: { inferred: true },
       confidence: 0.7,
+    };
+  }
+
+  // Check for registration intent
+  if (
+    lowerText.includes('anot') ||
+    lowerText.includes('registr') ||
+    (lowerText.includes('lista de espera') && !lowerText.includes('posición')) ||
+    (lowerText.includes('nombre') && lowerText.includes('personas'))
+  ) {
+    return {
+      type: 'REGISTER',
+      data: { inferred: true },
+      confidence: 0.6,
     };
   }
 

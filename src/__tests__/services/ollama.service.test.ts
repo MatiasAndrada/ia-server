@@ -1,14 +1,9 @@
-import axios from 'axios';
 import { OllamaService } from '../../services/ollama.service';
 import { OllamaConfig } from '../../config/ollama';
-import { EnvConfig } from '../../types';
 
-// Mock axios and OllamaConfig
-jest.mock('axios');
+// Mock OllamaConfig
 jest.mock('../../config/ollama');
 jest.mock('../../utils/logger');
-
-const mockedAxios = axios as jest.Mocked<typeof axios>;
 
 describe('OllamaService', () => {
   let service: OllamaService;
