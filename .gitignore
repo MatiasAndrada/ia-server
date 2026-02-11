@@ -41,3 +41,5 @@ coverage/
 
 # PM2
 .pm2/
+auth_sessions/
+auth_sessions/
