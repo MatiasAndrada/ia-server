@@ -14,46 +14,52 @@ export type Database = {
           id: string
           name: string
           type: string
+          supports_tables: boolean
+          requires_party_size: boolean
           public_screen_enabled: boolean
           created_at: string
           updated_at: string
           ai_chat_enabled: boolean
+          auto_accept_reservations: boolean
           language: string
-          requires_party_size: boolean
-          supports_tables: boolean
           whatsapp_phone_number: string
           whatsapp_session_id: string
-          auto_accept_reservations?: boolean | null
+          manual_table_occupancy_enabled: boolean
+          public_join_enabled: boolean
         }
         Insert: {
           id?: string
           name: string
           type: string
+          supports_tables: boolean
+          requires_party_size: boolean
           public_screen_enabled: boolean
           created_at?: string
           updated_at?: string
           ai_chat_enabled: boolean
+          auto_accept_reservations: boolean
           language: string
-          requires_party_size: boolean
-          supports_tables: boolean
           whatsapp_phone_number: string
           whatsapp_session_id: string
-          auto_accept_reservations?: boolean | null
+          manual_table_occupancy_enabled: boolean
+          public_join_enabled: boolean
         }
         Update: {
           id?: string
           name?: string
           type?: string
+          supports_tables?: boolean
+          requires_party_size?: boolean
           public_screen_enabled?: boolean
           created_at?: string
           updated_at?: string
           ai_chat_enabled?: boolean
+          auto_accept_reservations?: boolean
           language?: string
-          requires_party_size?: boolean
-          supports_tables?: boolean
           whatsapp_phone_number?: string
           whatsapp_session_id?: string
-          auto_accept_reservations?: boolean | null
+          manual_table_occupancy_enabled?: boolean
+          public_join_enabled?: boolean
         }
         Relationships: []
       }
@@ -62,35 +68,30 @@ export type Database = {
           id: string
           phone: string
           name: string
-          business_id: string
-          created_at: string
+          first_seen_at: string
           last_seen_at: string
+          created_at: string
+          business_id: string
         }
         Insert: {
           id?: string
           phone: string
           name: string
-          business_id: string
-          created_at?: string
+          first_seen_at?: string
           last_seen_at?: string
+          created_at?: string
+          business_id: string
         }
         Update: {
           id?: string
           phone?: string
           name?: string
-          business_id?: string
-          created_at?: string
+          first_seen_at?: string
           last_seen_at?: string
+          created_at?: string
+          business_id?: string
         }
-        Relationships: [
-          {
-            foreignKeyName: "customers_business_id_fkey"
-            columns: ["business_id"]
-            isOneToOne: false
-            referencedRelation: "businesses"
-            referencedColumns: ["id"]
-          }
-        ]
+        Relationships: []
       }
       zones: {
         Row: {
@@ -105,7 +106,7 @@ export type Database = {
           id?: string
           business_id: string
           name: string
-          priority?: number
+          priority: number
           created_at?: string
           updated_at?: string
         }
@@ -117,15 +118,7 @@ export type Database = {
           created_at?: string
           updated_at?: string
         }
-        Relationships: [
-          {
-            foreignKeyName: "zones_business_id_fkey"
-            columns: ["business_id"]
-            isOneToOne: false
-            referencedRelation: "businesses"
-            referencedColumns: ["id"]
-          }
-        ]
+        Relationships: []
       }
       tables: {
         Row: {
@@ -137,6 +130,7 @@ export type Database = {
           is_active: boolean
           created_at: string
           updated_at: string
+          is_occupied: boolean
         }
         Insert: {
           id?: string
@@ -144,9 +138,10 @@ export type Database = {
           zone_id: string
           table_number: string
           capacity: number
-          is_active?: boolean
+          is_active: boolean
           created_at?: string
           updated_at?: string
+          is_occupied: boolean
         }
         Update: {
           id?: string
@@ -157,23 +152,9 @@ export type Database = {
           is_active?: boolean
           created_at?: string
           updated_at?: string
+          is_occupied?: boolean
         }
-        Relationships: [
-          {
-            foreignKeyName: "tables_business_id_fkey"
-            columns: ["business_id"]
-            isOneToOne: false
-            referencedRelation: "businesses"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "tables_zone_id_fkey"
-            columns: ["zone_id"]
-            isOneToOne: false
-            referencedRelation: "zones"
-            referencedColumns: ["id"]
-          }
-        ]
+        Relationships: []
       }
       waitlist_entries: {
         Row: {
@@ -184,12 +165,12 @@ export type Database = {
           position: number
           display_code: string
           queued_at: string
-          notified_at: string | null
-          seated_at: string | null
+          notified_at: string
+          seated_at: string
           created_at: string
           updated_at: string
           status: string
-          table_id: string | null
+          table_id: string | null | null
         }
         Insert: {
           id?: string
@@ -199,12 +180,12 @@ export type Database = {
           position: number
           display_code: string
           queued_at?: string
-          notified_at?: string | null
-          seated_at?: string | null
+          notified_at?: string
+          seated_at?: string
           created_at?: string
           updated_at?: string
           status: string
-          table_id?: string | null
+          table_id?: string | null | null
         }
         Update: {
           id?: string
@@ -214,36 +195,14 @@ export type Database = {
           position?: number
           display_code?: string
           queued_at?: string
-          notified_at?: string | null
-          seated_at?: string | null
+          notified_at?: string
+          seated_at?: string
           created_at?: string
           updated_at?: string
           status?: string
-          table_id?: string | null
+          table_id?: string | null | null
         }
-        Relationships: [
-          {
-            foreignKeyName: "waitlist_entries_business_id_fkey"
-            columns: ["business_id"]
-            isOneToOne: false
-            referencedRelation: "businesses"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "waitlist_entries_customer_id_fkey"
-            columns: ["customer_id"]
-            isOneToOne: false
-            referencedRelation: "customers"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "waitlist_entries_table_id_fkey"
-            columns: ["table_id"]
-            isOneToOne: false
-            referencedRelation: "tables"
-            referencedColumns: ["id"]
-          }
-        ]
+        Relationships: []
       }
     }
     Views: {
@@ -261,11 +220,9 @@ export type Database = {
   }
 }
 
-type PublicSchema = Database[Extract<keyof Database, "public">]
-
 export type Tables<
   PublicTableNameOrOptions extends
-    | keyof (PublicSchema["Tables"] & PublicSchema["Views"])
+    | keyof (Database["public"]["Tables"] & Database["public"]["Views"])
     | { schema: keyof Database },
   TableName extends PublicTableNameOrOptions extends { schema: keyof Database }
     ? keyof (Database[PublicTableNameOrOptions["schema"]]["Tables"] &
@@ -278,10 +235,10 @@ export type Tables<
     }
     ? R
     : never
-  : PublicTableNameOrOptions extends keyof (PublicSchema["Tables"] &
-      PublicSchema["Views"])
-  ? (PublicSchema["Tables"] &
-      PublicSchema["Views"])[PublicTableNameOrOptions] extends {
+  : PublicTableNameOrOptions extends keyof (Database["public"]["Tables"] &
+      Database["public"]["Views"])
+  ? (Database["public"]["Tables"] &
+      Database["public"]["Views"])[PublicTableNameOrOptions] extends {
       Row: infer R
     }
     ? R
@@ -290,7 +247,7 @@ export type Tables<
 
 export type TablesInsert<
   PublicTableNameOrOptions extends
-    | keyof PublicSchema["Tables"]
+    | keyof Database["public"]["Tables"]
     | { schema: keyof Database },
   TableName extends PublicTableNameOrOptions extends { schema: keyof Database }
     ? keyof Database[PublicTableNameOrOptions["schema"]]["Tables"]
@@ -301,8 +258,8 @@ export type TablesInsert<
     }
     ? I
     : never
-  : PublicTableNameOrOptions extends keyof PublicSchema["Tables"]
-  ? PublicSchema["Tables"][PublicTableNameOrOptions] extends {
+  : PublicTableNameOrOptions extends keyof Database["public"]["Tables"]
+  ? Database["public"]["Tables"][PublicTableNameOrOptions] extends {
       Insert: infer I
     }
     ? I
@@ -311,7 +268,7 @@ export type TablesInsert<
 
 export type TablesUpdate<
   PublicTableNameOrOptions extends
-    | keyof PublicSchema["Tables"]
+    | keyof Database["public"]["Tables"]
     | { schema: keyof Database },
   TableName extends PublicTableNameOrOptions extends { schema: keyof Database }
     ? keyof Database[PublicTableNameOrOptions["schema"]]["Tables"]
@@ -322,8 +279,8 @@ export type TablesUpdate<
     }
     ? U
     : never
-  : PublicTableNameOrOptions extends keyof PublicSchema["Tables"]
-  ? PublicSchema["Tables"][PublicTableNameOrOptions] extends {
+  : PublicTableNameOrOptions extends keyof Database["public"]["Tables"]
+  ? Database["public"]["Tables"][PublicTableNameOrOptions] extends {
       Update: infer U
     }
     ? U
@@ -332,13 +289,13 @@ export type TablesUpdate<
 
 export type Enums<
   PublicEnumNameOrOptions extends
-    | keyof PublicSchema["Enums"]
+    | keyof Database["public"]["Enums"]
     | { schema: keyof Database },
   EnumName extends PublicEnumNameOrOptions extends { schema: keyof Database }
     ? keyof Database[PublicEnumNameOrOptions["schema"]]["Enums"]
     : never = never
 > = PublicEnumNameOrOptions extends { schema: keyof Database }
   ? Database[PublicEnumNameOrOptions["schema"]]["Enums"][EnumName]
-  : PublicEnumNameOrOptions extends keyof PublicSchema["Enums"]
-  ? PublicSchema["Enums"][PublicEnumNameOrOptions]
+  : PublicEnumNameOrOptions extends keyof Database["public"]["Enums"]
+  ? Database["public"]["Enums"][PublicEnumNameOrOptions]
   : never
