@@ -2,9 +2,11 @@ module.exports = {
   apps: [
     {
       name: 'ia-server',
-      script: './dist/index.js',
-      instances: 2,
-      exec_mode: 'cluster',
+      script: 'yarn',
+      args: 'start',
+      interpreter: '/root/.nvm/versions/node/v22.22.0/bin/node',
+      instances: 1,
+      exec_mode: 'fork',
       watch: false,
       max_memory_restart: '500M',
       env: {
