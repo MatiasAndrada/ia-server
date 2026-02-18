@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { agentRegistry } from '../agents';
 import { agentService } from '../services/agent.service';
+import { ReservationService } from '../services/reservation.service';
 import { logger } from '../utils/logger';
 
 /**
@@ -114,12 +115,54 @@ export async function agentChatHandler(req: Request, res: Response) {
       messageLength: message.length
     });
 
+    // Enriquecer contexto con zonas disponibles si es necesario
+    let enrichedContext = context || {};
+    
+    // Para el agente waitlist, obtener zonas disponibles de Supabase
+    if (agentId === 'waitlist' && enrichedContext.draftData?.partySize) {
+      const step = enrichedContext.currentStep;
+      const partySize = enrichedContext.draftData.partySize;
+      const businessId = enrichedContext.businessId;
+      
+      // Si estamos en el paso de selección de zona o confirmación, obtener zonas
+      if ((step === 'zone_selection' || step === 'confirmation') && businessId) {
+        try {
+          const zonesMap = await ReservationService.getAvailableZonesWithTables(
+            businessId,
+            partySize
+          );
+          
+          const availableZones = Array.from(zonesMap.keys());
+          enrichedContext.availableZones = availableZones;
+          enrichedContext.availableZonesFormatted = availableZones
+            .map((zone, idx) => `${idx + 1}. ${zone}`)
+            .join('\n');
+          
+          logger.info('Available zones added to context', {
+            conversationId,
+            businessId,
+            partySize,
+            zonesCount: availableZones.length,
+          });
+        } catch (error) {
+          logger.error('Error fetching available zones', {
+            agentId,
+            conversationId,
+            businessId,
+            partySize,
+            error: error instanceof Error ? error.message : 'Unknown error'
+          });
+          // Continuar sin las zonas, el agente manejará el error
+        }
+      }
+    }
+
     // Generar respuesta
     const response = await agentService.generateResponse(
       message,
       agent,
       conversationId,
-      context
+      enrichedContext
     );
 
     const totalTime = Date.now() - startTime;
