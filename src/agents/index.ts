@@ -1,6 +1,5 @@
 import { AgentConfig, AgentListItem } from '../types';
 import { waitlistAgent } from './waitlist.agent';
-import { supportAgent } from './support.agent';
 import { logger } from '../utils/logger';
 
 /**
@@ -19,7 +18,6 @@ class AgentRegistry {
    */
   private registerDefaultAgents(): void {
     this.register(waitlistAgent);
-    this.register(supportAgent);
     
     logger.info('Default agents registered', {
       count: this.agents.size,
@@ -118,5 +116,5 @@ class AgentRegistry {
 export const agentRegistry = new AgentRegistry();
 
 // Exports de conveniencia
-export { waitlistAgent, supportAgent };
+export { waitlistAgent };
 export type { AgentConfig, AgentListItem };
