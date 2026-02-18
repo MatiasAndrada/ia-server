@@ -34,6 +34,9 @@ Ver [README.md](README.md) para documentación completa.
 - `API_KEY` - Clave de autenticación (generarla con `openssl rand -hex 32`)
 - `OLLAMA_BASE_URL` - URL de Ollama (default: http://localhost:11434)
 - `REDIS_URL` - URL de Redis (default: redis://localhost:6379)
+- `NODE_ENV` - Modo de ejecución:
+  - `production`: responde a todos los chats de clientes
+  - `test`: responde SOLO en tu chat personal de WhatsApp (útil para pruebas)
 
 ## 📡 Endpoints Principales
 
