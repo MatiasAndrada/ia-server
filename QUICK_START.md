@@ -27,19 +27,26 @@ curl http://localhost:4000/health
 
 ## 📚 Documentación Completa
 
-Ver [README.md](README.md) para documentación completa.
+Ver [README.md](README.md) para documentación completa y:
+- [docs/ENDPOINTS.md](docs/ENDPOINTS.md) para todos los endpoints HTTP
+- [docs/AGENTS.md](docs/AGENTS.md) para configuración del sistema multi-agente
 
 ## 🔑 Variables de Entorno Requeridas
 
 - `API_KEY` - Clave de autenticación (generarla con `openssl rand -hex 32`)
 - `OLLAMA_BASE_URL` - URL de Ollama (default: http://localhost:11434)
 - `REDIS_URL` - URL de Redis (default: redis://localhost:6379)
+- `NODE_ENV` - Modo de ejecución:
+  - `production`: responde a todos los chats de clientes
+  - `test`: responde SOLO en tu chat personal de WhatsApp (útil para pruebas)
 
 ## 📡 Endpoints Principales
 
 - `POST /api/chat` - Procesar mensaje con IA
 - `POST /api/analyze-intent` - Analizar intención
 - `POST /api/batch` - Procesar múltiples mensajes
+- `GET /api/sessions` - Listar sesiones de WhatsApp
+- `POST /api/messages/send` - Enviar mensajes por WhatsApp
 - `GET /health` - Health check
 
 ## 🛠️ Scripts Útiles
