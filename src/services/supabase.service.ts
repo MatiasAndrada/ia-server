@@ -150,6 +150,7 @@ export class SupabaseService {
         .select('*')
         .eq('business_id', businessId)
         .eq('is_active', true)
+        .eq('is_occupied', false)
         .order('zone_id', { ascending: true })
         .order('table_number', { ascending: true });
 
@@ -182,6 +183,47 @@ export class SupabaseService {
       return tables;
     } catch (error) {
       logger.error('Error getting tables', { error, businessId });
+      throw error;
+    }
+  }
+
+  /**
+   * Get all active tables for a business (including occupied tables)
+   */
+  static async getActiveTablesByBusiness(businessId: string): Promise<Table[]> {
+    try {
+      console.log('\n🪑 [DEBUG] getActiveTablesByBusiness called');
+      console.log('📍 Business ID:', businessId);
+
+      const client = this.getClient();
+      const { data: tablesData, error } = await client
+        .from('tables')
+        .select('*')
+        .eq('business_id', businessId)
+        .eq('is_active', true)
+        .order('zone_id', { ascending: true })
+        .order('table_number', { ascending: true });
+
+      console.log('🔍 [DEBUG] Active tables query result:', {
+        hasError: !!error,
+        dataCount: tablesData?.length || 0,
+      });
+
+      if (error) {
+        console.error('❌ [DEBUG] Error fetching active tables:', error);
+        throw error;
+      }
+
+      const tables = (tablesData as Table[] | null) ?? [];
+
+      logger.info('Active tables fetched', {
+        businessId,
+        count: tables.length,
+      });
+
+      return tables;
+    } catch (error) {
+      logger.error('Error getting active tables', { error, businessId });
       throw error;
     }
   }
@@ -362,6 +404,7 @@ export class SupabaseService {
             .eq('business_id', request.businessId)
             .eq('zone_id', zoneId)
             .eq('is_active', true)
+            .eq('is_occupied', false)
             .gte('capacity', request.partySize)
             .order('capacity', { ascending: true })
             .limit(1)
@@ -398,16 +441,18 @@ export class SupabaseService {
       if (request.tableId) {
         const { data: tableData, error: tableError } = await client
           .from('tables')
-          .select('id')
+          .select('id, capacity')
           .eq('id', request.tableId)
           .eq('business_id', request.businessId)
+          .eq('is_active', true)
+          .eq('is_occupied', false)
           .maybeSingle();
 
         if (tableError) {
           throw tableError;
         }
 
-        const table = tableData as Pick<Table, 'id'> | null;
+        const table = tableData as Pick<Table, 'id' | 'capacity'> | null;
         if (!table) {
           logger.error('Table not found', {
             tableId: request.tableId,
@@ -418,12 +463,24 @@ export class SupabaseService {
           };
         }
 
+        if (table.capacity !== null && table.capacity < request.partySize) {
+          logger.error('Table capacity is not enough for party size', {
+            tableId: request.tableId,
+            tableCapacity: table.capacity,
+            partySize: request.partySize,
+          });
+          return {
+            success: false,
+            error: 'La mesa seleccionada no tiene capacidad suficiente',
+          };
+        }
+
         tableId = request.tableId;
       }
 
       // Create waitlist entry
       const initialStatus: WaitlistStatus = autoAccept ? 'NOTIFIED' : 'WAITING';
-      const notifiedAt = autoAccept ? new Date().toISOString() : null;
+      const notifiedAt = autoAccept ? new Date().toISOString() : undefined;
       
       logger.info('💾 Creating waitlist entry in database...', {
         businessId: request.businessId,

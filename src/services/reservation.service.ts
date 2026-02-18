@@ -176,7 +176,7 @@ export class ReservationService {
       logger.info('Loading zones/tables into Redis cache', { businessId });
       
       const zones = await SupabaseService.getZonesByBusiness(businessId);
-      const tables = await SupabaseService.getTablesByBusiness(businessId);
+      const tables = await SupabaseService.getActiveTablesByBusiness(businessId);
       
       // Filter out invalid tables
       const validTables = tables.filter(t => 
@@ -192,7 +192,8 @@ export class ReservationService {
           zone_id: t.zone_id!,
           capacity: t.capacity!,
           table_number: t.table_number!,
-          is_active: t.is_active !== false
+          is_active: t.is_active !== false,
+          is_occupied: t.is_occupied === true
         }))
       };
       
@@ -216,7 +217,7 @@ export class ReservationService {
    */
   static async getCachedZones(businessId: string): Promise<{
     zones: Array<{ id: string; name: string; priority: number }>;
-    tables: Array<{ id: string; zone_id: string; capacity: number; table_number: string; is_active: boolean }>;
+    tables: Array<{ id: string; zone_id: string; capacity: number; table_number: string; is_active: boolean; is_occupied: boolean }>;
   } | null> {
     try {
       const client = RedisConfig.getClient();
@@ -261,7 +262,7 @@ export class ReservationService {
   static filterCachedZonesByPartySize(
     zonesData: {
       zones: Array<{ id: string; name: string; priority: number }>;
-      tables: Array<{ id: string; zone_id: string; capacity: number; table_number: string; is_active: boolean }>;
+      tables: Array<{ id: string; zone_id: string; capacity: number; table_number: string; is_active: boolean; is_occupied: boolean }>;
     },
     partySize: number
   ): Map<string, { zoneId: string; tables: any[] }> {
@@ -275,6 +276,7 @@ export class ReservationService {
         table =>
           table.zone_id === zone.id &&
           table.is_active &&
+          !table.is_occupied &&
           table.capacity >= partySize
       );
       
@@ -313,6 +315,8 @@ export class ReservationService {
         const availableTables = tables.filter(
           table =>
             table.zone_id === zone.id &&
+            table.is_active !== false &&
+            table.is_occupied !== true &&
             (!table.capacity || table.capacity >= partySize)
         );
 
@@ -352,7 +356,17 @@ export class ReservationService {
   static async getAvailableZones(businessId: string): Promise<string[]> {
     try {
       const zones = await SupabaseService.getZonesByBusiness(businessId);
-      return zones.map(zone => zone.name);
+      const tables = await SupabaseService.getTablesByBusiness(businessId);
+
+      const availableZoneIds = new Set(
+        tables
+          .filter(table => table.zone_id && table.is_active !== false && table.is_occupied !== true)
+          .map(table => table.zone_id as string)
+      );
+
+      return zones
+        .filter(zone => availableZoneIds.has(zone.id))
+        .map(zone => zone.name);
     } catch (error) {
       logger.error('Error getting available zones', { error, businessId });
       return [];

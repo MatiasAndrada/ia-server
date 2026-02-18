@@ -1,6 +1,7 @@
 import { SupabaseConfig } from '../config/supabase';
 import { RedisConfig } from '../config/redis';
 import { logger } from '../utils/logger';
+import { ReservationService } from './reservation.service';
 import type { Database } from '../types/supabase';
 
 // Helper types for strict type safety
@@ -215,16 +216,23 @@ export class RealtimeSyncService {
         );
         logger.info('💾 Business cached in Redis', { businessId });
 
-        // Invalidate zones/tables cache for this business (they need reload next time)
+        // Refresh zones/tables cache immediately for this business
         const zonesCacheKey = `business:zones:${businessId}`;
         const tablesCacheKey = `business:tables:${businessId}`;
-        await redis.del(zonesCacheKey);
+        await ReservationService.loadAndCacheZones(businessId);
         await redis.del(tablesCacheKey);
-        logger.info('🔄 Zones/tables cache invalidated', { businessId });
+        logger.info('🔄 Zones/tables cache refreshed', {
+          businessId,
+          zonesCacheKey,
+        });
       } else if (eventType === 'DELETE') {
         // Remove from cache
         const businessKey = `business:${businessId}`;
+        const zonesCacheKey = `business:zones:${businessId}`;
+        const tablesCacheKey = `business:tables:${businessId}`;
         await redis.del(businessKey);
+        await redis.del(zonesCacheKey);
+        await redis.del(tablesCacheKey);
         logger.info('🗑️ Business removed from cache', { businessId });
       }
     } catch (error) {
@@ -257,11 +265,14 @@ export class RealtimeSyncService {
       const zonesCacheKey = `business:zones:${businessId}`;
       const tablesCacheKey = `business:tables:${businessId}`;
 
-      // Invalidate cache so it reloads
-      await redis.del(zonesCacheKey);
+      // Refresh cache immediately after zone changes
+      await ReservationService.loadAndCacheZones(businessId);
       await redis.del(tablesCacheKey);
 
-      logger.info('🔄 Zone cache invalidated for business', { businessId });
+      logger.info('🔄 Zone cache refreshed for business', {
+        businessId,
+        zonesCacheKey,
+      });
     } catch (error) {
       logger.error('Error handling zone change', { error, payload });
     }
@@ -289,12 +300,17 @@ export class RealtimeSyncService {
       }
 
       const redis = RedisConfig.getClient();
+      const zonesCacheKey = `business:zones:${businessId}`;
       const tablesCacheKey = `business:tables:${businessId}`;
 
-      // Invalidate cache so it reloads
+      // Refresh cache immediately after table changes (including is_occupied)
+      await ReservationService.loadAndCacheZones(businessId);
       await redis.del(tablesCacheKey);
 
-      logger.info('🔄 Tables cache invalidated for business', { businessId });
+      logger.info('🔄 Tables/Zones cache refreshed for business', {
+        businessId,
+        zonesCacheKey,
+      });
     } catch (error) {
       logger.error('Error handling tables change', { error, payload });
     }

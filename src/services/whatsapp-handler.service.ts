@@ -75,6 +75,42 @@ export class WhatsAppHandler {
       // Check if there's an active reservation draft
       let draft = await ReservationService.getDraft(conversationId);
 
+      // FAST PATH: deterministic reservation steps should not wait for AI response
+      if (draft && (draft.step === 'party_size' || draft.step === 'zone_selection')) {
+        logger.info('⚡ Bypassing agent for deterministic draft step', {
+          conversationId,
+          businessId,
+          step: draft.step,
+        });
+
+        const handled = await this.processAction(
+          null,
+          messageText,
+          conversationId,
+          businessId,
+          from,
+          draft
+        );
+
+        if (handled) {
+          logger.info('Agent response skipped (deterministic draft step handled)', {
+            conversationId,
+            step: draft.step,
+          });
+          logger.info('WhatsApp message processed successfully', {
+            businessId,
+            phone,
+            action: 'DRAFT_STEP_DIRECT',
+          });
+          return;
+        }
+
+        logger.warn('Deterministic draft step was not fully handled, falling back to agent', {
+          conversationId,
+          step: draft.step,
+        });
+      }
+
       // Courtesy handling: if reservation is already active/confirmed and user sends
       // a short acknowledgment (thanks/ok/dale/etc.), reply naturally without restarting flow.
       if (!draft) {
@@ -411,6 +447,7 @@ export class WhatsAppHandler {
               
               const noTablesMessage = `Lo siento, no tenemos mesas disponibles para ${partySize} personas en este momento. ¿Te gustaría que te agreguemos a la lista de espera?`;
               await this.sendWhatsAppMessage(businessId, jid, noTablesMessage);
+              return true;
               
             } else {
               // Generate zone selection message with REAL zones
