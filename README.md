@@ -18,7 +18,7 @@ API REST en Node.js/Express que funciona como backend de inteligencia artificial
 ## ✨ Características
 
 - 🤖 **Procesamiento de IA con Ollama**: Usa Llama 3.2 para respuestas naturales
-- 🎭 **Sistema Multi-Agente**: Múltiples agentes especializados con diferentes propósitos ([Ver AGENTS.md](AGENTS.md))
+- 🎭 **Sistema Multi-Agente**: Agentes especializados para flujos de negocio ([Ver docs/AGENTS.md](docs/AGENTS.md))
 - 💬 **Gestión de Conversaciones**: Mantiene historial de últimos 10 mensajes por conversación
 - 🎯 **Análisis de Intenciones**: Clasifica mensajes en acciones específicas automáticamente
 - ⚡ **Procesamiento por Lotes**: Endpoint batch para múltiples mensajes
@@ -58,7 +58,7 @@ API REST en Node.js/Express que funciona como backend de inteligencia artificial
 
 ## 📦 Requisitos Previos
 
-- **Node.js** 18+ y npm 9+
+- **Node.js** 22+ y npm 10+
 - **Redis** 6+ (para cache de conversaciones)
 - **Ollama** con modelo Llama 3.2
 - **PM2** (opcional, para producción)
@@ -68,8 +68,8 @@ API REST en Node.js/Express que funciona como backend de inteligencia artificial
 #### Linux (Ubuntu/Debian)
 
 ```bash
-# Node.js 18
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+# Node.js 22
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt-get install -y nodejs
 
 # Redis
@@ -118,7 +118,7 @@ chmod +x setup.sh
 ```
 
 El script verificará:
-- ✅ Node.js 18+
+- ✅ Node.js 22+
 - ✅ Redis instalado y corriendo
 - ✅ Ollama instalado con modelo llama3.2
 - ✅ Instalación de dependencias npm
@@ -136,6 +136,11 @@ Edita las siguientes variables:
 ```env
 # Server
 PORT=4000
+
+# Modo de ejecución: production, development, test
+# - production: responde a todos los chats de clientes, ignora mensajes propios (fromMe)
+# - test: responde SOLO en tu chat personal de WhatsApp, ignora otros chats
+#   útil para probar sin enviar respuestas a clientes reales
 NODE_ENV=production
 
 # Ollama
@@ -598,6 +603,36 @@ curl -X DELETE http://localhost:4000/api/conversations/+5491112345678 \
   -H "Authorization: Bearer YOUR_API_KEY"
 ```
 
+### Probar con WhatsApp en Modo Test
+
+Para probar la IA sin enviar respuestas a clientes reales:
+
+1. **Configurar modo test**:
+   ```bash
+   # En .env
+   NODE_ENV=test
+   ```
+
+2. **Iniciar el servidor**:
+   ```bash
+   npm start
+   ```
+
+3. **Conectar WhatsApp** (escanear QR desde tu cuenta)
+
+4. **Enviar mensajes desde tu propio chat de WhatsApp**:
+   - ✅ El bot responderá SOLO en tu chat personal
+   - ❌ Ignorará mensajes de otros chats
+   - ❌ No responderá a clientes reales
+
+5. **Volver a producción**:
+   ```bash
+   # En .env
+   NODE_ENV=production
+   ```
+
+> **Nota**: En modo `production`, el bot responde a todos los chats de clientes pero ignora tus propios mensajes (fromMe=true).
+
 ## 🔧 Troubleshooting
 
 ### Ollama no responde
@@ -738,6 +773,13 @@ ia-server/
 ├── deploy.sh                    # Deployment script
 └── README.md                    # Este archivo
 ```
+
+## 📚 Documentación Adicional
+
+- **[docs/AGENTS.md](docs/AGENTS.md)** - Sistema Multi-Agente: configuración, uso y creación de agentes personalizados
+- **[docs/TYPES_GENERATION.md](docs/TYPES_GENERATION.md)** - Generación de tipos de TypeScript desde Supabase (2 métodos)
+- **[QUICK_START.md](QUICK_START.md)** - Guía rápida de inicio
+- **[docs/ENDPOINTS.md](docs/ENDPOINTS.md)** - Documentación completa de API endpoints
 
 ## 🤝 Contribuciones
 

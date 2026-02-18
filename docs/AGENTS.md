@@ -25,18 +25,6 @@ El servidor ahora soporta múltiples agentes de IA con diferentes propósitos y 
 - `CANCEL` - Cancelar registro
 - `INFO_REQUEST` - Solicitar información general
 
-### 2. Support Agent (Soporte Técnico)
-
-**ID:** `support`  
-**Propósito:** Asistencia técnica y resolución de problemas  
-**Modelo:** `llama3.2`
-
-**Acciones soportadas:**
-- `DIAGNOSE` - Diagnosticar problema técnico
-- `GUIDE` - Proporcionar guía paso a paso
-- `ESCALATE` - Escalar a soporte humano
-- `DOCUMENTATION` - Proporcionar enlaces a documentación
-
 ## 🔌 API Endpoints
 
 ### Listar Agentes Disponibles
@@ -50,7 +38,7 @@ Authorization: Bearer YOUR_API_KEY
 ```json
 {
   "success": true,
-  "count": 2,
+  "count": 1,
   "agents": [
     {
       "id": "waitlist",
@@ -147,26 +135,15 @@ curl -X POST http://localhost:4000/api/agents/waitlist/chat \
   }'
 ```
 
-### Ejemplo 2: Resolver problema técnico con Support Agent
-
-```bash
-curl -X POST http://localhost:4000/api/agents/support/chat \
-  -H "Authorization: Bearer f1c93149f93fb2432f6abd7e2a0322f7568e3d21f271903a9ffee85918f05844" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "message": "Mi aplicación no carga, se queda en pantalla blanca",
-    "conversationId": "support-ticket-789"
-  }'
-```
-
-### Ejemplo 3: Listar todos los agentes disponibles
+### Ejemplo 2: Listar todos los agentes disponibles
 
 ```bash
 curl http://localhost:4000/api/agents \
-  -H "Authorization: Bearer f1c93149f93fb2432f6abd7e2a0322f7568e3d21f271903a9ffee85918f05844"
+  -H "Authorization: Bearer f1c93149f93fb2432f6abd7e2a0322f7568e3d21f271903a9ffee85918f05844" \
+  -H "Content-Type: application/json"
 ```
 
-### Ejemplo 4: Limpiar historial de conversación
+### Ejemplo 3: Limpiar historial de conversación
 
 ```bash
 curl -X DELETE http://localhost:4000/api/agents/waitlist/conversations/user-555-1234567890 \
@@ -238,7 +215,6 @@ import { salesAgent } from './sales.agent';
 // En el constructor de AgentRegistry
 private registerDefaultAgents(): void {
   this.register(waitlistAgent);
-  this.register(supportAgent);
   this.register(salesAgent); // ← Agregar aquí
   
   logger.info('Default agents registered', {
@@ -248,7 +224,7 @@ private registerDefaultAgents(): void {
 }
 
 // Exportar el agente
-export { waitlistAgent, supportAgent, salesAgent };
+export { waitlistAgent, salesAgent };
 ```
 
 ### Paso 3: Compilar y probar
