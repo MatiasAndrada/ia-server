@@ -13,6 +13,8 @@ let DisconnectReason: any;
 let useMultiFileAuthState: any;
 let isJidBroadcast: any;
 let isJidStatusBroadcast: any;
+let fetchLatestWaWebVersion: any;
+let Browsers: any;
 
 let baileysLoaded = false;
 
@@ -26,6 +28,8 @@ async function loadBaileys() {
     useMultiFileAuthState = baileys.useMultiFileAuthState;
     isJidBroadcast = baileys.isJidBroadcast;
     isJidStatusBroadcast = baileys.isJidStatusBroadcast;
+    fetchLatestWaWebVersion = baileys.fetchLatestWaWebVersion;
+    Browsers = baileys.Browsers;
     baileysLoaded = true;
     logger.info('Baileys ES Module loaded successfully');
   } catch (error) {
@@ -262,9 +266,28 @@ export class BaileysService {
       const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
       logger.info('Auth state loaded', { businessId, hasCredentials: !!state.creds });
 
+      // Fetch latest WA Web version to avoid protocol mismatches (e.g. 405 before QR)
+      let waVersion: [number, number, number] | undefined;
+      try {
+        const latest = await fetchLatestWaWebVersion();
+        waVersion = latest?.version;
+        logger.info('Using WhatsApp Web version', {
+          businessId,
+          version: waVersion?.join('.'),
+          isLatest: latest?.isLatest,
+        });
+      } catch (versionError) {
+        logger.warn('Failed to fetch latest WhatsApp Web version, using Baileys default', {
+          businessId,
+          error: versionError instanceof Error ? versionError.message : versionError,
+        });
+      }
+
       // Create socket connection
       const sock = makeWASocket({
         auth: state,
+        version: waVersion,
+        browser: Browsers?.ubuntu('Chrome'),
         // printQRInTerminal deprecated en Baileys 7
         // Ahora manejamos el QR manualmente en connection.update
         logger: {
@@ -357,6 +380,7 @@ export class BaileysService {
         businessId, 
         shouldReconnect,
         statusCode,
+        errorMessage: lastDisconnect?.error?.message,
       });
 
       // Update state
@@ -403,9 +427,16 @@ export class BaileysService {
           });
         }, 3000);
       } else {
-        // Logged out, remove session data
+        // Logged out, remove session data from memory
         this.sessionStates.delete(businessId);
         await this.updateSessionStatus(businessId, 'error', 'Session logged out');
+
+        // Delete session files from disk
+        const sessionPath = this.getSessionPath(businessId);
+        if (fs.existsSync(sessionPath)) {
+          fs.rmSync(sessionPath, { recursive: true, force: true });
+          logger.info('Session files deleted from disk after logout', { businessId, sessionPath });
+        }
       }
     } else if (connection === 'open') {
       logger.info('WhatsApp session connected', { businessId });

@@ -143,6 +143,27 @@ export class ReservationService {
   }
 
   /**
+   * Update only the name in the draft without advancing the step.
+   * Used when the user corrects their name while already at party_size step.
+   */
+  static async setNameOnly(
+    conversationId: string,
+    name: string
+  ): Promise<ReservationDraft | null> {
+    const draft = await this.getDraft(conversationId);
+
+    if (!draft) {
+      logger.warn('Draft not found for setNameOnly', { conversationId });
+      return null;
+    }
+
+    draft.customerName = formatName(name);
+    // step intentionally NOT changed — stays at party_size
+    await this.saveDraft(draft);
+    return draft;
+  }
+
+  /**
    * Update draft with party size
    */
   static async setPartySize(
@@ -495,6 +516,69 @@ export class ReservationService {
         error: 'Error creating reservation',
       };
     }
+  }
+
+  /**
+   * Start an edit-mode draft to modify a specific field of an existing reservation.
+   */
+  static async startEditReservation(
+    conversationId: string,
+    businessId: string,
+    reservationId: string,
+    field: 'party_size' | 'zone',
+    existingData: { customerName?: string; partySize?: number; selectedZoneId?: string }
+  ): Promise<ReservationDraft> {
+    const step = field === 'party_size' ? 'party_size' : 'zone_selection';
+
+    const draft: ReservationDraft = {
+      conversationId,
+      businessId,
+      customerName: existingData.customerName,
+      partySize: existingData.partySize,
+      selectedZoneId: existingData.selectedZoneId,
+      step,
+      editMode: true,
+      editingField: field,
+      existingReservationId: reservationId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    await this.saveDraft(draft);
+    logger.info('Edit reservation draft started', {
+      conversationId,
+      reservationId,
+      field,
+      step,
+    });
+    return draft;
+  }
+
+  /**
+   * Start an edit-menu draft so the user can pick what to edit.
+   */
+  static async startEditMenu(
+    conversationId: string,
+    businessId: string,
+    reservationId: string,
+    existingData: { customerName?: string; partySize?: number; selectedZoneId?: string }
+  ): Promise<ReservationDraft> {
+    const draft: ReservationDraft = {
+      conversationId,
+      businessId,
+      customerName: existingData.customerName,
+      partySize: existingData.partySize,
+      selectedZoneId: existingData.selectedZoneId,
+      step: 'edit_menu',
+      editMode: true,
+      existingReservationId: reservationId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    await this.saveDraft(draft);
+    logger.info('Edit menu draft started', { conversationId, reservationId });
+    return draft;
   }
 
   /**

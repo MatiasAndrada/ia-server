@@ -333,6 +333,21 @@ export class SupabaseService {
       );
       logger.info('✅ Customer ready', { customerId: customer.id, name: customer.name });
 
+      // Check for existing active reservation today (Buenos Aires timezone)
+      const existingReservation = await this.getActiveTodayReservation(customer.id, request.businessId);
+      if (existingReservation) {
+        logger.info('⚠️ Customer already has an active reservation today', {
+          customerId: customer.id,
+          entryId: existingReservation.id,
+          displayCode: existingReservation.display_code,
+        });
+        return {
+          success: true,
+          waitlistEntry: existingReservation,
+          alreadyExists: true,
+        };
+      }
+
       // Get next position in waitlist
       logger.info('🔢 Calculating next position in waitlist...');
       const { data: lastEntry, error: lastEntryError } = await client
@@ -593,6 +608,165 @@ export class SupabaseService {
     }
 
     return displayCode;
+  }
+
+  // ========================
+  // Buenos Aires timezone helper
+  // ========================
+
+  /**
+   * Get ISO string for start of today in Buenos Aires time (UTC-3, no DST)
+   */
+  private static getStartOfDayBuenosAiresISO(): string {
+    const BA_OFFSET_MS = 3 * 60 * 60 * 1000; // UTC-3
+    const nowUTC = new Date();
+    // Shift clock to BA time
+    const nowBA = new Date(nowUTC.getTime() - BA_OFFSET_MS);
+    // Zero out the time portion in BA
+    const startBA = new Date(nowBA);
+    startBA.setUTCHours(0, 0, 0, 0);
+    // Shift back to UTC for the DB query
+    const startUTC = new Date(startBA.getTime() + BA_OFFSET_MS);
+    return startUTC.toISOString();
+  }
+
+  /**
+   * Get an active reservation (WAITING / NOTIFIED / ARRIVED) created today
+   * in Buenos Aires timezone for a given customer.
+   */
+  static async getActiveTodayReservation(
+    customerId: string,
+    businessId: string
+  ): Promise<WaitlistEntry | null> {
+    try {
+      const startOfDayISO = this.getStartOfDayBuenosAiresISO();
+      const client = this.getClient();
+
+      const { data, error } = await client
+        .from('waitlist_entries')
+        .select('*')
+        .eq('customer_id', customerId)
+        .eq('business_id', businessId)
+        .in('status', ['WAITING', 'NOTIFIED', 'ARRIVED'])
+        .gte('queued_at', startOfDayISO)
+        .order('queued_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (error) throw error;
+      return (data as WaitlistEntry | null);
+    } catch (error) {
+      logger.error('Error getting active today reservation', { error, customerId, businessId });
+      return null;
+    }
+  }
+
+  /**
+   * Get an active reservation for today by phone number.
+   */
+  static async getActiveTodayReservationByPhone(
+    phone: string,
+    businessId: string
+  ): Promise<WaitlistEntry | null> {
+    try {
+      const client = this.getClient();
+
+      const { data: customerData, error: customerError } = await client
+        .from('customers')
+        .select('id')
+        .eq('business_id', businessId)
+        .eq('phone', phone)
+        .maybeSingle();
+
+      if (customerError) throw customerError;
+      if (!customerData) return null;
+
+      return this.getActiveTodayReservation(customerData.id, businessId);
+    } catch (error) {
+      logger.error('Error getting active today reservation by phone', { error, phone, businessId });
+      return null;
+    }
+  }
+
+  /**
+   * Update the party_size of an existing waitlist entry.
+   */
+  static async updateReservationPartySize(
+    reservationId: string,
+    partySize: number
+  ): Promise<boolean> {
+    try {
+      const client = this.getClient();
+      const { error } = await client
+        .from('waitlist_entries')
+        .update({ party_size: partySize, updated_at: new Date().toISOString() })
+        .eq('id', reservationId);
+
+      if (error) throw error;
+      logger.info('Reservation party size updated', { reservationId, partySize });
+      return true;
+    } catch (error) {
+      logger.error('Error updating reservation party size', { error, reservationId });
+      return false;
+    }
+  }
+
+  /**
+   * Update the zone/table of an existing waitlist entry.
+   * Finds an available table in the named zone with sufficient capacity.
+   */
+  static async updateReservationZone(
+    reservationId: string,
+    zoneName: string,
+    businessId: string,
+    partySize: number
+  ): Promise<boolean> {
+    try {
+      const client = this.getClient();
+
+      // Find zone by name
+      const { data: zoneData, error: zoneError } = await client
+        .from('zones')
+        .select('id')
+        .eq('business_id', businessId)
+        .eq('name', zoneName)
+        .maybeSingle();
+
+      if (zoneError) throw zoneError;
+      if (!zoneData) {
+        logger.warn('Zone not found for update', { zoneName, businessId });
+        return false;
+      }
+
+      // Find available table in that zone
+      const { data: tableData, error: tableError } = await client
+        .from('tables')
+        .select('id')
+        .eq('business_id', businessId)
+        .eq('zone_id', zoneData.id)
+        .eq('is_active', true)
+        .eq('is_occupied', false)
+        .gte('capacity', partySize)
+        .order('capacity', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      if (tableError) throw tableError;
+
+      const tableId = tableData?.id ?? null;
+
+      const { error } = await client
+        .from('waitlist_entries')
+        .update({ table_id: tableId, updated_at: new Date().toISOString() })
+        .eq('id', reservationId);
+
+      if (error) throw error;
+      logger.info('Reservation zone updated', { reservationId, zoneName, tableId });
+      return true;
+    } catch (error) {
+      logger.error('Error updating reservation zone', { error, reservationId, zoneName });
+      return false;
+    }
   }
 
   private static randomDisplayInitial(exclude?: string): string {

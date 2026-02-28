@@ -12,6 +12,40 @@ export class RealtimeSyncService {
   private static initialized = false;
 
   /**
+   * Returns true when a businesses UPDATE affects reservation-relevant data
+   * and therefore requires zones/tables cache refresh.
+   */
+  private static shouldRefreshBusinessCaches(oldBusiness: any, newBusiness: any): boolean {
+    if (!oldBusiness || !newBusiness) {
+      return true;
+    }
+
+    const keys = new Set([...Object.keys(oldBusiness), ...Object.keys(newBusiness)]);
+    const changedKeys = Array.from(keys).filter((key) => oldBusiness[key] !== newBusiness[key]);
+
+    if (changedKeys.length === 0) {
+      return false;
+    }
+
+    // Only structural business fields should trigger expensive
+    // reservation cache reloads.
+    const structuralKeys = new Set([
+      'name',
+      'type',
+      'supports_tables',
+      'requires_party_size',
+      'public_screen_enabled',
+      'ai_chat_enabled',
+      'auto_accept_reservations',
+      'language',
+      'manual_table_occupancy_enabled',
+      'public_join_enabled',
+    ]);
+
+    return changedKeys.some((key) => structuralKeys.has(key));
+  }
+
+  /**
    * Initialize realtime synchronization for business data
    */
   static async initializeRealtimeSync(): Promise<void> {
@@ -207,8 +241,27 @@ export class RealtimeSyncService {
       });
 
       if (eventType === 'INSERT' || eventType === 'UPDATE') {
-        // Cache the business
         const businessKey = `business:${businessId}`;
+
+        // For UPDATE events, Supabase old row can be partial (e.g. only id)
+        // depending on replica identity settings. Use Redis snapshot as
+        // fallback to avoid false-positive structural diffs.
+        let previousBusinessSnapshot: any = oldBusiness;
+        if (eventType === 'UPDATE') {
+          const cachedBusiness = await redis.get(businessKey);
+          if (cachedBusiness) {
+            try {
+              previousBusinessSnapshot = JSON.parse(cachedBusiness);
+            } catch (error) {
+              logger.warn('Failed to parse cached business snapshot', {
+                businessId,
+                error,
+              });
+            }
+          }
+        }
+
+        // Cache the business
         await redis.setEx(
           businessKey,
           3600, // 1 hour TTL
@@ -216,15 +269,24 @@ export class RealtimeSyncService {
         );
         logger.info('💾 Business cached in Redis', { businessId });
 
-        // Refresh zones/tables cache immediately for this business
-        const zonesCacheKey = `business:zones:${businessId}`;
-        const tablesCacheKey = `business:tables:${businessId}`;
-        await ReservationService.loadAndCacheZones(businessId);
-        await redis.del(tablesCacheKey);
-        logger.info('🔄 Zones/tables cache refreshed', {
-          businessId,
-          zonesCacheKey,
-        });
+        const shouldRefreshCaches =
+          eventType === 'INSERT' ||
+          this.shouldRefreshBusinessCaches(previousBusinessSnapshot, newBusiness);
+
+        if (shouldRefreshCaches) {
+          const zonesCacheKey = `business:zones:${businessId}`;
+          const tablesCacheKey = `business:tables:${businessId}`;
+          await ReservationService.loadAndCacheZones(businessId);
+          await redis.del(tablesCacheKey);
+          logger.info('🔄 Zones/tables cache refreshed', {
+            businessId,
+            zonesCacheKey,
+          });
+        } else {
+          logger.info('⏭️ Skipping zones/tables cache refresh for technical business update', {
+            businessId,
+          });
+        }
       } else if (eventType === 'DELETE') {
         // Remove from cache
         const businessKey = `business:${businessId}`;

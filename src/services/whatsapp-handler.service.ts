@@ -12,18 +12,93 @@ type ActiveReservationSnapshot = {
   displayCode: string | null;
 };
 
+/** How long (ms) to wait for more messages before processing the batch. */
+const DEBOUNCE_MS = 1500;
+
 export class WhatsAppHandler {
   private baileysService: BaileysService;
   private lastSentByChat: Map<string, { text: string; timestamp: number }> = new Map();
+
+  /**
+   * Debounce buffer: accumulates rapid messages per conversation.
+   * When the timer fires the whole batch is merged into one text and processed once.
+   */
+  private debounceBuffer: Map<
+    string,
+    { messages: BaileysMessage[]; timer: ReturnType<typeof setTimeout> }
+  > = new Map();
+
+  /**
+   * Per-conversation processing lock.
+   * Ensures that if a new batch arrives while the previous one is still being
+   * processed (e.g. slow AI), the new batch waits instead of running in parallel.
+   */
+  private processingLock: Map<string, Promise<void>> = new Map();
 
   constructor(baileysService: BaileysService) {
     this.baileysService = baileysService;
   }
 
   /**
-   * Process incoming WhatsApp message
+   * Debounce incoming messages per conversation.
+   * Multiple messages arriving within DEBOUNCE_MS are merged into a single call
+   * to _processMessage, producing exactly one response.
    */
   async processMessage(message: BaileysMessage): Promise<void> {
+    const { from, businessId } = message;
+    const phone = this.normalizeWhatsAppNumber(from);
+    const conversationId = `${businessId}-${phone}`;
+
+    const existing = this.debounceBuffer.get(conversationId);
+    if (existing) {
+      // More messages arrived before the timer fired — accumulate and reset timer
+      clearTimeout(existing.timer);
+      existing.messages.push(message);
+    }
+
+    const entry = existing ?? { messages: [message], timer: undefined as any };
+
+    const timer = setTimeout(() => {
+      this.debounceBuffer.delete(conversationId);
+      const batch = entry.messages;
+
+      // Merge all texts into one, preserving the first message's metadata
+      const combined: BaileysMessage = {
+        ...batch[0],
+        message: batch.map(m => m.message).join('\n'),
+      };
+
+      if (batch.length > 1) {
+        logger.info('📦 Batching rapid messages into one', {
+          conversationId,
+          count: batch.length,
+          combined: combined.message.substring(0, 120),
+        });
+      }
+
+      // Serialize against any in-progress processing for this conversation
+      const previous = this.processingLock.get(conversationId) ?? Promise.resolve();
+      const current = previous
+        .then(() => this._processMessage(combined))
+        .catch(err => { logger.error('Error in _processMessage', { conversationId, err }); });
+      this.processingLock.set(conversationId, current);
+      current.finally(() => {
+        if (this.processingLock.get(conversationId) === current) {
+          this.processingLock.delete(conversationId);
+        }
+      });
+    }, DEBOUNCE_MS);
+
+    entry.timer = timer;
+    if (!existing) {
+      this.debounceBuffer.set(conversationId, entry);
+    }
+  }
+
+  /**
+   * Internal processor — receives one (possibly merged) message per invocation.
+   */
+  private async _processMessage(message: BaileysMessage): Promise<void> {
     try {
       const { from, message: messageText, businessId, fromMe } = message;
       if (this.shouldIgnoreMessage(from, messageText, fromMe, businessId)) {
@@ -75,8 +150,95 @@ export class WhatsAppHandler {
       // Check if there's an active reservation draft
       let draft = await ReservationService.getDraft(conversationId);
 
+      // --- Early exit keyword check (any step) ---
+      if (draft && draft.step !== 'completed' && this.isExitKeyword(messageText)) {
+        // If user is in the edit menu, "cancelar" means cancel the actual reservation
+        if (draft.step === 'edit_menu' && draft.existingReservationId) {
+          await ReservationService.deleteDraft(conversationId);
+          const cancelled = await SupabaseService.updateReservationStatus(
+            draft.existingReservationId,
+            'CANCELLED'
+          );
+          const msg = cancelled
+            ? '✅ Tu reserva fue cancelada correctamente. ¡Hasta la próxima!'
+            : '❌ No se pudo cancelar la reserva. Por favor contactá directamente al local.';
+          await this.sendWhatsAppMessage(businessId, from, msg);
+          logger.info('Reservation cancelled via exit keyword in edit_menu', {
+            conversationId,
+            reservationId: draft.existingReservationId,
+          });
+        } else {
+          // In any other step the draft represents a flow not yet saved to DB.
+          // But if the message also expresses cancellation intent, also cancel any
+          // existing DB reservation for today (e.g. user had a previous confirmed
+          // reservation and is now trying to cancel it while a new flow was open).
+          await ReservationService.deleteDraft(conversationId);
+
+          if (this.isCancellationIntent(messageText)) {
+            const phone = this.normalizeWhatsAppNumber(from);
+            const activeRes = await SupabaseService.getActiveTodayReservationByPhone(phone, businessId);
+            if (activeRes) {
+              const cancelled = await SupabaseService.updateReservationStatus(activeRes.id, 'CANCELLED');
+              const msg = cancelled
+                ? '✅ Tu reserva fue cancelada correctamente. ¡Hasta la próxima!'
+                : '❌ No se pudo cancelar la reserva. Por favor contactá directamente al local.';
+              await this.sendWhatsAppMessage(businessId, from, msg);
+              logger.info('Reservation cancelled via exit keyword + cancellation intent', {
+                conversationId,
+                reservationId: activeRes.id,
+              });
+              return;
+            }
+          }
+
+          await this.sendWhatsAppMessage(
+            businessId,
+            from,
+            '✅ Proceso cancelado. Podés empezar de nuevo cuando quieras.'
+          );
+          logger.info('Flow cancelled by exit keyword', { conversationId, step: draft.step });
+        }
+        return;
+      }
+
+      // --- Cancellation intent without an active draft ---
+      // e.g. "la quiero cancelar", "cancelar mi reserva", "quiero cancelar"
+      if (!draft && this.isCancellationIntent(messageText)) {
+        const phone = this.normalizeWhatsAppNumber(from);
+        const activeRes = await SupabaseService.getActiveTodayReservationByPhone(phone, businessId);
+        if (activeRes) {
+          const cancelled = await SupabaseService.updateReservationStatus(activeRes.id, 'CANCELLED');
+          const msg = cancelled
+            ? `✅ Tu reserva fue cancelada correctamente. ¡Hasta la próxima!`
+            : '❌ No se pudo cancelar la reserva. Por favor contactá directamente al local.';
+          await this.sendWhatsAppMessage(businessId, from, msg);
+          logger.info('Reservation cancelled via direct cancellation intent', {
+            conversationId,
+            reservationId: activeRes.id,
+          });
+        } else {
+          await this.sendWhatsAppMessage(
+            businessId,
+            from,
+            'No encontré ninguna reserva activa para hoy. ¿Algo más en lo que pueda ayudarte?'
+          );
+        }
+        return;
+      }
+
+      // --- Greeting: reset flow and check for active reservation ---
+      if (this.isGreetingMessage(messageText)) {
+        const greetingHandled = await this.handleGreeting(messageText, businessId, from, conversationId);
+        if (greetingHandled) {
+          logger.info('Greeting handled with reservation menu', { conversationId });
+          return;
+        }
+        // No active reservation — clear old draft and fall through to agent
+        draft = null;
+      }
+
       // FAST PATH: deterministic reservation steps should not wait for AI response
-      if (draft && (draft.step === 'party_size' || draft.step === 'zone_selection')) {
+      if (draft && (draft.step === 'party_size' || draft.step === 'zone_selection' || draft.step === 'edit_menu')) {
         logger.info('⚡ Bypassing agent for deterministic draft step', {
           conversationId,
           businessId,
@@ -217,20 +379,23 @@ export class WhatsAppHandler {
             const looksLikeName =
               !/^\d+$/.test(messageText.trim()) &&
               messageText.trim().length >= 2 &&
-              !this.isPostReservationCourtesyMessage(messageText);
+              !this.isPostReservationCourtesyMessage(messageText) &&
+              !this.isReservationRequest(messageText) &&
+              this.couldBeAName(messageText);
             
             if (isAskingForName && looksLikeName) {
               logger.info('🎬 Auto-creating reservation draft', { conversationId, businessId, userName: messageText });
               
               // Create draft and set customer name
+              const extractedName = this.extractNameFromMessage(messageText);
               await ReservationService.startReservation(conversationId, businessId);
-              await ReservationService.setCustomerName(conversationId, messageText.trim());
+              await ReservationService.setCustomerName(conversationId, extractedName);
               
               // Update local draft reference
               draft = await ReservationService.getDraft(conversationId);
               
               // Send confirmation message and ask for party size immediately
-              const nameConfirmMsg = `✅ Perfecto, *${messageText.trim()}*!\n\n¿Para cuántas personas es la reserva?\n\nEjemplo: 2, 4, 6, etc.`;
+              const nameConfirmMsg = `✅ Perfecto, *${extractedName}*!\n\n¿Para cuántas personas es la reserva?\n\nEjemplo: 2, 4, 6, etc.`;
               await this.sendWhatsAppMessage(businessId, from, nameConfirmMsg);
               
               logger.info('✅ Draft created, name saved, and party size question sent', {
@@ -393,29 +558,55 @@ export class WhatsAppHandler {
       });
 
       switch (draft.step) {
-        case 'name':
-          // User provided their name
-          logger.info('📝 Setting customer name', { conversationId, name: messageText });
-          const updatedDraft = await ReservationService.setCustomerName(conversationId, messageText);
+        case 'name': {
+          // User provided their name — extract it intelligently
+          const extractedName = this.extractNameFromMessage(messageText);
+          logger.info('📝 Setting customer name', { conversationId, raw: messageText, extracted: extractedName });
+          const updatedDraft = await ReservationService.setCustomerName(conversationId, extractedName);
           logger.info('✅ Customer name set', { 
             conversationId, 
-            name: messageText,
+            name: extractedName,
             nextStep: updatedDraft?.step,
           });
           
           // Send confirmation and ask for party size
-          const nameConfirmMsg = `✅ Perfecto, *${messageText}*!\n\n¿Para cuántas personas es la reserva?\n\nEjemplo: 2, 4, 6, etc.`;
+          const nameConfirmMsg = `✅ Perfecto, *${extractedName}*!\n\n¿Para cuántas personas es la reserva?\n\nEjemplo: 2, 4, 6, etc.`;
           await this.sendWhatsAppMessage(businessId, jid, nameConfirmMsg);
           return true;
-          break;
+        }
 
-        case 'party_size':
+        case 'party_size': {
+          // Check if user is correcting their name instead of providing a party size
+          if (this.isNameCorrectionMessage(messageText)) {
+            const correctedName = this.extractNameFromMessage(messageText);
+            await ReservationService.setNameOnly(conversationId, correctedName);
+            logger.info('✏️ Name corrected at party_size step', { conversationId, correctedName });
+            const nameFixMsg = `✅ ¡Listo! Cambié tu nombre a *${correctedName}*.\n\n¿Para cuántas personas es la reserva?\n\nEjemplo: 2, 4, 6, etc.`;
+            await this.sendWhatsAppMessage(businessId, jid, nameFixMsg);
+            return true;
+          }
+
           // User provided party size
           logger.info('📝 Extracting party size', { conversationId, messageText });
           const partySize = this.extractNumber(messageText);
           logger.info('🔢 Party size extracted', { conversationId, partySize });
 
           if (partySize && partySize > 0 && partySize <= 50) {
+            // ----- EDIT MODE: just update the existing reservation -----
+            if (draft.editMode && draft.existingReservationId) {
+              const ok = await SupabaseService.updateReservationPartySize(
+                draft.existingReservationId,
+                partySize
+              );
+              await ReservationService.deleteDraft(conversationId);
+              const msg = ok
+                ? `✅ ¡Listo! Tu reserva fue actualizada a *${partySize}* personas.`
+                : '❌ No se pudo actualizar la cantidad. Por favor intentá de nuevo.';
+              await this.sendWhatsAppMessage(businessId, jid, msg);
+              return true;
+            }
+
+            // ----- NORMAL MODE -----
             await ReservationService.setPartySize(conversationId, partySize);
             logger.info('✅ Party size set', { conversationId, partySize });
 
@@ -482,16 +673,27 @@ export class WhatsAppHandler {
               return true;
             }
           } else {
-            // Invalid party size - ask again
+            // Invalid party size — track attempts and cancel after 2
             logger.warn('Invalid party size provided', { conversationId, messageText });
-            
-            const invalidMessage = '❌ Por favor indica con un *número* cuántas personas son.\n\nEjemplo: 2, 4, 6, etc.';
-            await this.sendWhatsAppMessage(businessId, jid, invalidMessage);
-            
-            // Return true to skip agent response (we sent custom message)
+
+            draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
+            await ReservationService.saveDraft(draft);
+
+            if (draft.invalidAttempts >= 2) {
+              await ReservationService.deleteDraft(conversationId);
+              await this.sendWhatsAppMessage(
+                businessId,
+                jid,
+                '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+              );
+            } else {
+              const invalidMessage = '❌ Por favor indica con un *número* cuántas personas son.\n\nEjemplo: 2, 4, 6, etc.\n\n_(Para cancelar escribí *cancelar* o *salir*)_';
+              await this.sendWhatsAppMessage(businessId, jid, invalidMessage);
+            }
             return true;
           }
           break;
+        }
 
         case 'zone_selection':
           const draft2 = await ReservationService.getDraft(conversationId);
@@ -531,6 +733,24 @@ export class WhatsAppHandler {
 
           if (selectedZone) {
             logger.info('✅ Zone selected/confirmed', { conversationId, zone: selectedZone });
+
+            // ----- EDIT MODE: just update the zone -----
+            if (draft2.editMode && draft2.existingReservationId) {
+              const ok = await SupabaseService.updateReservationZone(
+                draft2.existingReservationId,
+                selectedZone,
+                businessId,
+                draft2.partySize
+              );
+              await ReservationService.deleteDraft(conversationId);
+              const msg = ok
+                ? `✅ ¡Listo! Tu reserva fue actualizada a la zona *${selectedZone}*.`
+                : '❌ No se pudo actualizar la zona. Por favor intentá de nuevo.';
+              await this.sendWhatsAppMessage(businessId, jid, msg);
+              return true;
+            }
+
+            // ----- NORMAL MODE -----
             await ReservationService.selectZone(conversationId, selectedZone);
 
             // Create reservation
@@ -545,17 +765,90 @@ export class WhatsAppHandler {
               messageText,
               availableZones: availableZones2,
             });
+
+            // Track invalid attempts and cancel after 2
+            draft2.invalidAttempts = (draft2.invalidAttempts ?? 0) + 1;
+            await ReservationService.saveDraft(draft2);
+
+            if (draft2.invalidAttempts >= 2) {
+              await ReservationService.deleteDraft(conversationId);
+              await this.sendWhatsAppMessage(
+                businessId,
+                jid,
+                '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+              );
+              return true;
+            }
             
             // Send error message with available zones
             const zonesFormatted = availableZones2
               .map((zone, idx) => `${idx + 1}. *${zone}*`)
               .join('\n');
             
-            const invalidZoneMsg = `❌ No encontré esa zona. Por favor elige una de estas opciones:\n\n${zonesFormatted}\n\nResponde con el *número* o *nombre* de la zona.`;
+            const invalidZoneMsg = `❌ No encontré esa zona. Por favor elige una de estas opciones:\n\n${zonesFormatted}\n\nResponde con el *número* o *nombre* de la zona.\n\n_(Para cancelar escribí *cancelar* o *salir*)_`;
             await this.sendWhatsAppMessage(businessId, jid, invalidZoneMsg);
             return true;
           }
           break;
+
+        case 'edit_menu': {
+          // User is choosing what to edit: 1=party_size, 2=zone, 3=cancel
+          const choice = this.extractNumber(messageText);
+          const reservationId = draft.existingReservationId;
+
+          if (!reservationId) {
+            await ReservationService.deleteDraft(conversationId);
+            await this.sendWhatsAppMessage(businessId, jid, 'Lo siento, no encontré tu reserva. Intentá de nuevo.');
+            return true;
+          }
+
+          if (choice === 1) {
+            await ReservationService.startEditReservation(conversationId, businessId, reservationId, 'party_size', {
+              customerName: draft.customerName,
+              partySize: draft.partySize,
+              selectedZoneId: draft.selectedZoneId,
+            });
+            await this.sendWhatsAppMessage(businessId, jid, '¿Para cuántas personas querés cambiar la reserva?\n\nEjemplo: 2, 4, 6, etc.');
+            return true;
+          } else if (choice === 2) {
+            // Need to load zones and ask user to pick one
+            const cachedZonesEdit = await ReservationService.getCachedZones(businessId);
+            const partySizeForEdit = draft.partySize ?? 1;
+            let zonesLabel: string;
+            if (cachedZonesEdit) {
+              const zonesMapEdit = ReservationService.filterCachedZonesByPartySize(cachedZonesEdit, partySizeForEdit);
+              const zoneNamesEdit = Array.from(zonesMapEdit.keys());
+              zonesLabel = zoneNamesEdit.length > 0
+                ? zoneNamesEdit.map((z, i) => `${i + 1}. *${z}*`).join('\n')
+                : 'No hay zonas disponibles en este momento.';
+            } else {
+              zonesLabel = 'No hay zonas disponibles en este momento.';
+            }
+            await ReservationService.startEditReservation(conversationId, businessId, reservationId, 'zone', {
+              customerName: draft.customerName,
+              partySize: draft.partySize,
+              selectedZoneId: draft.selectedZoneId,
+            });
+            await this.sendWhatsAppMessage(businessId, jid, `¿Qué zona preferís?\n\n${zonesLabel}\n\nResponde con el *número* o *nombre* de la zona.`);
+            return true;
+          } else if (choice === 3) {
+            // Cancel reservation
+            await ReservationService.deleteDraft(conversationId);
+            const cancelled = await SupabaseService.updateReservationStatus(reservationId, 'CANCELLED');
+            const msg = cancelled
+              ? '✅ Tu reserva fue cancelada. Podés crear una nueva cuando quieras.'
+              : '❌ No se pudo cancelar la reserva. Por favor contactá al restaurante.';
+            await this.sendWhatsAppMessage(businessId, jid, msg);
+            return true;
+          } else {
+            await this.sendWhatsAppMessage(
+              businessId,
+              jid,
+              '❌ Por favor respondé con *1*, *2* o *3* según la opción que elegiste.'
+            );
+            return true;
+          }
+        }
 
         case 'confirmation':
           // User confirmed or already processed
@@ -604,6 +897,24 @@ export class WhatsAppHandler {
       });
 
       if (result.success && result.waitlistEntry && draft) {
+        // -- Duplicate: customer already has a reservation today --
+        if (result.alreadyExists) {
+          const entry = result.waitlistEntry;
+          logger.info('Reservation already exists for today, showing summary', {
+            conversationId,
+            entryId: entry.id,
+            displayCode: entry.display_code,
+          });
+          await ReservationService.deleteDraft(conversationId);
+          const summaryMsg =
+            `⚠️ Ya tenés una reserva para hoy:\n\n` +
+            `👥 Personas: *${entry.party_size}*\n` +
+            `📋 Código: *${entry.display_code}*\n\n` +
+            `Si querés modificarla, respondé *hola* para ver las opciones.`;
+          await this.sendWhatsAppMessage(businessId, jid, summaryMsg);
+          return;
+        }
+
         logger.info('Waitlist entry created successfully', { 
           conversationId,
           entryId: result.waitlistEntry.id,
@@ -824,6 +1135,166 @@ Si necesitas cancelar, responde CANCELAR.`;
     return this.isGratitudeMessage(text) || this.isShortAcknowledgementMessage(text);
   }
 
+  /**
+   * Returns true when the message clearly expresses intent to cancel a reservation,
+   * even without an active draft (e.g. "la quiero cancelar", "cancelar mi reserva").
+   * More targeted than isExitKeyword — requires "cancelar" or close synonyms.
+   */
+  /**
+   * Returns true if the text COULD plausibly be a person's name.
+   * Rejects phrases that contain verb conjugations or exceed name-length limits.
+   * e.g. "Matías" → true | "me puedo tirar un pedo" → false | "Juan Pérez" → true
+   */
+  private couldBeAName(text: string): boolean {
+    const trimmed = text.trim();
+    const words = trimmed.split(/\s+/);
+
+    // Names realistically have 1–4 words (including compound names)
+    if (words.length > 4) return false;
+
+    // Questions are never names
+    if (trimmed.endsWith('?')) return false;
+
+    const lower = this.normalizeCourtesyText(text);
+
+    // Reject common social / filler phrases that aren’t names
+    const socialPhrases = [
+      'todo bien', 'como estas', 'como te va', 'que tal', 'como andas',
+      'como va', 'bien gracias', 'muy bien', 'todo ok', 'todo good',
+      'nada nada', 'nada mucho', 'que onda', 'buenas noches', 'buenas tardes',
+      'buenos dias', 'buen dia',
+    ];
+    if (socialPhrases.some(p => lower.includes(p))) return false;
+
+    // Reject if it contains conjugated verbs or pronouns that signal a full sentence
+    const sentenceMarkers = [
+      'puedo', 'puede', 'podes', 'quiero', 'quiere', 'queres',
+      'tengo', 'tiene', 'tenes', 'voy', 'vamos',
+      'estoy', 'estas', 'estamos',
+      'hago', 'hace', 'haces', 'vivo', 'vive',
+      'tirar', 'hacer', 'poder', 'tener', 'decir', 'saber',
+    ];
+
+    return !sentenceMarkers.some(marker => lower.includes(marker));
+  }
+
+  private isCancellationIntent(text: string): boolean {
+    const lower = this.normalizeCourtesyText(text);
+    return (
+      lower.includes('cancelar') ||
+      lower.includes('cancela') ||
+      lower.includes('anular') ||
+      lower.includes('anula') ||
+      lower.includes('borrar reserva') ||
+      lower.includes('eliminar reserva')
+    );
+  }
+
+  private isExitKeyword(text: string): boolean {
+    const normalized = this.normalizeCourtesyText(text);
+    // Match if any exit keyword appears as a whole word anywhere in the message.
+    // This handles: "cancelar", "CANCELAR", "quiero cancelar", "me quiero ir",
+    // "para salir", "stop ya", "volver al menu", etc.
+    const keywords = [
+      'cancelar', 'cancela', 'cancel',
+      'salir', 'quiero salir', 'me quiero ir',
+      'stop', 'para', 'detener',
+      'inicio', 'menu', 'volver', 'atras', 'restart',
+      'no quiero', 'dejalo', 'olvidalo', 'olvidame', 'olvida',
+      'no importa', 'no gracias', 'dejame', 'no hacer',
+    ];
+    return keywords.some(kw => {
+      // Word-boundary aware: the keyword must appear as a standalone token
+      const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`(^|\\s)${escaped}(\\s|$)`).test(normalized);
+    });
+  }
+
+  private isGreetingMessage(text: string): boolean {
+    const normalized = this.normalizeCourtesyText(text);
+    return /^(hola|holis|hello|hi|hey|buenas|buenos dias|buenas tardes|buenas noches|buen dia|buen dia!|holaa|holaa!|que tal|quetal)$/.test(normalized);
+  }
+
+  /**
+   * Handle a greeting: cancel any active draft, check for today's reservation,
+   * and either show the reservation menu or a normal welcome response.
+   * Returns true if the greeting was handled (message was sent).
+   */
+  private async handleGreeting(
+    _messageText: string,
+    businessId: string,
+    jid: string,
+    conversationId: string
+  ): Promise<boolean> {
+    try {
+      // 1. Cancel any active draft silently
+      const existingDraft = await ReservationService.getDraft(conversationId);
+      if (existingDraft && existingDraft.step !== 'completed') {
+        await ReservationService.deleteDraft(conversationId);
+        logger.info('Draft cancelled on greeting', { conversationId, step: existingDraft.step });
+      }
+
+      // 2. Clear Ollama conversation history so the agent starts fresh
+      try {
+        await agentService.clearConversationHistory(conversationId);
+        logger.info('Conversation history cleared on greeting', { conversationId });
+      } catch (err) {
+        logger.warn('Failed to clear conversation history on greeting', { err });
+      }
+
+      const phone = this.normalizeWhatsAppNumber(jid);
+
+      // 3. Check for an active reservation today (Buenos Aires timezone)
+      const activeReservation = await SupabaseService.getActiveTodayReservationByPhone(
+        phone,
+        businessId
+      );
+
+      if (activeReservation) {
+        // 4a. Show reservation summary and edit/cancel menu
+        const statusLabel =
+          activeReservation.status === 'NOTIFIED'
+            ? '✅ Confirmada'
+            : activeReservation.status === 'ARRIVED'
+            ? '🚶 En camino'
+            : '⏳ Pendiente';
+
+        const summaryMsg =
+          `¡Hola! Ya tenés una reserva para hoy:\n\n` +
+          `👥 Personas: *${activeReservation.party_size}*\n` +
+          `📋 Código: *${activeReservation.display_code}*\n` +
+          `📌 Estado: ${statusLabel}\n\n` +
+          `¿Qué querés hacer?\n` +
+          `1️⃣ Editar cantidad de personas\n` +
+          `2️⃣ Editar zona\n` +
+          `3️⃣ Cancelar la reserva\n\n` +
+          `Responde con el *número* de la opción.`;
+
+        await this.sendWhatsAppMessage(businessId, jid, summaryMsg);
+
+        // Store edit_menu draft so the next message is intercepted
+        await ReservationService.startEditMenu(conversationId, businessId, activeReservation.id, {
+          partySize: activeReservation.party_size ?? undefined,
+        });
+
+        logger.info('Greeting handled — reservation menu shown', {
+          conversationId,
+          reservationId: activeReservation.id,
+        });
+        return true;
+      }
+
+      // 4b. No reservation: let the normal agent flow handle the welcome
+      logger.info('Greeting handled — no active reservation, falling through to agent', {
+        conversationId,
+      });
+      return false;
+    } catch (error) {
+      logger.error('Error handling greeting', { error, conversationId });
+      return false;
+    }
+  }
+
   private async handlePostReservationCourtesy(
     businessId: string,
     jid: string,
@@ -919,6 +1390,101 @@ Si necesitas cancelar, responde CANCELAR.`;
   private extractNumber(text: string): number | null {
     const match = text.match(/\d+/);
     return match ? parseInt(match[0], 10) : null;
+  }
+
+  /**
+   * Extracts the actual name from a message that may contain greetings or extra words.
+   * e.g. "Hola me llamo Matías" → "Matías"
+   *      "soy Juan Pérez"      → "Juan Pérez"
+   *      "Matías"              → "Matías"
+   */
+  private extractNameFromMessage(text: string): string {
+    // If the whole message looks like a reservation request, don't extract a name from it
+    if (this.isReservationRequest(text)) {
+      return this.capitalizeName(text.trim());
+    }
+
+    let cleaned = text.trim();
+
+    // Explicit patterns — most reliable
+    const explicitPatterns = [
+      /(?:me\s+llamo|mi\s+nombre\s+es|llámame|puedes?\s+llamarme|soy)\s+([\wáéíóúüñÁÉÍÓÚÜÑ]+(?:\s+[\wáéíóúüñÁÉÍÓÚÜÑ]+)*)/i,
+    ];
+    for (const pattern of explicitPatterns) {
+      const match = cleaned.match(pattern);
+      if (match && match[1]) {
+        return this.capitalizeName(match[1].trim());
+      }
+    }
+
+    // Strip leading greetings
+    const greetingWords = [
+      'hola', 'buenas', 'buen día', 'buenos días', 'buenas tardes',
+      'buenas noches', 'hey', 'hi', 'saludos',
+    ];
+    const greetingRegex = new RegExp(
+      `^(${greetingWords.join('|')})[,!.\\s]*`,
+      'i'
+    );
+    cleaned = cleaned.replace(greetingRegex, '').trim();
+
+    // If what remains still has filler words at the start, strip them too
+    const fillerStart = /^(es|el|la|mi|me|soy|nombre)\s+/i;
+    cleaned = cleaned.replace(fillerStart, '').trim();
+
+    // Return cleaned text capitalized, or original trimmed if cleaning erased everything
+    return cleaned.length > 0
+      ? this.capitalizeName(cleaned)
+      : this.capitalizeName(text.trim());
+  }
+
+  /** Capitalizes the first letter of each word. */
+  private capitalizeName(name: string): string {
+    return name
+      .split(/\s+/)
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+      .join(' ');
+  }
+
+  /**
+   * Returns true if the message looks like a name correction rather than a party size.
+   * e.g. "no, me llamo Juan", "perdón soy María", "mi nombre es Pedro"
+   */
+  private isNameCorrectionMessage(text: string): boolean {
+    const lower = text.toLowerCase().trim();
+    // Must not be purely numeric
+    if (/^\d+$/.test(lower)) return false;
+
+    // Reject negations — "mi nombre NO es X" is NOT a correction
+    const negationPatterns = [
+      'no es mi nombre', 'no me llamo', 'no soy', 'no es',
+      'mi nombre no', 'nombre no es',
+    ];
+    if (negationPatterns.some(p => lower.includes(p))) return false;
+
+    const correctionPhrases = [
+      'me llamo', 'mi nombre es', 'soy ', 'llámame', 'puedes llamarme',
+      'mi nombre', 'en realidad', 'perdón', 'perdon', 'error', 'me equivoqué',
+      'me equivoque', 'cambiar nombre', 'cambiar mi nombre',
+    ];
+    return correctionPhrases.some(phrase => lower.includes(phrase));
+  }
+
+  /**
+   * Returns true if the message is clearly a reservation/table request rather than a name.
+   * e.g. "necesito una mesa para 4", "quiero reservar", "mesa para 2 personas"
+   */
+  private isReservationRequest(text: string): boolean {
+    const lower = this.normalizeCourtesyText(text);
+    // Catch "para N" (e.g. "para 4", "para 2 personas")
+    if (/para\s+\d/.test(lower)) return true;
+    const keywords = [
+      'mesa', 'reserva', 'reservar', 'reservacion',
+      'necesito', 'quiero', 'quisiera', 'me gustaria',
+      'personas', 'persona', 'lugar', 'lugares',
+      'agendar', 'apartar', 'turno',
+    ];
+    return keywords.some(kw => lower.includes(kw));
   }
 
   /**

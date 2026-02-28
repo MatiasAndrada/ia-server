@@ -290,7 +290,13 @@ export interface ReservationDraft {
   customerName?: string;
   partySize?: number;
   selectedZoneId?: string;
-  step: 'name' | 'party_size' | 'zone_selection' | 'confirmation' | 'completed';
+  step: 'name' | 'party_size' | 'zone_selection' | 'confirmation' | 'completed' | 'edit_menu';
+  // Edit mode fields
+  editMode?: boolean;
+  editingField?: 'party_size' | 'zone';
+  existingReservationId?: string;
+  // Invalid attempt tracking (for exit-on-repeat)
+  invalidAttempts?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -308,4 +314,6 @@ export interface CreateReservationResponse {
   success: boolean;
   waitlistEntry?: WaitlistEntry;
   error?: string;
+  /** True when a valid reservation already exists for this customer today */
+  alreadyExists?: boolean;
 }
