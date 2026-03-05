@@ -22,8 +22,8 @@ export type Database = {
           ai_chat_enabled: boolean
           auto_accept_reservations: boolean
           language: string
-          whatsapp_phone_number: string
-          whatsapp_session_id: string
+          whatsapp_phone_number: string | null | null
+          whatsapp_session_id: string | null | null
           manual_table_occupancy_enabled: boolean
           public_join_enabled: boolean
         }
@@ -39,8 +39,8 @@ export type Database = {
           ai_chat_enabled: boolean
           auto_accept_reservations: boolean
           language: string
-          whatsapp_phone_number: string
-          whatsapp_session_id: string
+          whatsapp_phone_number?: string | null | null
+          whatsapp_session_id?: string | null | null
           manual_table_occupancy_enabled: boolean
           public_join_enabled: boolean
         }
@@ -56,8 +56,8 @@ export type Database = {
           ai_chat_enabled?: boolean
           auto_accept_reservations?: boolean
           language?: string
-          whatsapp_phone_number?: string
-          whatsapp_session_id?: string
+          whatsapp_phone_number?: string | null | null
+          whatsapp_session_id?: string | null | null
           manual_table_occupancy_enabled?: boolean
           public_join_enabled?: boolean
         }
@@ -93,66 +93,39 @@ export type Database = {
         }
         Relationships: []
       }
-      zones: {
-        Row: {
-          id: string
-          business_id: string
-          name: string
-          priority: number
-          created_at: string
-          updated_at: string
-        }
-        Insert: {
-          id?: string
-          business_id: string
-          name: string
-          priority: number
-          created_at?: string
-          updated_at?: string
-        }
-        Update: {
-          id?: string
-          business_id?: string
-          name?: string
-          priority?: number
-          created_at?: string
-          updated_at?: string
-        }
-        Relationships: []
-      }
       tables: {
         Row: {
           id: string
           business_id: string
-          zone_id: string
           table_number: string
           capacity: number
           is_active: boolean
           created_at: string
           updated_at: string
           is_occupied: boolean
+          name: string
         }
         Insert: {
           id?: string
           business_id: string
-          zone_id: string
           table_number: string
           capacity: number
           is_active: boolean
           created_at?: string
           updated_at?: string
           is_occupied: boolean
+          name: string
         }
         Update: {
           id?: string
           business_id?: string
-          zone_id?: string
           table_number?: string
           capacity?: number
           is_active?: boolean
           created_at?: string
           updated_at?: string
           is_occupied?: boolean
+          name?: string
         }
         Relationships: []
       }
@@ -170,7 +143,11 @@ export type Database = {
           created_at: string
           updated_at: string
           status: string
-          table_id: string | null | null
+          table_id: string
+          cancelled_at: string | null | null
+          estimated_wait_minutes: string | null | null
+          source: string
+          confirmed_at: string | null | null
         }
         Insert: {
           id?: string
@@ -185,7 +162,11 @@ export type Database = {
           created_at?: string
           updated_at?: string
           status: string
-          table_id?: string | null | null
+          table_id: string
+          cancelled_at?: string | null | null
+          estimated_wait_minutes?: string | null | null
+          source: string
+          confirmed_at?: string | null | null
         }
         Update: {
           id?: string
@@ -200,7 +181,11 @@ export type Database = {
           created_at?: string
           updated_at?: string
           status?: string
-          table_id?: string | null | null
+          table_id?: string
+          cancelled_at?: string | null | null
+          estimated_wait_minutes?: string | null | null
+          source?: string
+          confirmed_at?: string | null | null
         }
         Relationships: []
       }

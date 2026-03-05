@@ -6,10 +6,9 @@ import type { Database } from './supabase';
 export type Business = Database['public']['Tables']['businesses']['Row'];
 export type Customer = Database['public']['Tables']['customers']['Row'];
 export type WaitlistEntry = Database['public']['Tables']['waitlist_entries']['Row'];
-export type Zone = Database['public']['Tables']['zones']['Row'];
 export type Table = Database['public']['Tables']['tables']['Row'];
 
-export type WaitlistStatus = 'WAITING' | 'NOTIFIED' | 'ARRIVED' | 'SEATED' | 'CANCELLED' | 'NO_SHOW';
+export type WaitlistStatus = 'WAITING' | 'CONFIRMED' | 'TABLE_READY' | 'ARRIVED' | 'SEATED' | 'CANCELLED' | 'NO_SHOW';
 
 // ============================================================================
 // REQUEST/RESPONSE TYPES
@@ -289,11 +288,10 @@ export interface ReservationDraft {
   businessId: string;
   customerName?: string;
   partySize?: number;
-  selectedZoneId?: string;
-  step: 'name' | 'party_size' | 'zone_selection' | 'confirmation' | 'completed' | 'edit_menu';
+  step: 'name' | 'party_size' | 'completed' | 'edit_menu';
   // Edit mode fields
   editMode?: boolean;
-  editingField?: 'party_size' | 'zone';
+  editingField?: 'party_size';
   existingReservationId?: string;
   // Invalid attempt tracking (for exit-on-repeat)
   invalidAttempts?: number;
@@ -307,7 +305,6 @@ export interface CreateReservationRequest {
   customerPhone: string;
   partySize: number;
   tableId?: string;
-  zone?: string;
 }
 
 export interface CreateReservationResponse {
