@@ -8,7 +8,7 @@ import { BaileysMessage, ReservationDraft } from '../types';
 import { logger } from '../utils/logger';
 
 type ActiveReservationSnapshot = {
-  status: 'WAITING' | 'NOTIFIED';
+  status: 'WAITING' | 'CONFIRMED' | 'NOTIFIED' | 'TABLE_READY';
   displayCode: string | null;
 };
 
@@ -238,7 +238,7 @@ export class WhatsAppHandler {
       }
 
       // FAST PATH: deterministic reservation steps should not wait for AI response
-      if (draft && (draft.step === 'party_size' || draft.step === 'zone_selection' || draft.step === 'edit_menu')) {
+      if (draft && (draft.step === 'party_size' || draft.step === 'edit_menu')) {
         logger.info('⚡ Bypassing agent for deterministic draft step', {
           conversationId,
           businessId,
@@ -291,20 +291,6 @@ export class WhatsAppHandler {
       const business = await SupabaseService.getBusinessById(businessId);
       const businessName = business?.name || 'el restaurante';
       
-      // CRITICAL FIX: If user is providing party size, extract it and fetch zones BEFORE building context
-      // This ensures the agent receives correct zone information and doesn't hallucinate
-      let detectedPartySize: number | null = null;
-      if (draft && draft.step === 'party_size') {
-        detectedPartySize = this.extractNumber(messageText);
-        if (detectedPartySize &&  detectedPartySize > 0 && detectedPartySize <= 50) {
-          logger.info('Party size detected before context build', {
-            businessId,
-            conversationId,
-            partySize: detectedPartySize,
-          });
-        }
-      }
-      
       // Build context
       const context: any = {
         businessId,
@@ -313,49 +299,12 @@ export class WhatsAppHandler {
         hasActiveDraft: !!draft,
       };
 
-      // OPTIMIZED: Always try to get zones from Redis cache (independent of draft state)
-      // This ensures agent always has zone info available, even on first message
-      const cachedZones = await ReservationService.getCachedZones(businessId);
-      
-      logger.info('Redis cache zones status', {
-        businessId,
-        hasCachedZones: !!cachedZones,
-        zonesCount: cachedZones?.zones.length || 0,
-        tablesCount: cachedZones?.tables.length || 0,
-      });
-
-      if (cachedZones) {
-        // Store all zones info in context (for agent to know what's available)
-        context.allAvailableZones = cachedZones.zones.map(z => z.name);
-      }
-
       if (draft) {
         context.currentStep = draft.step;
         context.draftData = {
           customerName: draft.customerName,
           partySize: draft.partySize,
-          selectedZoneId: draft.selectedZoneId,
         };
-
-        // Filter zones by party size if we have both cached zones and party size
-        const partySizeToUse = detectedPartySize || draft.partySize;
-        if (partySizeToUse && cachedZones) {
-          // Filter zones from Redis cache by party size
-          const zonesMap = ReservationService.filterCachedZonesByPartySize(cachedZones, partySizeToUse);
-          
-          const availableZones = Array.from(zonesMap.keys());
-          context.availableZones = availableZones;
-          context.availableZonesFormatted = availableZones
-            .map((zone, idx) => `${idx + 1}. ${zone}`)
-            .join('\n');
-          
-          logger.info('Available zones filtered from Redis cache', {
-            conversationId,
-            partySize: partySizeToUse,
-            zonesCount: availableZones.length,
-            zones: availableZones,
-          });
-        }
       }
       // CRITICAL FIX: Auto-create draft BEFORE generating agent response
       // Check if the PREVIOUS bot message asked for name, not the current one
@@ -413,20 +362,15 @@ export class WhatsAppHandler {
         }
       }
       
-      // Log context before calling agent to debug zone availability
+      // Log context before calling agent
       logger.info('Agent context snapshot', {
         conversationId,
         businessId,
         currentStep: context.currentStep,
         hasDraft: !!draft,
         partySize: context.draftData?.partySize,
-        hasAvailableZones: !!context.availableZones,
-        availableZonesCount: context.availableZones?.length || 0,
-        hasAllZones: !!context.allAvailableZones,
-        allZonesCount: context.allAvailableZones?.length || 0,
       });
 
-      // Context snapshot already logged with logger.info above
       // Generate response with agent
       const agentResponse = await agentService.generateResponse(
         messageText,
@@ -501,7 +445,6 @@ export class WhatsAppHandler {
           step: draft.step,
           customerName: draft.customerName,
           partySize: draft.partySize,
-          selectedZone: draft.selectedZoneId,
         });
         const customMessageSent = await this.processDraftStep(draft, messageText, conversationId, businessId, jid);
         return customMessageSent;
@@ -610,68 +553,10 @@ export class WhatsAppHandler {
             await ReservationService.setPartySize(conversationId, partySize);
             logger.info('✅ Party size set', { conversationId, partySize });
 
-            // OPTIMIZED: Use zones from Redis cache
-            const cachedZones = await ReservationService.getCachedZones(businessId);
-            
-            if (!cachedZones) {
-              const errorMessage = 'Lo siento, estoy teniendo problemas para obtener las zonas disponibles. Por favor intenta de nuevo.';
-              await this.sendWhatsAppMessage(businessId, jid, errorMessage);
-              return false;
-            }
-            
-            const zonesMap = ReservationService.filterCachedZonesByPartySize(cachedZones, partySize);
-            
-            const availableZones = Array.from(zonesMap.keys());
-            logger.info('📍 Available zones with tables', { 
-              businessId, 
-              partySize,
-              zonesCount: availableZones.length,
-              zones: availableZones,
-            });
-            
-            if (availableZones.length === 0) {
-              // No tables available - send message
-              logger.warn('No zones available for party size', {
-                conversationId,
-                partySize,
-              });
-              
-              const noTablesMessage = `Lo siento, no tenemos mesas disponibles para ${partySize} personas en este momento. ¿Te gustaría que te agreguemos a la lista de espera?`;
-              await this.sendWhatsAppMessage(businessId, jid, noTablesMessage);
-              return true;
-              
-            } else {
-              // Generate zone selection message with REAL zones
-              logger.info('📤 Generating zone selection message with real zones', {
-                conversationId,
-                zones: availableZones,
-              });
-              
-              const zonesFormatted = availableZones
-                .map((zone, idx) => `${idx + 1}. *${zone}*`)
-                .join('\n');
-              
-              let zoneMessage: string;
-              if (availableZones.length === 1) {
-                zoneMessage = `✅ Perfecto! Tenemos disponible la zona *${availableZones[0]}* para ${partySize} personas.\n\n¿Confirmas esta zona? (Responde SÍ o NO)`;
-              } else {
-                zoneMessage = `✅ Tenemos ${availableZones.length} zonas disponibles para ${partySize} personas:\n\n${zonesFormatted}\n\nResponde con el *número* o *nombre* de la zona que prefieres.`;
-              }
-              
-              logger.info('🔔 About to send zone selection message', {
-                conversationId,
-                businessId,
-                jid,
-                messagePreview: zoneMessage.substring(0, 100),
-                messageLength: zoneMessage.length,
-              });
-              
-              await this.sendWhatsAppMessage(businessId, jid, zoneMessage);
-              
-              // Return true to skip agent response (we sent custom message)
-              logger.info('🚫 Skipping agent response - custom zone message sent', { conversationId });
-              return true;
-            }
+            // Create reservation immediately (no zone selection needed)
+            logger.info('💾 Creating reservation', { conversationId, businessId, jid });
+            await this.createAndNotifyReservation(conversationId, businessId, jid);
+            return true;
           } else {
             // Invalid party size — track attempts and cancel after 2
             logger.warn('Invalid party size provided', { conversationId, messageText });
@@ -695,104 +580,8 @@ export class WhatsAppHandler {
           break;
         }
 
-        case 'zone_selection':
-          const draft2 = await ReservationService.getDraft(conversationId);
-          if (!draft2 || !draft2.partySize) {
-            logger.warn('Draft missing party size for zone selection', { conversationId });
-            const errorMsg = 'Lo siento, hubo un problema. Por favor vuelve a empezar diciendo HOLA.';
-            await this.sendWhatsAppMessage(businessId, jid, errorMsg);
-            return true;
-          }
-
-          // OPTIMIZED: Use zones from Redis cache
-          const cachedZonesForSelect = await ReservationService.getCachedZones(businessId);
-          
-          if (!cachedZonesForSelect) {
-            const errorMsg = 'Lo siento, estoy teniendo problemas para obtener las zonas. Por favor intenta de nuevo.';
-            await this.sendWhatsAppMessage(businessId, jid, errorMsg);
-            return true;
-          }
-          
-          const zonesMap2 = ReservationService.filterCachedZonesByPartySize(cachedZonesForSelect, draft2.partySize);
-          
-          const availableZones2 = Array.from(zonesMap2.keys());
-          
-          // Check if user is confirming (yes/si/ok) when there's only one zone
-          const isConfirmation = /^(s[ií]|yes|ok|dale|confirmo|confirmar)$/i.test(messageText.trim());
-          
-          let selectedZone: string | null = null;
-          
-          if (availableZones2.length === 1 && isConfirmation) {
-            // User confirmed the single available zone
-            selectedZone = availableZones2[0];
-            logger.info('🎯 User confirmed single zone', { conversationId, zone: selectedZone });
-          } else {
-            // User selected from multiple zones
-            selectedZone = this.findZoneByMessage(messageText, availableZones2);
-          }
-
-          if (selectedZone) {
-            logger.info('✅ Zone selected/confirmed', { conversationId, zone: selectedZone });
-
-            // ----- EDIT MODE: just update the zone -----
-            if (draft2.editMode && draft2.existingReservationId) {
-              const ok = await SupabaseService.updateReservationZone(
-                draft2.existingReservationId,
-                selectedZone,
-                businessId,
-                draft2.partySize
-              );
-              await ReservationService.deleteDraft(conversationId);
-              const msg = ok
-                ? `✅ ¡Listo! Tu reserva fue actualizada a la zona *${selectedZone}*.`
-                : '❌ No se pudo actualizar la zona. Por favor intentá de nuevo.';
-              await this.sendWhatsAppMessage(businessId, jid, msg);
-              return true;
-            }
-
-            // ----- NORMAL MODE -----
-            await ReservationService.selectZone(conversationId, selectedZone);
-
-            // Create reservation
-            logger.info('💾 Creating reservation', { conversationId, businessId, jid });
-            await this.createAndNotifyReservation(conversationId, businessId, jid);
-            
-            // Return TRUE to skip agent response (reservation confirmation was sent)
-            return true;
-          } else {
-            logger.warn('Zone selection not found in available zones', {
-              conversationId,
-              messageText,
-              availableZones: availableZones2,
-            });
-
-            // Track invalid attempts and cancel after 2
-            draft2.invalidAttempts = (draft2.invalidAttempts ?? 0) + 1;
-            await ReservationService.saveDraft(draft2);
-
-            if (draft2.invalidAttempts >= 2) {
-              await ReservationService.deleteDraft(conversationId);
-              await this.sendWhatsAppMessage(
-                businessId,
-                jid,
-                '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
-              );
-              return true;
-            }
-            
-            // Send error message with available zones
-            const zonesFormatted = availableZones2
-              .map((zone, idx) => `${idx + 1}. *${zone}*`)
-              .join('\n');
-            
-            const invalidZoneMsg = `❌ No encontré esa zona. Por favor elige una de estas opciones:\n\n${zonesFormatted}\n\nResponde con el *número* o *nombre* de la zona.\n\n_(Para cancelar escribí *cancelar* o *salir*)_`;
-            await this.sendWhatsAppMessage(businessId, jid, invalidZoneMsg);
-            return true;
-          }
-          break;
-
         case 'edit_menu': {
-          // User is choosing what to edit: 1=party_size, 2=zone, 3=cancel
+          // User is choosing what to edit: 1=party_size, 2=cancel
           const choice = this.extractNumber(messageText);
           const reservationId = draft.existingReservationId;
 
@@ -803,35 +592,13 @@ export class WhatsAppHandler {
           }
 
           if (choice === 1) {
-            await ReservationService.startEditReservation(conversationId, businessId, reservationId, 'party_size', {
+            await ReservationService.startEditReservation(conversationId, businessId, reservationId, {
               customerName: draft.customerName,
               partySize: draft.partySize,
-              selectedZoneId: draft.selectedZoneId,
             });
             await this.sendWhatsAppMessage(businessId, jid, '¿Para cuántas personas querés cambiar la reserva?\n\nEjemplo: 2, 4, 6, etc.');
             return true;
           } else if (choice === 2) {
-            // Need to load zones and ask user to pick one
-            const cachedZonesEdit = await ReservationService.getCachedZones(businessId);
-            const partySizeForEdit = draft.partySize ?? 1;
-            let zonesLabel: string;
-            if (cachedZonesEdit) {
-              const zonesMapEdit = ReservationService.filterCachedZonesByPartySize(cachedZonesEdit, partySizeForEdit);
-              const zoneNamesEdit = Array.from(zonesMapEdit.keys());
-              zonesLabel = zoneNamesEdit.length > 0
-                ? zoneNamesEdit.map((z, i) => `${i + 1}. *${z}*`).join('\n')
-                : 'No hay zonas disponibles en este momento.';
-            } else {
-              zonesLabel = 'No hay zonas disponibles en este momento.';
-            }
-            await ReservationService.startEditReservation(conversationId, businessId, reservationId, 'zone', {
-              customerName: draft.customerName,
-              partySize: draft.partySize,
-              selectedZoneId: draft.selectedZoneId,
-            });
-            await this.sendWhatsAppMessage(businessId, jid, `¿Qué zona preferís?\n\n${zonesLabel}\n\nResponde con el *número* o *nombre* de la zona.`);
-            return true;
-          } else if (choice === 3) {
             // Cancel reservation
             await ReservationService.deleteDraft(conversationId);
             const cancelled = await SupabaseService.updateReservationStatus(reservationId, 'CANCELLED');
@@ -844,15 +611,11 @@ export class WhatsAppHandler {
             await this.sendWhatsAppMessage(
               businessId,
               jid,
-              '❌ Por favor respondé con *1*, *2* o *3* según la opción que elegiste.'
+              '❌ Por favor respondé con *1* o *2* según la opción que elegiste.'
             );
             return true;
           }
         }
-
-        case 'confirmation':
-          // User confirmed or already processed
-          break;
 
         case 'completed':
           // Already completed
@@ -926,48 +689,36 @@ export class WhatsAppHandler {
         // Build and send confirmation message to customer via WhatsApp
         const entry = result.waitlistEntry;
         
-        // Get zone name from draft (we stored the zone NAME, not ID)
-        const zoneName = draft.selectedZoneId || 'Asignada';
-        
         // Get business configuration for conditional messaging
         const business = await SupabaseService.getBusinessById(businessId);
         const autoAccept = business?.auto_accept_reservations ?? false;
-        const businessType = business?.type || 'negocio';
         
         logger.info('Building confirmation message', {
           businessId,
           autoAccept,
-          businessType,
           status: entry.status,
           displayCode: entry.display_code,
         });
 
         let confirmationMessage: string;
 
-        if (autoAccept && entry.status === 'NOTIFIED') {
-          // Auto-accepted reservation - customer can go directly
-          confirmationMessage = `✅ *¡Reserva CONFIRMADA!*
-
-👤 Nombre: ${draft.customerName || 'Cliente'}
-👥 Personas: ${draft.partySize || entry.party_size}
-🏢 Zona: ${zoneName}
-📋 Código: *${entry.display_code}*
-
-✨ Tu ${businessType} te espera! Puedes dirigirte cuando quieras.
-
-Si necesitas cancelar, responde CANCELAR.`;
+        if (autoAccept && (entry.status === 'CONFIRMED' || entry.status === 'NOTIFIED')) {
+          confirmationMessage =
+            `✅ ¡Tu reserva está CONFIRMADA!\n\n` +
+            `👤 Nombre: ${draft.customerName || 'Cliente'}\n` +
+            `👥 Personas: ${draft.partySize || entry.party_size}\n` +
+            `📁 Código de reserva: *${entry.display_code}*\n\n` +
+            `✨ Te avisaremos cuando falten 10 minutos para que puedas ocupar tu mesa.\n` +
+            `Apreciamos tu puntualidad.\n\n` +
+            `_Si necesitas cancelar, respondé CANCELAR._`;
         } else {
-          // Manual approval required - customer must wait for confirmation
-          confirmationMessage = `⏳ *Reserva RECIBIDA*
-
-👤 Nombre: ${draft.customerName || 'Cliente'}
-👥 Personas: ${draft.partySize || entry.party_size}
-🏢 Zona: ${zoneName}
-📋 Código: *${entry.display_code}*
-
-⏰ Le notificaremos cuando el ${businessType} confirme su reserva.
-
-Si necesitas cancelar, responde CANCELAR.`;
+          confirmationMessage =
+            `⏳ *Reserva RECIBIDA*\n\n` +
+            `👤 Nombre: ${draft.customerName || 'Cliente'}\n` +
+            `👥 Personas: ${draft.partySize || entry.party_size}\n` +
+            `📁 Código: *${entry.display_code}*\n\n` +
+            `⏰ Le notificaremos cuando el restaurante confirme su reserva.\n\n` +
+            `_Si necesitas cancelar, respondé CANCELAR._`;
         }
 
         logger.info('📤 Sending confirmation message to customer', {
@@ -1253,8 +1004,10 @@ Si necesitas cancelar, responde CANCELAR.`;
       if (activeReservation) {
         // 4a. Show reservation summary and edit/cancel menu
         const statusLabel =
-          activeReservation.status === 'NOTIFIED'
+          activeReservation.status === 'CONFIRMED' || activeReservation.status === 'NOTIFIED'
             ? '✅ Confirmada'
+            : activeReservation.status === 'TABLE_READY'
+            ? '🚀 Mesa disponible'
             : activeReservation.status === 'ARRIVED'
             ? '🚶 En camino'
             : '⏳ Pendiente';
@@ -1266,8 +1019,7 @@ Si necesitas cancelar, responde CANCELAR.`;
           `📌 Estado: ${statusLabel}\n\n` +
           `¿Qué querés hacer?\n` +
           `1️⃣ Editar cantidad de personas\n` +
-          `2️⃣ Editar zona\n` +
-          `3️⃣ Cancelar la reserva\n\n` +
+          `2️⃣ Cancelar la reserva\n\n` +
           `Responde con el *número* de la opción.`;
 
         await this.sendWhatsAppMessage(businessId, jid, summaryMsg);
@@ -1361,7 +1113,7 @@ Si necesitas cancelar, responde CANCELAR.`;
         .select('status, display_code')
         .eq('business_id', businessId)
         .eq('customer_id', customerData.id)
-        .in('status', ['WAITING', 'NOTIFIED'])
+        .in('status', ['WAITING', 'CONFIRMED', 'NOTIFIED', 'TABLE_READY'])
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -1488,25 +1240,6 @@ Si necesitas cancelar, responde CANCELAR.`;
   }
 
   /**
-   * Find zone by user message (number or name)
-   */
-  private findZoneByMessage(message: string, zones: string[]): string | null {
-    const lowerMessage = message.toLowerCase().trim();
-
-    // Try to match by number (1, 2, 3, etc.)
-    const numberMatch = this.extractNumber(message);
-    if (numberMatch && numberMatch > 0 && numberMatch <= zones.length) {
-      return zones[numberMatch - 1];
-    }
-
-    // Try to match by name
-    return zones.find(zone => 
-      zone.toLowerCase().includes(lowerMessage) ||
-      lowerMessage.includes(zone.toLowerCase())
-    ) || null;
-  }
-
-  /**
    * 🎯 ACTION: Create Reservation - Start the multi-step flow
    */
   private async handleCreateReservation(
@@ -1516,26 +1249,10 @@ Si necesitas cancelar, responde CANCELAR.`;
     try {
       logger.info('🎯 Starting CREATE_RESERVATION action', { conversationId, businessId });
 
-      // Get business name for greeting
-      const business = await SupabaseService.getBusinessById(businessId);
-      const businessName = business?.name || 'nuestro restaurante';
-      logger.info('✅ Business fetched', { businessId, businessName });
-
-      // Verify there are available zones
-      const zones = await ReservationService.getAvailableZones(businessId);
-      logger.info('📍 Zones fetched', { businessId, zonesCount: zones.length, zones });
-
-      if (zones.length === 0) {
-        logger.warn('⚠️ No zones available for reservation', { businessId });
-        // Agent will handle this response
-        return;
-      }
-
       // Start reservation flow
       const draft = await ReservationService.startReservation(conversationId, businessId);
       logger.info('✅ Reservation flow started', { 
-        conversationId, 
-        businessName,
+        conversationId,
         draftStep: draft.step,
       });
     } catch (error) {
@@ -1633,10 +1350,10 @@ Si necesitas cancelar, responde CANCELAR.`;
         return;
       }
 
-      // Update status to NOTIFIED
+      // Update status to ARRIVED
       await SupabaseService.updateReservationStatus(
         (reservation as any).id,
-        'NOTIFIED'
+        'ARRIVED'
       );
 
       logger.info('Arrival confirmed', {
@@ -1679,7 +1396,7 @@ Si necesitas cancelar, responde CANCELAR.`;
         .select('*')
         .eq('business_id', businessId)
         .eq('customer_id', customer.id)
-        .in('status', ['WAITING', 'NOTIFIED'])
+        .in('status', ['WAITING', 'CONFIRMED', 'NOTIFIED', 'TABLE_READY'])
         .order('created_at', { ascending: false })
         .limit(1)
         .single();
