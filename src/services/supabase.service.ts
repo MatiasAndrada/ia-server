@@ -402,7 +402,7 @@ export class SupabaseService {
         position: nextPosition,
         display_code: displayCode,
         status: initialStatus,
-        source: 'WHATSAPP',
+        source: 'AI_CHAT',
         confirmed_at: confirmedAt,
         table_id: tableId,
       } as WaitlistEntriesInsert;
@@ -470,7 +470,7 @@ export class SupabaseService {
     businessId: string,
     baseCode: string
   ): Promise<string> {
-    const activeStatuses: WaitlistStatus[] = ['WAITING', 'CONFIRMED', 'TABLE_READY'];
+    const activeStatuses: WaitlistStatus[] = ['WAITING', 'CONFIRMED', 'NOTIFIED'];
     let displayCode = baseCode;
 
     for (let attempt = 0; attempt < 26; attempt += 1) {
@@ -534,7 +534,7 @@ export class SupabaseService {
         .select('*')
         .eq('customer_id', customerId)
         .eq('business_id', businessId)
-        .in('status', ['WAITING', 'CONFIRMED', 'TABLE_READY', 'ARRIVED'])
+        .in('status', ['WAITING', 'CONFIRMED', 'NOTIFIED', 'ARRIVED'])
         .gte('queued_at', startOfDayISO)
         .order('queued_at', { ascending: false })
         .limit(1)

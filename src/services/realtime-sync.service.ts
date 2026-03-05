@@ -318,9 +318,8 @@ export class RealtimeSyncService {
         return;
       }
 
-      // Check if new status is CONFIRMED or TABLE_READY
+      // Check if new status is CONFIRMED or NOTIFIED
       const isConfirmed = newEntry?.status === 'CONFIRMED';
-      const isTableReady = newEntry?.status === 'TABLE_READY';
       // Keep backward compat: NOTIFIED still sends the confirmation message
       const isNotified = newEntry?.status === 'NOTIFIED';
       
@@ -328,12 +327,11 @@ export class RealtimeSyncService {
         oldStatus: oldEntry?.status,
         newStatus: newEntry?.status,
         isConfirmed,
-        isTableReady,
         isNotified,
       });
       
-      if (!isConfirmed && !isTableReady && !isNotified) {
-        logger.info('⏭️ [REALTIME] Skipping - status is not CONFIRMED, TABLE_READY or NOTIFIED', {
+      if (!isConfirmed && !isNotified) {
+        logger.info('⏭️ [REALTIME] Skipping - status is not CONFIRMED or NOTIFIED', {
           newStatus: newEntry?.status,
         });
         return;
@@ -385,8 +383,8 @@ export class RealtimeSyncService {
       // Build message based on new status
       let notificationMessage: string;
 
-      if (isTableReady) {
-        // Paso 6: Mesa disponible
+      if (isNotified) {
+        // Paso 6: Mesa disponible (NOTIFIED)
         notificationMessage =
           `🚀 ¡Es tu momento!\n` +
           `Tu mesa está disponible.\n` +

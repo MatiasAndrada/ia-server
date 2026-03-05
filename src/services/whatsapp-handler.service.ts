@@ -8,7 +8,7 @@ import { BaileysMessage, ReservationDraft } from '../types';
 import { logger } from '../utils/logger';
 
 type ActiveReservationSnapshot = {
-  status: 'WAITING' | 'CONFIRMED' | 'NOTIFIED' | 'TABLE_READY';
+  status: 'WAITING' | 'CONFIRMED' | 'NOTIFIED' | 'ARRIVED';
   displayCode: string | null;
 };
 
@@ -1006,8 +1006,6 @@ export class WhatsAppHandler {
         const statusLabel =
           activeReservation.status === 'CONFIRMED' || activeReservation.status === 'NOTIFIED'
             ? '✅ Confirmada'
-            : activeReservation.status === 'TABLE_READY'
-            ? '🚀 Mesa disponible'
             : activeReservation.status === 'ARRIVED'
             ? '🚶 En camino'
             : '⏳ Pendiente';
@@ -1113,7 +1111,7 @@ export class WhatsAppHandler {
         .select('status, display_code')
         .eq('business_id', businessId)
         .eq('customer_id', customerData.id)
-        .in('status', ['WAITING', 'CONFIRMED', 'NOTIFIED', 'TABLE_READY'])
+        .in('status', ['WAITING', 'CONFIRMED', 'NOTIFIED', 'ARRIVED'])
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -1127,7 +1125,7 @@ export class WhatsAppHandler {
       }
 
       return {
-        status: reservationData.status as 'WAITING' | 'NOTIFIED',
+        status: reservationData.status as ActiveReservationSnapshot['status'],
         displayCode: reservationData.display_code,
       };
     } catch (error) {
@@ -1396,7 +1394,7 @@ export class WhatsAppHandler {
         .select('*')
         .eq('business_id', businessId)
         .eq('customer_id', customer.id)
-        .in('status', ['WAITING', 'CONFIRMED', 'NOTIFIED', 'TABLE_READY'])
+        .in('status', ['WAITING', 'CONFIRMED', 'NOTIFIED', 'ARRIVED'])
         .order('created_at', { ascending: false })
         .limit(1)
         .single();
