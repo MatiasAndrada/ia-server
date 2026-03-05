@@ -8,7 +8,7 @@ export type Customer = Database['public']['Tables']['customers']['Row'];
 export type WaitlistEntry = Database['public']['Tables']['waitlist_entries']['Row'];
 export type Table = Database['public']['Tables']['tables']['Row'];
 
-export type WaitlistStatus = 'WAITING' | 'CONFIRMED' | 'TABLE_READY' | 'ARRIVED' | 'SEATED' | 'CANCELLED' | 'NO_SHOW';
+export type WaitlistStatus = 'WAITING' | 'CONFIRMED' | 'NOTIFIED' | 'ARRIVED' | 'SEATED' | 'CANCELLED' | 'NO_SHOW';
 
 // ============================================================================
 // REQUEST/RESPONSE TYPES
