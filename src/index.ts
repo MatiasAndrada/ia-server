@@ -41,7 +41,6 @@ import {
   clearConversationHandler as agentClearConversationHandler,
 } from './controllers/agent.controller';
 import {
-  getAvailableZonesHandler,
   getDraftStatusHandler,
   createReservationHandler,
   updateReservationStatusHandler,
@@ -238,8 +237,6 @@ async function initializeApp() {
     app.delete('/api/agents/:agentId/conversations/:conversationId', agentClearConversationHandler);
 
     // API Routes - Reservaciones
-    app.get('/api/reservations/zones/:businessId', getAvailableZonesHandler);
-    
     app.get('/api/reservations/draft/:conversationId', getDraftStatusHandler);
     
     app.post('/api/reservations', createReservationHandler);
