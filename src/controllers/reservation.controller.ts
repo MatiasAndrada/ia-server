@@ -110,7 +110,7 @@ export async function updateReservationStatusHandler(req: Request, res: Response
       });
     }
 
-    const validStatuses = ['WAITING', 'CONFIRMED', 'TABLE_READY', 'SEATED', 'CANCELLED', 'NO_SHOW'];
+    const validStatuses = ['WAITING', 'CONFIRMED', 'NOTIFIED', 'ARRIVED', 'SEATED', 'CANCELLED', 'NO_SHOW'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({
         success: false,
