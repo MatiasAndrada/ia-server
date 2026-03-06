@@ -41,7 +41,7 @@ async function listBusinesses() {
       console.log('');
     });
     
-    console.log('\n💡 To test zones, update .env with the correct TEST_BUSINESS_ID\n');
+    console.log('\n💡 To test reservations/tables, update .env with the correct TEST_BUSINESS_ID\n');
     
   } catch (error: any) {
     console.error('❌ Error:', error.message);

@@ -29,61 +29,44 @@ async function checkBusinessSetup() {
       whatsapp_session: business?.whatsapp_session_id,
     });
 
-    // Get zones
-    console.log('\n🏢 Fetching zones...');
-    const zones = await SupabaseService.getZonesByBusiness(BUSINESS_ID);
-    console.log(`✅ Found ${zones.length} zones:`);
-    zones.forEach((zone, idx) => {
-      console.log(`   ${idx + 1}. ${zone.name} (ID: ${zone.id}, Priority: ${zone.priority})`);
-    });
-
     // Get tables
     console.log('\n🪑 Fetching tables...');
-    const tables = await SupabaseService.getTablesByBusiness(BUSINESS_ID);
+    const tables = await SupabaseService.getActiveTablesByBusiness(BUSINESS_ID);
     console.log(`✅ Found ${tables.length} tables:`);
-    
-    // Group tables by zone
-    const tablesByZone = new Map<string, typeof tables>();
+
+    const availableTables = tables.filter((table) => !table.is_occupied);
+    console.log(`✅ Available (not occupied): ${availableTables.length}`);
+
+    // Group tables by capacity
+    const tablesByCapacity = new Map<string, typeof tables>();
     tables.forEach(table => {
-      const zoneId = table.zone_id || 'no-zone';
-      if (!tablesByZone.has(zoneId)) {
-        tablesByZone.set(zoneId, []);
+      const capacity = table.capacity ?? 0;
+      const bucket = capacity >= 8 ? '8+' : String(capacity);
+      if (!tablesByCapacity.has(bucket)) {
+        tablesByCapacity.set(bucket, []);
       }
-      tablesByZone.get(zoneId)!.push(table);
+      tablesByCapacity.get(bucket)!.push(table);
     });
 
-    zones.forEach(zone => {
-      const zoneTables = tablesByZone.get(zone.id) || [];
-      console.log(`\n   Zone: ${zone.name} (${zoneTables.length} tables)`);
-      zoneTables.forEach(table => {
+    console.log('\n📊 Tables by capacity:');
+    tablesByCapacity.forEach((groupTables, capacity) => {
+      console.log(`\n   Capacity ${capacity}: ${groupTables.length} table(s)`);
+      groupTables.forEach(table => {
         console.log(`      - Table ${table.table_number}: Capacity ${table.capacity}, Active: ${table.is_active}`);
       });
     });
 
-    // Check for tables without zone
-    const noZoneTables = tablesByZone.get('no-zone') || [];
-    if (noZoneTables.length > 0) {
-      console.log(`\n   ⚠️  Tables without zone: ${noZoneTables.length}`);
-      noZoneTables.forEach(table => {
-        console.log(`      - Table ${table.table_number}: Capacity ${table.capacity}`);
-      });
-    }
-
-    // Test reservation flow
-    console.log('\n🧪 Testing reservation flow for different party sizes...');
+    // Test table matching by party size
+    console.log('\n🧪 Testing table availability for different party sizes...');
     const testSizes = [2, 4, 6, 8];
     for (const size of testSizes) {
-      console.log(`\n   Party size: ${size}`);
-      const { ReservationService } = await import('../src/services/reservation.service');
-      const zonesWithTables = await ReservationService.getAvailableZonesWithTables(
-        BUSINESS_ID,
-        size
-      );
-      
-      console.log(`   Available zones: ${zonesWithTables.size}`);
-      zonesWithTables.forEach((value, zoneName) => {
-        console.log(`      - ${zoneName}: ${value.tables.length} tables`);
+      const fittingTables = availableTables.filter((table) => {
+        if (table.capacity === null) {
+          return true;
+        }
+        return table.capacity >= size;
       });
+      console.log(`   Party size ${size}: ${fittingTables.length} table(s) compatibles`);
     }
 
     console.log('\n✅ Business setup check complete!\n');
