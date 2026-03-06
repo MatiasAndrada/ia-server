@@ -21,7 +21,6 @@ El servidor ahora soporta múltiples agentes de IA con diferentes propósitos y 
 **Acciones soportadas:**
 - `CHECK_STATUS` - Consultar estado en la lista
 - `REGISTER` - Registrarse en la lista de espera
-- `CONFIRM_ARRIVAL` - Confirmar llegada al restaurante
 - `CANCEL` - Cancelar registro
 - `INFO_REQUEST` - Solicitar información general
 
