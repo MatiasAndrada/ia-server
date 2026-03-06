@@ -12,7 +12,7 @@ export class RealtimeSyncService {
 
   /**
    * Returns true when a businesses UPDATE affects reservation-relevant data
-   * and therefore requires zones/tables cache refresh.
+    * and therefore requires reservation cache refresh.
    */
   private static shouldRefreshBusinessCaches(oldBusiness: any, newBusiness: any): boolean {
     if (!oldBusiness || !newBusiness) {
@@ -309,7 +309,6 @@ export class RealtimeSyncService {
         oldStatus: oldEntry?.status,
         newStatus: newEntry?.status,
         displayCode: newEntry?.display_code,
-        position: newEntry?.position,
       });
 
       // Only process UPDATE events
@@ -342,7 +341,6 @@ export class RealtimeSyncService {
         businessId: newEntry.business_id,
         customerId: newEntry.customer_id,
         displayCode: newEntry.display_code,
-        position: newEntry.position,
         oldStatus: oldEntry.status,
         newStatus: newEntry.status,
       });

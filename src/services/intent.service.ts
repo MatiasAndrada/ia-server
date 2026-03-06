@@ -76,7 +76,6 @@ export class IntentService {
       const validIntents: IntentType[] = [
         'register',
         'query_status',
-        'confirm_arrival',
         'cancel',
         'request_info',
         'general_question',
@@ -136,14 +135,6 @@ export class IntentService {
 
     if (lowerText.includes('cancelar') || lowerText.includes('no voy')) {
       return { intent: 'cancel', entities: {}, confidence: 0.7 };
-    }
-
-    if (
-      lowerText.includes('llegué') ||
-      lowerText.includes('estoy aquí') ||
-      lowerText.includes('llegada')
-    ) {
-      return { intent: 'confirm_arrival', entities: {}, confidence: 0.7 };
     }
 
     if (

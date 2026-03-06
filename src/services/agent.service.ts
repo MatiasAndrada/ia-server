@@ -258,8 +258,6 @@ class AgentService {
       '[NOMBRE]': context.draftData?.customerName || '[NOMBRE]',
       '{qty}': String(context.draftData?.partySize || '{qty}'),
       '[CANTIDAD]': String(context.draftData?.partySize || '[CANTIDAD]'),
-      '{position}': context.position || '{position}',
-      '[POSICIÓN]': context.position || '[POSICIÓN]',
     };
 
     // Realizar reemplazos

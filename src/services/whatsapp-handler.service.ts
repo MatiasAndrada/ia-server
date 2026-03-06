@@ -8,7 +8,7 @@ import { BaileysMessage, ReservationDraft } from '../types';
 import { logger } from '../utils/logger';
 
 type ActiveReservationSnapshot = {
-  status: 'WAITING' | 'CONFIRMED' | 'NOTIFIED' | 'ARRIVED';
+  status: 'WAITING' | 'CONFIRMED' | 'NOTIFIED';
   displayCode: string | null;
 };
 
@@ -51,7 +51,7 @@ export class WhatsAppHandler {
 
     const existing = this.debounceBuffer.get(conversationId);
     if (existing) {
-      // More messages arrived before the timer fired — accumulate and reset timer
+      // More messages were received before the timer fired; accumulate and reset timer
       clearTimeout(existing.timer);
       existing.messages.push(message);
     }
@@ -285,6 +285,18 @@ export class WhatsAppHandler {
           logger.info('Post-reservation courtesy handled', { conversationId, businessId, from });
           return;
         }
+
+        // Business rule: one active reservation per phone/day.
+        // Block explicit attempts to create a second reservation while one is active.
+        const singleReservationPolicyHandled = await this.enforceSingleActiveReservationPolicy(
+          businessId,
+          from,
+          messageText,
+          conversationId
+        );
+        if (singleReservationPolicyHandled) {
+          return;
+        }
       }
       
       // Get business details for context
@@ -453,15 +465,11 @@ export class WhatsAppHandler {
       // Process explicit actions
       switch (action) {
         case 'CREATE_RESERVATION':
-          await this.handleCreateReservation(conversationId, businessId);
+          await this.handleCreateReservation(conversationId, businessId, jid);
           break;
 
         case 'CHECK_STATUS':
           await this.handleCheckStatus(businessId, jid, conversationId);
-          break;
-
-        case 'CONFIRM_ARRIVAL':
-          await this.handleConfirmArrival(businessId, jid, conversationId);
           break;
 
         case 'CANCEL':
@@ -553,7 +561,7 @@ export class WhatsAppHandler {
             await ReservationService.setPartySize(conversationId, partySize);
             logger.info('✅ Party size set', { conversationId, partySize });
 
-            // Create reservation immediately (no zone selection needed)
+            // Create reservation immediately after party size is confirmed
             logger.info('💾 Creating reservation', { conversationId, businessId, jid });
             await this.createAndNotifyReservation(conversationId, businessId, jid);
             return true;
@@ -681,7 +689,6 @@ export class WhatsAppHandler {
         logger.info('Waitlist entry created successfully', { 
           conversationId,
           entryId: result.waitlistEntry.id,
-          position: result.waitlistEntry.position,
           status: result.waitlistEntry.status,
           displayCode: result.waitlistEntry.display_code,
         });
@@ -835,6 +842,93 @@ export class WhatsAppHandler {
       .replace(/[¡!¿?.,;:]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
+  }
+
+  /**
+   * Business rule guard: one active reservation per day and phone.
+   * Blocks explicit attempts to create an additional reservation while current one is active.
+   */
+  private async enforceSingleActiveReservationPolicy(
+    businessId: string,
+    jid: string,
+    messageText: string,
+    conversationId: string
+  ): Promise<boolean> {
+    try {
+      if (!this.isExplicitNewReservationIntent(messageText)) {
+        return false;
+      }
+
+      const phone = this.normalizeWhatsAppNumber(jid);
+      const activeReservation = await SupabaseService.getActiveTodayReservationByPhone(phone, businessId);
+      if (!activeReservation) {
+        return false;
+      }
+
+      const statusLabel = this.getReservationStatusLabel(activeReservation.status);
+      const displayCodeText = activeReservation.display_code
+        ? ` (código *${activeReservation.display_code}*)`
+        : '';
+
+      const reminderMessage =
+        `⚠️ Recordatorio: ya tenés una reserva para hoy${displayCodeText} con estado *${statusLabel}*.` +
+        `\n\nNo puedo crear otra reserva hasta que la actual cambie a *finalizada* o se *cancele*.` +
+        `\n\nSi querés, respondé *CANCELAR* para anularla y después crear una nueva.`;
+
+      await this.sendWhatsAppMessage(businessId, jid, reminderMessage);
+
+      logger.info('Single-active-reservation policy applied', {
+        conversationId,
+        businessId,
+        status: activeReservation.status,
+        displayCode: activeReservation.display_code,
+      });
+
+      return true;
+    } catch (error) {
+      logger.error('Error enforcing single-active-reservation policy', {
+        error,
+        conversationId,
+        businessId,
+      });
+      return false;
+    }
+  }
+
+  private isExplicitNewReservationIntent(text: string): boolean {
+    const normalized = this.normalizeCourtesyText(text);
+
+    const explicitPatterns = [
+      /\botra\s+reserva\b/,
+      /\bnueva\s+reserva\b/,
+      /\bquiero\s+hacer\s+otra\s+reserva\b/,
+      /\bquiero\s+reservar\b/,
+      /\breservar\s+otra\b/,
+      /\bhacer\s+una\s+reserva\b/,
+      /\bmesa\s+para\b/,
+      /\bquiero\s+una\s+mesa\b/,
+    ];
+
+    return explicitPatterns.some((pattern) => pattern.test(normalized));
+  }
+
+  private getReservationStatusLabel(status: string): string {
+    switch (status) {
+      case 'WAITING':
+        return 'Pendiente';
+      case 'CONFIRMED':
+        return 'Confirmada';
+      case 'NOTIFIED':
+        return 'Notificada';
+      case 'SEATED':
+        return 'Finalizada';
+      case 'CANCELLED':
+        return 'Cancelada';
+      case 'NO_SHOW':
+        return 'No show';
+      default:
+        return status;
+    }
   }
 
   private isGratitudeMessage(text: string): boolean {
@@ -1006,8 +1100,6 @@ export class WhatsAppHandler {
         const statusLabel =
           activeReservation.status === 'CONFIRMED' || activeReservation.status === 'NOTIFIED'
             ? '✅ Confirmada'
-            : activeReservation.status === 'ARRIVED'
-            ? '🚶 En camino'
             : '⏳ Pendiente';
 
         const summaryMsg =
@@ -1015,6 +1107,7 @@ export class WhatsAppHandler {
           `👥 Personas: *${activeReservation.party_size}*\n` +
           `📋 Código: *${activeReservation.display_code}*\n` +
           `📌 Estado: ${statusLabel}\n\n` +
+          `⚠️ Mientras esta reserva siga activa, no puedo crear una nueva.\n\n` +
           `¿Qué querés hacer?\n` +
           `1️⃣ Editar cantidad de personas\n` +
           `2️⃣ Cancelar la reserva\n\n` +
@@ -1111,7 +1204,7 @@ export class WhatsAppHandler {
         .select('status, display_code')
         .eq('business_id', businessId)
         .eq('customer_id', customerData.id)
-        .in('status', ['WAITING', 'CONFIRMED', 'NOTIFIED', 'ARRIVED'])
+        .in('status', ['WAITING', 'CONFIRMED', 'NOTIFIED'])
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -1242,10 +1335,36 @@ export class WhatsAppHandler {
    */
   private async handleCreateReservation(
     conversationId: string,
-    businessId: string
+    businessId: string,
+    jid: string
   ): Promise<void> {
     try {
       logger.info('🎯 Starting CREATE_RESERVATION action', { conversationId, businessId });
+
+      const phone = this.normalizeWhatsAppNumber(jid);
+      const activeReservation = await SupabaseService.getActiveTodayReservationByPhone(phone, businessId);
+      if (activeReservation) {
+        const statusLabel = this.getReservationStatusLabel(activeReservation.status);
+        const displayCodeText = activeReservation.display_code
+          ? ` (código *${activeReservation.display_code}*)`
+          : '';
+
+        await this.sendWhatsAppMessage(
+          businessId,
+          jid,
+          `⚠️ Ya tenés una reserva activa para hoy${displayCodeText} con estado *${statusLabel}*.` +
+            `\n\nNo puedo crear una nueva hasta que la actual finalice o se cancele.` +
+            `\n\nSi querés, respondé *CANCELAR* para liberar tu cupo y luego crear otra.`
+        );
+
+        logger.info('CREATE_RESERVATION blocked by single-active-reservation policy', {
+          conversationId,
+          businessId,
+          status: activeReservation.status,
+          displayCode: activeReservation.display_code,
+        });
+        return;
+      }
 
       // Start reservation flow
       const draft = await ReservationService.startReservation(conversationId, businessId);
@@ -1308,62 +1427,6 @@ export class WhatsAppHandler {
   }
 
   /**
-   * ✋ ACTION: Confirm Arrival - Update status to NOTIFIED
-   */
-  private async handleConfirmArrival(
-    businessId: string,
-    jid: string,
-    conversationId: string
-  ): Promise<void> {
-    try {
-      // Extract normalized phone number for database lookups
-      const phone = this.normalizeWhatsAppNumber(jid);
-      
-      // Get customer
-      const customer = await SupabaseService.getOrCreateCustomer(
-        'Unknown',
-        phone,
-        businessId
-      );
-
-      if (!customer) {
-        logger.warn('Customer not found for arrival confirmation', { businessId, phone });
-        return;
-      }
-
-      // Find active reservation
-      const client = SupabaseConfig.getClient();
-      const { data: reservation, error } = await client
-        .from('waitlist_entries')
-        .select('*')
-        .eq('business_id', businessId)
-        .eq('customer_id', customer.id)
-        .eq('status', 'WAITING')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .single();
-
-      if (error || !reservation) {
-        logger.warn('No active reservation for arrival confirmation', { customerId: customer.id });
-        return;
-      }
-
-      // Update status to ARRIVED
-      await SupabaseService.updateReservationStatus(
-        (reservation as any).id,
-        'ARRIVED'
-      );
-
-      logger.info('Arrival confirmed', {
-        customerId: customer.id,
-        displayCode: (reservation as any).display_code,
-      });
-    } catch (error) {
-      logger.error('Error handling confirm arrival', { error, conversationId });
-    }
-  }
-
-  /**
    * ❌ ACTION: Cancel - Mark reservation as CANCELLED
    */
   private async handleCancel(
@@ -1394,7 +1457,7 @@ export class WhatsAppHandler {
         .select('*')
         .eq('business_id', businessId)
         .eq('customer_id', customer.id)
-        .in('status', ['WAITING', 'CONFIRMED', 'NOTIFIED', 'ARRIVED'])
+        .in('status', ['WAITING', 'CONFIRMED', 'NOTIFIED'])
         .order('created_at', { ascending: false })
         .limit(1)
         .single();

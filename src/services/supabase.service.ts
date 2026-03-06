@@ -298,24 +298,6 @@ export class SupabaseService {
         };
       }
 
-      // Get next position in waitlist
-      logger.info('🔢 Calculating next position in waitlist...');
-      const { data: lastEntry, error: lastEntryError } = await client
-        .from('waitlist_entries')
-        .select('position')
-        .eq('business_id', request.businessId)
-        .order('position', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (lastEntryError) {
-        logger.error('❌ Error getting last entry position', { error: lastEntryError });
-        throw lastEntryError;
-      }
-
-      const nextPosition = lastEntry?.position ? lastEntry.position + 1 : 1;
-      logger.info('✅ Position calculated', { nextPosition, lastPosition: lastEntry?.position });
-
       // Generate display code based on customer initial and phone suffix
       const baseDisplayCode = this.generateDisplayCodeFromCustomer(
         request.customerName,
@@ -387,7 +369,6 @@ export class SupabaseService {
         businessId: request.businessId,
         customerId: customer.id,
         partySize: request.partySize,
-        position: nextPosition,
         displayCode,
         status: initialStatus,
         confirmedAt,
@@ -395,17 +376,16 @@ export class SupabaseService {
         autoAccept,
       });
 
-      const insertData = {
+      const insertData: WaitlistEntriesInsert = {
         business_id: request.businessId,
         customer_id: customer.id,
         party_size: request.partySize,
-        position: nextPosition,
         display_code: displayCode,
         status: initialStatus,
         source: 'AI_CHAT',
-        confirmed_at: confirmedAt,
         table_id: tableId,
-      } as WaitlistEntriesInsert;
+        ...(confirmedAt ? { confirmed_at: confirmedAt } : {}),
+      };
 
       const { data: waitlistEntryData, error: entryError } = await client
         .from('waitlist_entries')
@@ -435,7 +415,6 @@ export class SupabaseService {
         displayCode: waitlistEntry.display_code,
         businessId: waitlistEntry.business_id,
         customerId: waitlistEntry.customer_id,
-        position: waitlistEntry.position,
         partySize: waitlistEntry.party_size,
         status: waitlistEntry.status,
         tableId: waitlistEntry.table_id,
@@ -518,7 +497,7 @@ export class SupabaseService {
   }
 
   /**
-   * Get an active reservation (WAITING / NOTIFIED / ARRIVED) created today
+   * Get an active reservation (WAITING / CONFIRMED / NOTIFIED) created today
    * in Buenos Aires timezone for a given customer.
    */
   static async getActiveTodayReservation(
@@ -534,7 +513,7 @@ export class SupabaseService {
         .select('*')
         .eq('customer_id', customerId)
         .eq('business_id', businessId)
-        .in('status', ['WAITING', 'CONFIRMED', 'NOTIFIED', 'ARRIVED'])
+        .in('status', ['WAITING', 'CONFIRMED', 'NOTIFIED'])
         .gte('queued_at', startOfDayISO)
         .order('queued_at', { ascending: false })
         .limit(1)
@@ -627,8 +606,6 @@ export class SupabaseService {
       // Set specific timestamps based on status
       if (status === 'CONFIRMED') {
         updateData.confirmed_at = new Date().toISOString();
-      } else if (status === 'ARRIVED') {
-        updateData.notified_at = new Date().toISOString();
       } else if (status === 'SEATED') {
         updateData.seated_at = new Date().toISOString();
       }
@@ -689,6 +666,25 @@ export class SupabaseService {
     } catch (error) {
       logger.error('Error checking WhatsApp status', { error, businessId });
       return false;
+    }
+  }
+
+  /**
+   * Check if business AI chat flow is enabled.
+   * Defaults to enabled when the flag is missing to avoid accidental service lockout.
+   */
+  static async isBusinessAiChatEnabled(businessId: string): Promise<boolean> {
+    try {
+      const business = await this.getBusinessById(businessId);
+
+      if (!business) {
+        return true;
+      }
+
+      return business.ai_chat_enabled ?? true;
+    } catch (error) {
+      logger.error('Error checking AI chat enabled flag', { error, businessId });
+      return true;
     }
   }
 
