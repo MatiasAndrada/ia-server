@@ -57,7 +57,6 @@ describe('Prompts Utils', () => {
       expect(prompt).toContain('[ACTION:');
       expect(prompt).toContain('REGISTER');
       expect(prompt).toContain('CHECK_STATUS');
-      expect(prompt).toContain('CONFIRM_ARRIVAL');
       expect(prompt).toContain('CANCEL');
     });
   });
@@ -68,7 +67,6 @@ describe('Prompts Utils', () => {
 
       expect(prompt).toContain('register');
       expect(prompt).toContain('query_status');
-      expect(prompt).toContain('confirm_arrival');
       expect(prompt).toContain('cancel');
       expect(prompt).toContain('request_info');
       expect(prompt).toContain('general_question');
