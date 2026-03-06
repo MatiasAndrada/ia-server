@@ -203,15 +203,6 @@ Si no se configuran certificados, el servidor usa HTTP para desarrollo.
 
 ### Reservations
 
-- GET /api/reservations/zones/:businessId
-  - Auth: yes
-  - Response: JSON from getAvailableZonesHandler
-  - Example response (200):
-    {
-      "success": true,
-      "data": { "zones": [], "count": 0 }
-    }
-
 - GET /api/reservations/draft/:conversationId
   - Auth: yes
   - Response: JSON from getDraftStatusHandler
@@ -229,9 +220,7 @@ Si no se configuran certificados, el servidor usa HTTP para desarrollo.
       "businessId": "biz-123",
       "customerName": "Maria Garcia",
       "customerPhone": "+5491112345678",
-      "partySize": 4,
-      "tableTypeId": "table-type-1",
-      "zone": "salon"
+      "partySize": 4
     }
   - Example response (201):
     {
