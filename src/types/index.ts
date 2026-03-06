@@ -8,7 +8,7 @@ export type Customer = Database['public']['Tables']['customers']['Row'];
 export type WaitlistEntry = Database['public']['Tables']['waitlist_entries']['Row'];
 export type Table = Database['public']['Tables']['tables']['Row'];
 
-export type WaitlistStatus = 'WAITING' | 'CONFIRMED' | 'NOTIFIED' | 'ARRIVED' | 'SEATED' | 'CANCELLED' | 'NO_SHOW';
+export type WaitlistStatus = 'WAITING' | 'CONFIRMED' | 'NOTIFIED' | 'SEATED' | 'CANCELLED' | 'NO_SHOW';
 
 // ============================================================================
 // REQUEST/RESPONSE TYPES
@@ -71,7 +71,6 @@ export interface HealthResponse {
 export type ActionType = 
   | 'REGISTER' 
   | 'CHECK_STATUS' 
-  | 'CONFIRM_ARRIVAL' 
   | 'CANCEL' 
   | 'INFO_REQUEST'
   | 'UNKNOWN';
@@ -129,7 +128,6 @@ export interface AgentListItem {
 export type IntentType =
   | 'register'
   | 'query_status'
-  | 'confirm_arrival'
   | 'cancel'
   | 'request_info'
   | 'general_question'
@@ -253,8 +251,7 @@ export type WebSocketEventType =
   | 'session_disconnected'
   | 'message_received'
   | 'reservation_created'
-  | 'reservation_updated'
-  | 'zones_available';
+  | 'reservation_updated';
 
 export interface WebSocketEvent {
   type: WebSocketEventType;

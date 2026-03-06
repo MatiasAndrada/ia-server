@@ -135,57 +135,54 @@ export type Database = {
           business_id: string
           customer_id: string
           party_size: number
-          position: number
           display_code: string
           queued_at: string
-          notified_at: string
-          seated_at: string
+          notified_at: string | null | null
+          seated_at: string | null | null
           created_at: string
           updated_at: string
           status: string
-          table_id: string
-          cancelled_at: string | null | null
+          table_id: string | null | null
+          cancelled_at: string
           estimated_wait_minutes: string | null | null
           source: string
-          confirmed_at: string | null | null
+          confirmed_at: string
         }
         Insert: {
           id?: string
           business_id: string
           customer_id: string
           party_size: number
-          position: number
           display_code: string
           queued_at?: string
-          notified_at?: string
-          seated_at?: string
+          notified_at?: string | null | null
+          seated_at?: string | null | null
           created_at?: string
           updated_at?: string
           status: string
-          table_id: string
-          cancelled_at?: string | null | null
+          table_id?: string | null | null
+          cancelled_at?: string
           estimated_wait_minutes?: string | null | null
           source: string
-          confirmed_at?: string | null | null
+          confirmed_at?: string
         }
         Update: {
           id?: string
           business_id?: string
           customer_id?: string
           party_size?: number
-          position?: number
           display_code?: string
           queued_at?: string
-          notified_at?: string
-          seated_at?: string
+          notified_at?: string | null | null
+          seated_at?: string | null | null
           created_at?: string
           updated_at?: string
           status?: string
-          table_id?: string
-          cancelled_at?: string | null | null
+          table_id?: string | null | null
+          cancelled_at?: string
           estimated_wait_minutes?: string | null | null
           source?: string
-          confirmed_at?: string | null | null
+          confirmed_at?: string
         }
         Relationships: []
       }
