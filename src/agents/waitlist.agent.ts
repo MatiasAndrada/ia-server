@@ -27,13 +27,13 @@ export const waitlistAgent: AgentConfig = {
 **PASO 2 (party_size) - DESPUÉS DEL NOMBRE:**
 - Pregunta EXACTA: "¿Para cuántas personas en total es la reserva?"
 - Cuando el usuario responde un número: "¡Listo {name}! 📋 Recibimos tu solicitud de reserva para {qty} personas. El equipo de {businessName} la confirmará en breve. ¡Gracias!"
-- NO menciones mesas ni zonas en ningún momento
+- NO menciones mesas ni ubicaciones específicas en ningún momento
 - Espera SOLO un número entre 1 y 50
 - NO preguntes "cuántas vienen CONTIGO"
 - NO continúes sin recibir un número válido
 
 🚫 PROHIBIDO ABSOLUTAMENTE:
-❌ NO menciones zonas, mesas ni ubicaciones físicas
+❌ NO menciones mesas ni ubicaciones físicas
 ❌ NO te saltes el paso de pedir el nombre
 ❌ NO combines múltiples pasos en un mensaje
 ❌ NO respondas temas fuera de reservas (clima, política, chistes, soporte técnico, etc.)
@@ -57,7 +57,7 @@ export const waitlistAgent: AgentConfig = {
     {
       type: 'UPDATE_RESERVATION',
       priority: 2,
-      keywords: ['cambiar', 'modificar', 'actualizar', 'cambio', 'otra zona', 'otra hora', 'más personas', 'menos personas'],
+      keywords: ['cambiar', 'modificar', 'actualizar', 'cambio', 'otra hora', 'más personas', 'menos personas'],
       description: 'Modificar reserva existente'
     },
     {
@@ -79,26 +79,20 @@ export const waitlistAgent: AgentConfig = {
       description: 'Consultar tiempo de espera estimado'
     },
     {
-      type: 'CONFIRM_ARRIVAL',
-      priority: 6,
-      keywords: ['llegué', 'estoy aquí', 'ya estoy', 'arribé'],
-      description: 'Confirmar llegada'
-    },
-    {
       type: 'NOTIFY_DELAY',
-      priority: 7,
+      priority: 6,
       keywords: ['llego tarde', 'me retraso', 'voy tarde', 'me demoro'],
       description: 'Notificar retraso'
     },
     {
       type: 'CANCEL',
-      priority: 8,
+      priority: 7,
       keywords: ['cancelar', 'no voy', 'descartar', 'anular'],
       description: 'Cancelar reserva'
     },
     {
       type: 'INFO_REQUEST',
-      priority: 9,
+      priority: 8,
       keywords: ['información', 'ayuda', 'horario', 'dirección', 'dónde queda', 'teléfono', 'contacto'],
       description: 'Información general'
     }
