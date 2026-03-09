@@ -77,6 +77,26 @@ export class BaileysService {
   }
 
   /**
+   * Extract normalized phone number from WhatsApp JID.
+   * Example: 5493532401540:55@s.whatsapp.net -> +5493532401540
+   */
+  private extractPhoneFromJid(jid?: string): string | undefined {
+    if (!jid) {
+      return undefined;
+    }
+
+    const withoutDomain = jid.split('@')[0] || jid;
+    const withoutDevice = withoutDomain.split(':')[0] || withoutDomain;
+    const normalized = withoutDevice.replace(/[^0-9+]/g, '');
+
+    if (!normalized) {
+      return undefined;
+    }
+
+    return normalized.startsWith('+') ? normalized : `+${normalized}`;
+  }
+
+  /**
    * Check if session exists for a business
    */
   hasSession(businessId: string): boolean {
@@ -455,7 +475,7 @@ export class BaileysService {
 
       // Update Supabase business status
       const sock = this.sessions.get(businessId);
-      const phoneNumber = sock?.user?.id?.replace('@s.whatsapp.net', '') || undefined;
+      const phoneNumber = this.extractPhoneFromJid(sock?.user?.id);
       
       await SupabaseService.updateBusinessWhatsAppStatus(
         businessId,
@@ -477,6 +497,15 @@ export class BaileysService {
       const { messages, type } = messageUpdate;
 
       if (type !== 'notify') return;
+
+      const isAiChatEnabled = await SupabaseService.isBusinessAiChatEnabled(businessId);
+      if (!isAiChatEnabled) {
+        logger.info('AI chat disabled for business, skipping incoming messages', {
+          businessId,
+          messageCount: Array.isArray(messages) ? messages.length : 0,
+        });
+        return;
+      }
 
       for (const msg of messages) {
         // Skip broadcast messages, status updates, and group chats

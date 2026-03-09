@@ -55,15 +55,12 @@ class AgentService {
         systemPrompt = this.interpolateContext(systemPrompt, context);
         
         // Agregar contexto estructurado para referencia
-        if (context.businessName || context.currentStep || context.draftData || context.availableZones) {
+        if (context.businessName || context.currentStep || context.draftData) {
           const contextInfo = [];
           if (context.businessName) contextInfo.push(`Negocio: ${context.businessName}`);
           if (context.currentStep) contextInfo.push(`Paso: ${context.currentStep}`);
           if (context.draftData?.customerName) contextInfo.push(`Cliente: ${context.draftData.customerName}`);
           if (context.draftData?.partySize) contextInfo.push(`Personas: ${context.draftData.partySize}`);
-          if (context.availableZones && context.availableZones.length > 0) {
-            contextInfo.push(`Zonas disponibles: ${context.availableZones.join(', ')}`);
-          }
           
           if (contextInfo.length > 0) {
             systemPrompt += `\n\n## Estado Actual:\n${contextInfo.join(' | ')}`;
@@ -261,16 +258,6 @@ class AgentService {
       '[NOMBRE]': context.draftData?.customerName || '[NOMBRE]',
       '{qty}': String(context.draftData?.partySize || '{qty}'),
       '[CANTIDAD]': String(context.draftData?.partySize || '[CANTIDAD]'),
-      '{zone}': context.draftData?.selectedZoneId || '{zone}',
-      '[ZONA]': context.draftData?.selectedZoneId || '[ZONA]',
-      '{position}': context.position || '{position}',
-      '[POSICIÓN]': context.position || '[POSICIÓN]',
-      '{zones}': context.availableZonesFormatted || '[NO HAY DATOS - NO menciones zonas específicas]',
-      '[ZONAS]': context.availableZonesFormatted || '[NO HAY DATOS - NO menciones zonas específicas]',
-      'Zona A': '', // Remove generic placeholders
-      'Zona B': '',
-      'Zona C': '',
-      'VIP': '', // Will be replaced by actual zone names
     };
 
     // Realizar reemplazos

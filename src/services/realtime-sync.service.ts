@@ -1,7 +1,6 @@
 import { SupabaseConfig } from '../config/supabase';
 import { RedisConfig } from '../config/redis';
 import { logger } from '../utils/logger';
-import { ReservationService } from './reservation.service';
 import type { Database } from '../types/supabase';
 
 // Helper types for strict type safety
@@ -13,7 +12,7 @@ export class RealtimeSyncService {
 
   /**
    * Returns true when a businesses UPDATE affects reservation-relevant data
-   * and therefore requires zones/tables cache refresh.
+    * and therefore requires reservation cache refresh.
    */
   private static shouldRefreshBusinessCaches(oldBusiness: any, newBusiness: any): boolean {
     if (!oldBusiness || !newBusiness) {
@@ -62,9 +61,6 @@ export class RealtimeSyncService {
       // Subscribe to businesses table changes
       this.subscribeToBusinesses(client);
 
-      // Subscribe to zones table changes
-      this.subscribeToZones(client);
-
       // Subscribe to tables table changes
       this.subscribeTables(client);
 
@@ -108,38 +104,6 @@ export class RealtimeSyncService {
       this.subscriptions.set('businesses', subscription);
     } catch (error) {
       logger.error('Failed to subscribe to businesses', { error });
-    }
-  }
-
-  /**
-   * Subscribe to zones table changes
-   */
-  private static subscribeToZones(client: any): void {
-    try {
-      const subscription = client
-        .channel('public:zones')
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'zones',
-          },
-          async (payload: any) => {
-            await this.handleZoneChange(payload);
-          }
-        )
-        .subscribe((status: string) => {
-          if (status === 'SUBSCRIBED') {
-            logger.info('✅ Subscribed to zones realtime changes');
-          } else if (status === 'CHANNEL_ERROR') {
-            logger.error('❌ Error subscribing to zones');
-          }
-        });
-
-      this.subscriptions.set('zones', subscription);
-    } catch (error) {
-      logger.error('Failed to subscribe to zones', { error });
     }
   }
 
@@ -274,69 +238,22 @@ export class RealtimeSyncService {
           this.shouldRefreshBusinessCaches(previousBusinessSnapshot, newBusiness);
 
         if (shouldRefreshCaches) {
-          const zonesCacheKey = `business:zones:${businessId}`;
           const tablesCacheKey = `business:tables:${businessId}`;
-          await ReservationService.loadAndCacheZones(businessId);
           await redis.del(tablesCacheKey);
-          logger.info('🔄 Zones/tables cache refreshed', {
-            businessId,
-            zonesCacheKey,
-          });
+          logger.info('🔄 Tables cache cleared', { businessId });
         } else {
-          logger.info('⏭️ Skipping zones/tables cache refresh for technical business update', {
-            businessId,
-          });
+          logger.info('⏭️ Skipping cache refresh for technical business update', { businessId });
         }
       } else if (eventType === 'DELETE') {
         // Remove from cache
         const businessKey = `business:${businessId}`;
-        const zonesCacheKey = `business:zones:${businessId}`;
         const tablesCacheKey = `business:tables:${businessId}`;
         await redis.del(businessKey);
-        await redis.del(zonesCacheKey);
         await redis.del(tablesCacheKey);
         logger.info('🗑️ Business removed from cache', { businessId });
       }
     } catch (error) {
       logger.error('Error handling business change', { error, payload });
-    }
-  }
-
-  /**
-   * Handle zone table changes
-   */
-  private static async handleZoneChange(payload: any): Promise<void> {
-    try {
-      const { eventType, new: newZone, old: oldZone } = payload;
-      const zone = newZone || oldZone;
-      const businessId = zone?.business_id;
-
-      logger.info('📬 Zone change detected', {
-        eventType,
-        businessId,
-        zoneId: zone?.id,
-        zoneName: zone?.name,
-      });
-
-      if (!businessId) {
-        logger.warn('Zone change missing businessId');
-        return;
-      }
-
-      const redis = RedisConfig.getClient();
-      const zonesCacheKey = `business:zones:${businessId}`;
-      const tablesCacheKey = `business:tables:${businessId}`;
-
-      // Refresh cache immediately after zone changes
-      await ReservationService.loadAndCacheZones(businessId);
-      await redis.del(tablesCacheKey);
-
-      logger.info('🔄 Zone cache refreshed for business', {
-        businessId,
-        zonesCacheKey,
-      });
-    } catch (error) {
-      logger.error('Error handling zone change', { error, payload });
     }
   }
 
@@ -362,17 +279,11 @@ export class RealtimeSyncService {
       }
 
       const redis = RedisConfig.getClient();
-      const zonesCacheKey = `business:zones:${businessId}`;
       const tablesCacheKey = `business:tables:${businessId}`;
 
-      // Refresh cache immediately after table changes (including is_occupied)
-      await ReservationService.loadAndCacheZones(businessId);
       await redis.del(tablesCacheKey);
 
-      logger.info('🔄 Tables/Zones cache refreshed for business', {
-        businessId,
-        zonesCacheKey,
-      });
+      logger.info('🔄 Tables cache cleared for business', { businessId });
     } catch (error) {
       logger.error('Error handling tables change', { error, payload });
     }
@@ -398,7 +309,6 @@ export class RealtimeSyncService {
         oldStatus: oldEntry?.status,
         newStatus: newEntry?.status,
         displayCode: newEntry?.display_code,
-        position: newEntry?.position,
       });
 
       // Only process UPDATE events
@@ -407,36 +317,35 @@ export class RealtimeSyncService {
         return;
       }
 
-      // Check if new status is NOTIFIED (send notification regardless of previous status)
+      // Check if new status is CONFIRMED or NOTIFIED
+      const isConfirmed = newEntry?.status === 'CONFIRMED';
+      // Keep backward compat: NOTIFIED still sends the confirmation message
       const isNotified = newEntry?.status === 'NOTIFIED';
       
       logger.info('🔍 [REALTIME] Status validation', {
         oldStatus: oldEntry?.status,
         newStatus: newEntry?.status,
+        isConfirmed,
         isNotified,
-        willSendNotification: isNotified,
       });
       
-      if (!isNotified) {
-        logger.info('⏭️ [REALTIME] Skipping - new status is not NOTIFIED', {
-          oldStatus: oldEntry?.status,
+      if (!isConfirmed && !isNotified) {
+        logger.info('⏭️ [REALTIME] Skipping - status is not CONFIRMED or NOTIFIED', {
           newStatus: newEntry?.status,
         });
         return;
       }
 
-      logger.info('🔔 [REALTIME] ✅ Status changed WAITING → NOTIFIED! Preparing notification...', {
+      logger.info('🔔 [REALTIME] ✅ Status changed! Preparing notification...', {
         entryId: newEntry.id,
         businessId: newEntry.business_id,
         customerId: newEntry.customer_id,
         displayCode: newEntry.display_code,
-        position: newEntry.position,
         oldStatus: oldEntry.status,
         newStatus: newEntry.status,
       });
 
       // Import services dynamically to avoid circular dependencies
-      const { SupabaseService } = await import('./supabase.service');
       const { BaileysService } = await import('./baileys.service');
       const { SupabaseConfig } = await import('../config/supabase');
 
@@ -467,66 +376,35 @@ export class RealtimeSyncService {
         customerId: customer.id,
         customerName: customer.name,
         phone: customer.phone,
-        phoneLength: customer.phone?.length,
       });
 
-      // Get business data for dynamic messaging
-      const business = await SupabaseService.getBusinessById(newEntry.business_id);
-      const businessType = business?.type || 'negocio';
-      
-      logger.info('🏢 [REALTIME] Business data retrieved', {
-        businessId: newEntry.business_id,
-        businessName: business?.name,
-        businessType,
-        hasAutoAccept: business?.auto_accept_reservations,
-      });
+      // Build message based on new status
+      let notificationMessage: string;
 
-      // Get zone name if table is assigned
-      let zoneName = 'Zona asignada';
-      if (newEntry.table_id) {
-        logger.info('🔍 [REALTIME] Fetching zone name for table', {
-          tableId: newEntry.table_id,
-        });
-        
-        try {
-          const { data: tableData, error: tableError } = await supabaseClient
-            .from('tables')
-            .select('zone_id, zones(name)')
-            .eq('id', newEntry.table_id)
-            .single();
-          
-          if (!tableError && tableData && tableData.zones) {
-            zoneName = (tableData.zones as any).name || zoneName;
-            logger.info('✅ [REALTIME] Zone name retrieved', {
-              zoneName,
-              tableId: newEntry.table_id,
-            });
-          } else {
-            logger.warn('⚠️ [REALTIME] Could not fetch zone name', {
-              tableId: newEntry.table_id,
-              error: tableError,
-            });
-          }
-        } catch (error) {
-          logger.warn('⚠️ [REALTIME] Error fetching zone name', { error });
-        }
+      if (isNotified) {
+        // Paso 6: Mesa disponible (NOTIFIED)
+        notificationMessage =
+          `🚀 ¡Es tu momento!\n` +
+          `Tu mesa está disponible.\n` +
+          `Podés ocuparla dentro de los próximos 10 minutos.\n` +
+          `Luego de ese tiempo, la reserva podría liberarse.`;
       } else {
-        logger.info('ℹ️ [REALTIME] No table assigned, using default zone name');
+        // Paso 5: Reserva CONFIRMADA (CONFIRMED o NOTIFIED legacy)
+        notificationMessage =
+          `✅ ¡Tu reserva está CONFIRMADA!\n\n` +
+          `👤 Nombre: ${customer.name}\n` +
+          `👥 Personas: ${newEntry.party_size}\n` +
+          `📁 Código de reserva: *${newEntry.display_code}*\n\n` +
+          `✨ Te avisaremos cuando falten 10 minutos para que puedas ocupar tu mesa.\n` +
+          `Apreciamos tu puntualidad.`;
       }
 
-      // Build confirmation message
-      const confirmationMessage = `✅ *¡Tu reserva está CONFIRMADA!*
-
-📋 Código: *${newEntry.display_code}*
-🏢 Zona: ${zoneName}
-
-✨ Tu ${businessType} te espera! Puedes dirigirte cuando quieras.`;
-
-      logger.info('📝 [REALTIME] Confirmation message built', {
-        messageLength: confirmationMessage.length,
-        messagePreview: confirmationMessage.substring(0, 80),
+      logger.info('📝 [REALTIME] Notification message built', {
+        messageLength: notificationMessage.length,
+        messagePreview: notificationMessage.substring(0, 80),
         recipient: customer.phone,
         businessId: newEntry.business_id,
+        status: newEntry.status,
       });
 
       // Try to get the correct WhatsApp JID from Redis cache
@@ -571,7 +449,7 @@ export class RealtimeSyncService {
       const sent = await baileys.sendMessage(
         newEntry.business_id,
         recipientJid,
-        confirmationMessage
+        notificationMessage
       );
 
       logger.info('📊 [REALTIME] WhatsApp send attempt result', {

@@ -79,21 +79,6 @@ function inferActionFromText(text: string): Action | null {
     };
   }
 
-  // Check for arrival confirmation
-  if (
-    lowerText.includes('ya llegué') ||
-    lowerText.includes('ya llegue') ||
-    lowerText.includes('estoy aquí') ||
-    lowerText.includes('estoy aqui') ||
-    lowerText.includes('llegada')
-  ) {
-    return {
-      type: 'CONFIRM_ARRIVAL',
-      data: { inferred: true },
-      confidence: 0.75,
-    };
-  }
-
   // Check for cancellation
   if (
     lowerText.includes('cancelar') ||
@@ -222,7 +207,6 @@ export function validateAction(action: Action): boolean {
       return !!(action.data.partySize || action.data.name);
     
     case 'CHECK_STATUS':
-    case 'CONFIRM_ARRIVAL':
     case 'CANCEL':
       // These might work with just phone from context
       return true;

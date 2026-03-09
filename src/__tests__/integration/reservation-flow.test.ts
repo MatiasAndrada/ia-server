@@ -66,18 +66,18 @@ describe('Reservation Flow Integration Tests', () => {
   });
 
   describe('Step 3: Collect Party Size', () => {
-    it('should save party size and advance to zone selection', async () => {
+    it('should save party size and keep party_size step until reservation creation', async () => {
       const result = await ReservationService.setPartySize(
         TEST_CONVERSATION_ID,
         4
       );
 
       expect(result).toBeDefined();
-      expect(result?.step).toBe('zone_selection');
+      expect(result?.step).toBe('party_size');
 
       const draft = await ReservationService.getDraft(TEST_CONVERSATION_ID);
       expect(draft?.partySize).toBe(4);
-      expect(draft?.step).toBe('zone_selection');
+      expect(draft?.step).toBe('party_size');
     });
 
     it('should reject invalid party size', async () => {
@@ -93,63 +93,21 @@ describe('Reservation Flow Integration Tests', () => {
     });
   });
 
-  describe('Step 4: Get Available Zones', () => {
-    it('should fetch zones from Supabase', async () => {
-      const zones = await ReservationService.getAvailableZones(TEST_BUSINESS_ID);
-
-      expect(Array.isArray(zones)).toBe(true);
-      
-      if (zones.length > 0) {
-        expect(typeof zones[0]).toBe('string');
-      }
-    });
-  });
-
-  describe('Step 5: Select Zone', () => {
-    it('should save zone selection and advance to confirmation', async () => {
-      // First, get available zones
-      const zones = await ReservationService.getAvailableZones(TEST_BUSINESS_ID);
-      
-      if (zones.length === 0) {
-        console.warn('⚠️ No zones available in test business. Skipping zone selection test.');
-        return;
-      }
-
-      const selectedZone = zones[0];
-      
-      const result = await ReservationService.selectZone(
-        TEST_CONVERSATION_ID,
-        selectedZone
-      );
-
-      expect(result).toBeDefined();
-      expect(result?.step).toBe('confirmation');
-
-      const draft = await ReservationService.getDraft(TEST_CONVERSATION_ID);
-      expect(draft?.selectedZoneId).toBe(selectedZone);
-      expect(draft?.step).toBe('confirmation');
-    });
-
-    it('should reject non-existent zone', async () => {
-      await expect(
-        ReservationService.selectZone(TEST_CONVERSATION_ID, 'NonExistentZone')
-      ).rejects.toThrow('Selected zone is not available');
-    });
-  });
-
-  describe('Step 6: Create Reservation', () => {
+  describe('Step 4: Create Reservation', () => {
     it('should create waitlist entry in Supabase', async () => {
-      // Skip if no zones available
-      const zones = await ReservationService.getAvailableZones(TEST_BUSINESS_ID);
-      if (zones.length === 0) {
-        console.warn('⚠️ No zones available. Skipping reservation creation test.');
+      if (!supabaseReady) {
+        console.warn('⚠️ Supabase no inicializado. Skipping reservation creation test.');
         return;
       }
 
+      // Ensure valid draft data in case previous tests set an empty name.
+      await ReservationService.setCustomerName(TEST_CONVERSATION_ID, 'Juan Pérez');
+      await ReservationService.setPartySize(TEST_CONVERSATION_ID, 4);
+
       const draft = await ReservationService.getDraft(TEST_CONVERSATION_ID);
       
-      if (!draft || draft.step !== 'confirmation') {
-        console.warn('⚠️ Draft not in confirmation state. Skipping creation test.');
+      if (!draft || draft.step !== 'party_size') {
+        console.warn('⚠️ Draft not in party_size state. Skipping creation test.');
         return;
       }
 
@@ -207,24 +165,6 @@ describe('Reservation Flow Integration Tests', () => {
         expect(tables[0]).toHaveProperty('id');
         expect(tables[0]).toHaveProperty('table_number');
         expect(tables[0]).toHaveProperty('capacity');
-        expect(tables[0]).toHaveProperty('zone_id');
-      }
-    });
-
-    it('should fetch zones by business', async () => {
-      if (!supabaseReady) {
-        console.warn('⚠️ Supabase no inicializado. Skipping zones fetch test.');
-        return;
-      }
-
-      const zones = await SupabaseService.getZonesByBusiness(TEST_BUSINESS_ID);
-      
-      expect(Array.isArray(zones)).toBe(true);
-      
-      if (zones.length > 0) {
-        expect(zones[0]).toHaveProperty('id');
-        expect(zones[0]).toHaveProperty('name');
-        expect(typeof zones[0].name).toBe('string');
       }
     });
 
@@ -256,10 +196,9 @@ describe('Reservation Flow Integration Tests', () => {
       const convId = 'out-of-order-' + Date.now();
       await ReservationService.startReservation(convId, TEST_BUSINESS_ID);
 
-      // Try to skip directly to zone selection without name and party size
-      await expect(
-        ReservationService.selectZone(convId, 'any-zone')
-      ).rejects.toThrow();
+      // Try to create reservation directly without required fields
+      const result = await ReservationService.createReservation(convId, '+1234567890');
+      expect(result.success).toBe(false);
 
       await ReservationService.deleteDraft(convId);
     });

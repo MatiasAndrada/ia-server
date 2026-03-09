@@ -7,14 +7,12 @@ import {
   WaitlistStatus,
   Business,
   Customer,
-  Zone,
   Table,
   WaitlistEntry,
 } from '../types';
 import { logger } from '../utils/logger';
 
 // Helper types for strict type safety without explicit imports
-type TablesRow = Database['public']['Tables']['tables']['Row'];
 type WaitlistEntriesRow = Database['public']['Tables']['waitlist_entries']['Row'];
 type CustomersUpdate = Database['public']['Tables']['customers']['Update'];
 type CustomersInsert = Database['public']['Tables']['customers']['Insert'];
@@ -92,49 +90,6 @@ export class SupabaseService {
       logger.error('Error testing permissions', { error });
     }
   }
-  static async getZonesByBusiness(businessId: string): Promise<Zone[]> {
-    try {
-      console.log('\n🔍 [DEBUG] getZonesByBusiness called');
-      console.log('📍 Business ID:', businessId);
-      
-      const client = this.getClient();
-      const { data: zonesData, error } = await client
-        .from('zones')
-        .select('*')
-        .eq('business_id', businessId)
-        .order('priority', { ascending: false })
-        .order('name', { ascending: true });
-
-      console.log('🔍 [DEBUG] Query result:', {
-        hasError: !!error,
-        dataCount: zonesData?.length || 0,
-        rawData: zonesData
-      });
-
-      if (error) {
-        console.error('❌ [DEBUG] Error fetching zones:', error);
-        throw error;
-      }
-
-      const zones = (zonesData as Zone[] | null) ?? [];
-      
-      console.log('✅ [DEBUG] Zones returned:', zones.map(z => ({
-        id: z.id,
-        name: z.name,
-        business_id: z.business_id
-      })));
-
-      logger.info('Zones fetched', {
-        businessId,
-        count: zones.length,
-      });
-
-      return zones;
-    } catch (error) {
-      logger.error('Error getting zones', { error, businessId });
-      throw error;
-    }
-  }
 
   /**
    * Get all tables for a business
@@ -151,13 +106,11 @@ export class SupabaseService {
         .eq('business_id', businessId)
         .eq('is_active', true)
         .eq('is_occupied', false)
-        .order('zone_id', { ascending: true })
         .order('table_number', { ascending: true });
 
       console.log('🔍 [DEBUG] Tables query result:', {
         hasError: !!error,
         dataCount: tablesData?.length || 0,
-        rawData: tablesData
       });
 
       if (error) {
@@ -170,7 +123,6 @@ export class SupabaseService {
       console.log('✅ [DEBUG] Tables returned:', tables.map(t => ({
         id: t.id,
         table_number: t.table_number,
-        zone_id: t.zone_id,
         capacity: t.capacity,
         business_id: t.business_id
       })));
@@ -201,7 +153,6 @@ export class SupabaseService {
         .select('*')
         .eq('business_id', businessId)
         .eq('is_active', true)
-        .order('zone_id', { ascending: true })
         .order('table_number', { ascending: true });
 
       console.log('🔍 [DEBUG] Active tables query result:', {
@@ -318,7 +269,6 @@ export class SupabaseService {
         customerName: request.customerName,
         customerPhone: request.customerPhone,
         partySize: request.partySize,
-        zone: request.zone,
         tableId: request.tableId,
       });
 
@@ -348,24 +298,6 @@ export class SupabaseService {
         };
       }
 
-      // Get next position in waitlist
-      logger.info('🔢 Calculating next position in waitlist...');
-      const { data: lastEntry, error: lastEntryError } = await client
-        .from('waitlist_entries')
-        .select('position')
-        .eq('business_id', request.businessId)
-        .order('position', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (lastEntryError) {
-        logger.error('❌ Error getting last entry position', { error: lastEntryError });
-        throw lastEntryError;
-      }
-
-      const nextPosition = lastEntry?.position ? lastEntry.position + 1 : 1;
-      logger.info('✅ Position calculated', { nextPosition, lastPosition: lastEntry?.position });
-
       // Generate display code based on customer initial and phone suffix
       const baseDisplayCode = this.generateDisplayCodeFromCustomer(
         request.customerName,
@@ -387,70 +319,6 @@ export class SupabaseService {
       });
 
       let tableId: string | null = null;
-
-      // If zone is provided, find an available table in that zone
-      if (request.zone) {
-        logger.info('🏢 Searching for zone', { zoneName: request.zone });
-        // Get zone by name
-        const { data: zoneData, error: zoneError } = await client
-          .from('zones')
-          .select('id')
-          .eq('business_id', request.businessId)
-          .eq('name', request.zone)
-          .maybeSingle();
-
-        if (zoneError) {
-          logger.error('❌ Error getting zone', { error: zoneError, zoneName: request.zone });
-          throw zoneError;
-        }
-
-        if (zoneData) {
-          const zoneId = zoneData.id;
-          logger.info('✅ Zone found', { zoneId, zoneName: request.zone });
-
-          // Find available table in this zone with sufficient capacity
-          logger.info('🪑 Searching for available table', {
-            zoneId,
-            partySize: request.partySize,
-          });
-          const { data: tableData, error: tableError } = await client
-            .from('tables')
-            .select('*')
-            .eq('business_id', request.businessId)
-            .eq('zone_id', zoneId)
-            .eq('is_active', true)
-            .eq('is_occupied', false)
-            .gte('capacity', request.partySize)
-            .order('capacity', { ascending: true })
-            .limit(1)
-            .maybeSingle();
-
-          if (tableError) {
-            logger.error('❌ Error finding table', { error: tableError });
-            throw tableError;
-          }
-
-          if (tableData) {
-            const table = tableData as TablesRow;
-            tableId = table.id;
-            logger.info('✅ Table assigned for reservation', {
-              tableId,
-              tableNumber: table.table_number,
-              zoneId,
-              capacity: table.capacity,
-              partySize: request.partySize,
-            });
-          } else {
-            logger.warn('⚠️ No available table in zone', {
-              zone: request.zone,
-              zoneId,
-              partySize: request.partySize,
-            });
-          }
-        } else {
-          logger.warn('⚠️ Zone not found', { zoneName: request.zone, businessId: request.businessId });
-        }
-      }
 
       // Verify table if provided
       if (request.tableId) {
@@ -494,17 +362,16 @@ export class SupabaseService {
       }
 
       // Create waitlist entry
-      const initialStatus: WaitlistStatus = autoAccept ? 'NOTIFIED' : 'WAITING';
-      const notifiedAt = autoAccept ? new Date().toISOString() : undefined;
+      const initialStatus: WaitlistStatus = autoAccept ? 'CONFIRMED' : 'WAITING';
+      const confirmedAt = autoAccept ? new Date().toISOString() : null;
       
       logger.info('💾 Creating waitlist entry in database...', {
         businessId: request.businessId,
         customerId: customer.id,
         partySize: request.partySize,
-        position: nextPosition,
         displayCode,
         status: initialStatus,
-        notifiedAt,
+        confirmedAt,
         tableId: tableId || null,
         autoAccept,
       });
@@ -513,11 +380,11 @@ export class SupabaseService {
         business_id: request.businessId,
         customer_id: customer.id,
         party_size: request.partySize,
-        position: nextPosition,
         display_code: displayCode,
         status: initialStatus,
-        notified_at: notifiedAt,
+        source: 'AI_CHAT',
         table_id: tableId,
+        ...(confirmedAt ? { confirmed_at: confirmedAt } : {}),
       };
 
       const { data: waitlistEntryData, error: entryError } = await client
@@ -548,7 +415,6 @@ export class SupabaseService {
         displayCode: waitlistEntry.display_code,
         businessId: waitlistEntry.business_id,
         customerId: waitlistEntry.customer_id,
-        position: waitlistEntry.position,
         partySize: waitlistEntry.party_size,
         status: waitlistEntry.status,
         tableId: waitlistEntry.table_id,
@@ -583,7 +449,7 @@ export class SupabaseService {
     businessId: string,
     baseCode: string
   ): Promise<string> {
-    const activeStatuses: WaitlistStatus[] = ['WAITING', 'NOTIFIED'];
+    const activeStatuses: WaitlistStatus[] = ['WAITING', 'CONFIRMED', 'NOTIFIED'];
     let displayCode = baseCode;
 
     for (let attempt = 0; attempt < 26; attempt += 1) {
@@ -631,7 +497,7 @@ export class SupabaseService {
   }
 
   /**
-   * Get an active reservation (WAITING / NOTIFIED / ARRIVED) created today
+   * Get an active reservation (WAITING / CONFIRMED / NOTIFIED) created today
    * in Buenos Aires timezone for a given customer.
    */
   static async getActiveTodayReservation(
@@ -647,7 +513,7 @@ export class SupabaseService {
         .select('*')
         .eq('customer_id', customerId)
         .eq('business_id', businessId)
-        .in('status', ['WAITING', 'NOTIFIED', 'ARRIVED'])
+        .in('status', ['WAITING', 'CONFIRMED', 'NOTIFIED'])
         .gte('queued_at', startOfDayISO)
         .order('queued_at', { ascending: false })
         .limit(1)
@@ -711,64 +577,6 @@ export class SupabaseService {
     }
   }
 
-  /**
-   * Update the zone/table of an existing waitlist entry.
-   * Finds an available table in the named zone with sufficient capacity.
-   */
-  static async updateReservationZone(
-    reservationId: string,
-    zoneName: string,
-    businessId: string,
-    partySize: number
-  ): Promise<boolean> {
-    try {
-      const client = this.getClient();
-
-      // Find zone by name
-      const { data: zoneData, error: zoneError } = await client
-        .from('zones')
-        .select('id')
-        .eq('business_id', businessId)
-        .eq('name', zoneName)
-        .maybeSingle();
-
-      if (zoneError) throw zoneError;
-      if (!zoneData) {
-        logger.warn('Zone not found for update', { zoneName, businessId });
-        return false;
-      }
-
-      // Find available table in that zone
-      const { data: tableData, error: tableError } = await client
-        .from('tables')
-        .select('id')
-        .eq('business_id', businessId)
-        .eq('zone_id', zoneData.id)
-        .eq('is_active', true)
-        .eq('is_occupied', false)
-        .gte('capacity', partySize)
-        .order('capacity', { ascending: true })
-        .limit(1)
-        .maybeSingle();
-
-      if (tableError) throw tableError;
-
-      const tableId = tableData?.id ?? null;
-
-      const { error } = await client
-        .from('waitlist_entries')
-        .update({ table_id: tableId, updated_at: new Date().toISOString() })
-        .eq('id', reservationId);
-
-      if (error) throw error;
-      logger.info('Reservation zone updated', { reservationId, zoneName, tableId });
-      return true;
-    } catch (error) {
-      logger.error('Error updating reservation zone', { error, reservationId, zoneName });
-      return false;
-    }
-  }
-
   private static randomDisplayInitial(exclude?: string): string {
     const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
     const filtered = exclude ? letters.replace(exclude.toUpperCase(), '') : letters;
@@ -796,10 +604,8 @@ export class SupabaseService {
       };
 
       // Set specific timestamps based on status
-      if (status === 'NOTIFIED') {
-        updateData.notified_at = new Date().toISOString();
-      } else if (status === 'ARRIVED') {
-        updateData.notified_at = new Date().toISOString();
+      if (status === 'CONFIRMED') {
+        updateData.confirmed_at = new Date().toISOString();
       } else if (status === 'SEATED') {
         updateData.seated_at = new Date().toISOString();
       }
@@ -860,6 +666,25 @@ export class SupabaseService {
     } catch (error) {
       logger.error('Error checking WhatsApp status', { error, businessId });
       return false;
+    }
+  }
+
+  /**
+   * Check if business AI chat flow is enabled.
+   * Defaults to enabled when the flag is missing to avoid accidental service lockout.
+   */
+  static async isBusinessAiChatEnabled(businessId: string): Promise<boolean> {
+    try {
+      const business = await this.getBusinessById(businessId);
+
+      if (!business) {
+        return true;
+      }
+
+      return business.ai_chat_enabled ?? true;
+    } catch (error) {
+      logger.error('Error checking AI chat enabled flag', { error, businessId });
+      return true;
     }
   }
 

@@ -48,35 +48,20 @@ async function testFullReservationFlow() {
 
     // 2. Verificar business existe
     console.log(`🔍 Verificando business: ${BUSINESS_ID}`);
-    const zones = await SupabaseService.getZonesByBusiness(BUSINESS_ID);
     const tables = await SupabaseService.getTablesByBusiness(BUSINESS_ID);
 
     console.log(`✅ Business encontrado`);
-    console.log(`   📍 Zonas disponibles: ${zones.length > 0 ? zones.map(z => z.name).join(', ') : 'NINGUNA'}`);
     console.log(`   🪑 Mesas: ${tables.length}`);
 
-    if (zones.length === 0) {
-      console.error('\n❌ ERROR: El business no tiene zonas/mesas configuradas');
-      console.error('   Debes crear zonas y mesas en Supabase primero.');
-      console.error('\n📝 SQL de ejemplo:');
-      console.error(`
-        -- Crear zona
-        INSERT INTO zones (business_id, name, priority)
-        VALUES ('${BUSINESS_ID}', 'Interior', 1);
-        
-        -- Luego crear mesas en esa zona
-        INSERT INTO tables (business_id, zone_id, table_number, capacity)
-        VALUES 
-          ('${BUSINESS_ID}', '<zone_id>', '1', 2),
-          ('${BUSINESS_ID}', '<zone_id>', '2', 4),
-          ('${BUSINESS_ID}', '<zone_id>', '3', 8);
-      `);
+    if (tables.length === 0) {
+      console.error('\n❌ ERROR: El business no tiene mesas configuradas');
+      console.error('   Debes crear mesas en Supabase primero.');
       process.exit(1);
     }
 
     console.log('\n📋 Mesas disponibles:');
     tables.forEach((table: any, i: number) => {
-      console.log(`   ${i + 1}. Mesa ${table.table_number} (${table.capacity} personas) - ${table.zone_id || 'N/A'}`);
+      console.log(`   ${i + 1}. Mesa ${table.table_number || table.name} (${table.capacity} personas)`);
     });
 
     // 3. Simular flujo de reserva completo
@@ -107,17 +92,8 @@ async function testFullReservationFlow() {
 
     await sleep(500);
 
-    // PASO 4: Seleccionar zona
-    const selectedZone = zones[0];
-    console.log(`📌 PASO 4: Seleccionar zona: ${selectedZone.name}`);
-    await ReservationService.selectZone(conversationId, selectedZone.name);
-    draft = await ReservationService.getDraft(conversationId);
-    console.log(`   ✅ Zona guardada: ${draft?.selectedZoneId}, step=${draft?.step}\n`);
-
-    await sleep(500);
-
-    // PASO 5: Crear reserva en Supabase
-    console.log('📌 PASO 5: Crear reserva en Supabase');
+    // PASO 4: Crear reserva en Supabase
+    console.log('📌 PASO 4: Crear reserva en Supabase');
     const result = await ReservationService.createReservation(conversationId, TEST_PHONE);
     
     if (!result.success || !result.waitlistEntry) {

@@ -4,39 +4,6 @@ import { SupabaseService } from '../services/supabase.service';
 import { logger } from '../utils/logger';
 
 /**
- * Get available zones for a business
- * GET /api/reservations/zones/:businessId
- */
-export async function getAvailableZonesHandler(req: Request, res: Response) {
-  try {
-    const { businessId } = req.params;
-
-    if (!businessId) {
-      return res.status(400).json({
-        success: false,
-        error: 'businessId is required',
-      });
-    }
-
-    const zones = await ReservationService.getAvailableZones(businessId);
-
-    return res.json({
-      success: true,
-      data: {
-        zones,
-        count: zones.length,
-      },
-    });
-  } catch (error) {
-    logger.error('Error in getAvailableZonesHandler', { error });
-    return res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-    });
-  }
-}
-
-/**
  * Get reservation draft status
  * GET /api/reservations/draft/:conversationId
  */
@@ -71,7 +38,6 @@ export async function getDraftStatusHandler(req: Request, res: Response) {
           step: draft.step,
           customerName: draft.customerName,
           partySize: draft.partySize,
-          selectedZoneId: draft.selectedZoneId,
         },
       },
     });
@@ -90,7 +56,7 @@ export async function getDraftStatusHandler(req: Request, res: Response) {
  */
 export async function createReservationHandler(req: Request, res: Response) {
   try {
-    const { businessId, customerName, customerPhone, partySize, tableId, zone } = req.body;
+    const { businessId, customerName, customerPhone, partySize, tableId } = req.body;
 
     // Validate required fields
     if (!businessId || !customerName || !customerPhone || !partySize) {
@@ -107,7 +73,6 @@ export async function createReservationHandler(req: Request, res: Response) {
       customerPhone,
       partySize,
       tableId,
-      zone,
     });
 
     if (!result.success) {
@@ -145,7 +110,7 @@ export async function updateReservationStatusHandler(req: Request, res: Response
       });
     }
 
-    const validStatuses = ['WAITING', 'NOTIFIED', 'SEATED', 'CANCELLED', 'NO_SHOW'];
+    const validStatuses = ['WAITING', 'CONFIRMED', 'NOTIFIED', 'SEATED', 'CANCELLED', 'NO_SHOW'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({
         success: false,

@@ -32,7 +32,6 @@ async function generateTypes() {
   const tables = [
     'businesses',
     'customers', 
-    'zones',
     'tables',
     'waitlist_entries'
   ];
