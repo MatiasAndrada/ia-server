@@ -43,9 +43,14 @@ export class BaileysService {
   private sessions: Map<string, any> = new Map();
   private sessionStates: Map<string, BaileysSession> = new Map();
   private reconnectAttempts: Map<string, number> = new Map();
+  private startSessionInProgress: Set<string> = new Set();
   private whatsAppHandler: WhatsAppHandler;
   private readonly AUTH_DIR = path.join(process.cwd(), 'auth_sessions');
   private readonly MAX_RECONNECT_ATTEMPTS = 3;
+  private readonly INBOUND_DEDUP_TTL_SECONDS = 600;
+  private readonly START_SESSION_LOCK_TTL_SECONDS = Number(
+    process.env.BAILEYS_START_SESSION_LOCK_TTL_SECONDS || 20
+  );
 
   private constructor() {
     this.ensureAuthDir();
@@ -116,6 +121,10 @@ export class BaileysService {
    */
   getSessionState(businessId: string): BaileysSession | undefined {
     return this.sessionStates.get(businessId);
+  }
+
+  isSessionStartInProgress(businessId: string): boolean {
+    return this.startSessionInProgress.has(businessId);
   }
 
   /**
@@ -270,7 +279,22 @@ export class BaileysService {
    * Start a new WhatsApp session for a business
    */
   async startSession(businessId: string): Promise<void> {
+    if (this.startSessionInProgress.has(businessId)) {
+      logger.warn('Session start already in progress, skipping duplicate start', { businessId });
+      return;
+    }
+
+    let distributedLock: { key: string; token: string } | null = null;
+
     try {
+      this.startSessionInProgress.add(businessId);
+
+      distributedLock = await this.acquireStartSessionLock(businessId);
+      if (!distributedLock) {
+        logger.warn('Session start skipped due to distributed lock contention', { businessId });
+        return;
+      }
+
       // Ensure Baileys module is loaded
       await loadBaileys();
       
@@ -362,6 +386,72 @@ export class BaileysService {
       logger.error('Error starting WhatsApp session', { error, businessId });
       await this.updateSessionStatus(businessId, 'error', error);
       throw error;
+    } finally {
+      this.startSessionInProgress.delete(businessId);
+
+      if (distributedLock) {
+        await this.releaseStartSessionLock(distributedLock.key, distributedLock.token, businessId);
+      }
+    }
+  }
+
+  private getStartSessionLockTtlSeconds(): number {
+    const configured = this.START_SESSION_LOCK_TTL_SECONDS;
+    if (!Number.isFinite(configured) || configured < 5) {
+      return 20;
+    }
+    return Math.floor(configured);
+  }
+
+  private async acquireStartSessionLock(
+    businessId: string
+  ): Promise<{ key: string; token: string } | null> {
+    try {
+      if (!RedisConfig.isReady()) {
+        logger.warn('Redis not connected, start session lock skipped', { businessId });
+        return { key: '', token: '' };
+      }
+
+      const client = RedisConfig.getClient();
+      const lockKey = `session:start:lock:${businessId}`;
+      const lockToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const wasSet = await client.set(lockKey, lockToken, {
+        NX: true,
+        EX: this.getStartSessionLockTtlSeconds(),
+      });
+
+      if (!wasSet) {
+        return null;
+      }
+
+      return { key: lockKey, token: lockToken };
+    } catch (error) {
+      logger.error('Failed to acquire start session lock', { businessId, error });
+      return null;
+    }
+  }
+
+  private async releaseStartSessionLock(
+    lockKey: string,
+    token: string,
+    businessId: string
+  ): Promise<void> {
+    try {
+      if (!lockKey) {
+        return;
+      }
+
+      if (!RedisConfig.isReady()) {
+        return;
+      }
+
+      const client = RedisConfig.getClient();
+      const currentValue = await client.get(lockKey);
+      if (currentValue === token) {
+        await client.del(lockKey);
+      }
+    } catch (error) {
+      logger.error('Failed to release start session lock', { businessId, lockKey, error });
     }
   }
 
@@ -528,8 +618,16 @@ export class BaileysService {
         if (!messageContent) continue;
 
         const from = msg.key.remoteJid!;
+        const messageId = msg.key.id as string | undefined;
         const fromMe = !!msg.key.fromMe;
         const timestamp = msg.messageTimestamp as number;
+
+        if (messageId) {
+          const shouldProcess = await this.shouldProcessInboundMessage(businessId, messageId, from);
+          if (!shouldProcess) {
+            continue;
+          }
+        }
 
         logger.info('Message received', { 
           businessId, 
@@ -543,6 +641,7 @@ export class BaileysService {
           message: messageContent,
           timestamp: timestamp * 1000, // Convert to milliseconds
           businessId,
+          messageId,
           fromMe,
         };
 
@@ -558,6 +657,41 @@ export class BaileysService {
       }
     } catch (error) {
       logger.error('Error handling incoming messages', { error, businessId });
+    }
+  }
+
+  private async shouldProcessInboundMessage(
+    businessId: string,
+    messageId: string,
+    from: string
+  ): Promise<boolean> {
+    try {
+      if (!RedisConfig.isReady()) {
+        logger.warn('Redis not ready, inbound dedup skipped', { businessId, messageId, from });
+        return true;
+      }
+
+      const redis = RedisConfig.getClient();
+      const dedupKey = `msg:processed:${businessId}:${messageId}`;
+      const wasSet = await redis.set(dedupKey, '1', {
+        NX: true,
+        EX: this.INBOUND_DEDUP_TTL_SECONDS,
+      });
+
+      if (!wasSet) {
+        logger.warn('Duplicate inbound message skipped', { businessId, messageId, from });
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      logger.error('Failed to deduplicate inbound message, processing anyway', {
+        businessId,
+        messageId,
+        from,
+        error,
+      });
+      return true;
     }
   }
 

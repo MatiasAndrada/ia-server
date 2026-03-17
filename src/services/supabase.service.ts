@@ -50,48 +50,6 @@ export class SupabaseService {
   }
 
   /**
-   * Test Supabase permissions - Run this to diagnose RLS issues
-   */
-  static async testPermissions(): Promise<void> {
-    try {
-      logger.info('Testing Supabase permissions...');
-      const client = this.getClient();
-
-      // Test 1: Can we read businesses?
-      logger.info('Test 1: Reading businesses table...');
-      const { error: readError, count } = await client
-        .from('businesses')
-        .select('*', { count: 'exact', head: true });
-
-      if (readError) {
-        logger.error('❌ READ permission denied on businesses', { error: readError });
-      } else {
-        logger.info('✅ READ permission OK on businesses', { count });
-      }
-
-      // Test 2: Can we update businesses?
-      logger.info('Test 2: Updating a test business...');
-      const { error: updateError } = await client
-        .from('businesses')
-        .update({ updated_at: new Date().toISOString() })
-        .eq('id', '00000000-0000-0000-0000-000000000000')
-        .is('name', null);
-
-      if (updateError && updateError.code !== '42P01') {
-        logger.error('❌ UPDATE permission denied on businesses', { error: updateError });
-      } else if (updateError?.code === '42P01') {
-        logger.info('Test business not found (expected), but UPDATE permission OK ✅');
-      } else {
-        logger.info('✅ UPDATE permission OK on businesses');
-      }
-
-      logger.info('Permission test complete');
-    } catch (error) {
-      logger.error('Error testing permissions', { error });
-    }
-  }
-
-  /**
    * Get all tables for a business
    */
   static async getTablesByBusiness(businessId: string): Promise<Table[]> {

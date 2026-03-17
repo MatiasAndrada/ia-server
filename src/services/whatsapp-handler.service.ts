@@ -3,6 +3,7 @@ import { agentService } from './agent.service';
 import { ReservationService } from './reservation.service';
 import { SupabaseService } from './supabase.service';
 import { SupabaseConfig } from '../config/supabase';
+import { RedisConfig } from '../config/redis';
 import { agentRegistry } from '../agents';
 import { BaileysMessage, ReservationDraft } from '../types';
 import { logger } from '../utils/logger';
@@ -14,6 +15,10 @@ type ActiveReservationSnapshot = {
 
 /** How long (ms) to wait for more messages before processing the batch. */
 const DEBOUNCE_MS = 1500;
+const DUPLICATE_OUTBOUND_WINDOW_MS = 10000;
+const INACTIVE_FALLBACK_TTL_SECONDS = 120;
+const INACTIVE_FALLBACK_MESSAGE =
+  'Lo siento, nuestro servicio de WhatsApp no está disponible en este momento. Por favor intenta más tarde.';
 
 export class WhatsAppHandler {
   private baileysService: BaileysService;
@@ -132,11 +137,16 @@ export class WhatsAppHandler {
       // Check if business WhatsApp is active
       const isActive = await SupabaseService.isBusinessWhatsAppActive(businessId);
       if (!isActive) {
-        await this.sendWhatsAppMessage(
-          businessId,
-          from,
-          'Lo siento, nuestro servicio de WhatsApp no está disponible en este momento. Por favor intenta más tarde.'
-        );
+        const shouldNotifyUnavailable = await this.shouldSendInactiveFallback(businessId, phone);
+        if (shouldNotifyUnavailable) {
+          await this.sendWhatsAppMessage(businessId, from, INACTIVE_FALLBACK_MESSAGE);
+        } else {
+          logger.info('Inactive service fallback suppressed by throttle', {
+            businessId,
+            phone,
+            conversationId,
+          });
+        }
         return;
       }
 
@@ -790,6 +800,21 @@ export class WhatsAppHandler {
     message: string
   ): Promise<void> {
     try {
+      const dedupKey = `${businessId}:${to}`;
+      const lastSent = this.lastSentByChat.get(dedupKey);
+      if (
+        lastSent &&
+        lastSent.text === message &&
+        Date.now() - lastSent.timestamp < DUPLICATE_OUTBOUND_WINDOW_MS
+      ) {
+        logger.warn('Suppressing duplicate outbound message', {
+          businessId,
+          to,
+          windowMs: DUPLICATE_OUTBOUND_WINDOW_MS,
+        });
+        return;
+      }
+
       const success = await this.baileysService.sendMessage(businessId, to, message);
       
       if (!success) {
@@ -797,12 +822,33 @@ export class WhatsAppHandler {
         return;
       }
 
-      this.lastSentByChat.set(to, {
+      this.lastSentByChat.set(dedupKey, {
         text: message,
         timestamp: Date.now(),
       });
     } catch (error) {
       logger.error('Error sending WhatsApp message', { error, businessId, to });
+    }
+  }
+
+  private async shouldSendInactiveFallback(businessId: string, phone: string): Promise<boolean> {
+    try {
+      if (!RedisConfig.isReady()) {
+        logger.warn('Redis not ready, inactive fallback throttle skipped', { businessId, phone });
+        return true;
+      }
+
+      const client = RedisConfig.getClient();
+      const key = `wa:fallback:inactive:${businessId}:${phone}`;
+      const wasSet = await client.set(key, '1', {
+        NX: true,
+        EX: INACTIVE_FALLBACK_TTL_SECONDS,
+      });
+
+      return !!wasSet;
+    } catch (error) {
+      logger.error('Error applying inactive fallback throttle', { businessId, phone, error });
+      return true;
     }
   }
 

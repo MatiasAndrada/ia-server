@@ -11,6 +11,10 @@ import { formatName } from '../utils/formatters';
 export class ReservationService {
   private static readonly DRAFT_TTL = 3600; // 1 hour
   private static readonly DRAFT_KEY_PREFIX = 'reservation_draft:';
+  private static readonly CREATE_LOCK_KEY_PREFIX = 'reservation_create_lock:';
+  private static readonly CREATE_LOCK_TTL_SECONDS = Number(
+    process.env.RESERVATION_CREATE_LOCK_TTL_SECONDS || 20
+  );
 
   /**
    * Get or create a reservation draft
@@ -191,6 +195,8 @@ export class ReservationService {
     conversationId: string,
     customerPhone: string
   ): Promise<CreateReservationResponse> {
+    let acquiredLock: { key: string; token: string } | null = null;
+
     try {
       logger.info('💾 ReservationService.createReservation called', {
         conversationId,
@@ -240,6 +246,43 @@ export class ReservationService {
         request,
       });
 
+      acquiredLock = await this.acquireReservationCreateLock(
+        request.businessId,
+        customerPhone,
+        conversationId
+      );
+
+      if (!acquiredLock) {
+        const existingReservation = await this.waitForExistingActiveReservation(
+          request.businessId,
+          customerPhone
+        );
+
+        if (existingReservation) {
+          logger.warn('Reservation create lock contention resolved as existing reservation', {
+            conversationId,
+            businessId: request.businessId,
+            customerPhone,
+            entryId: existingReservation.id,
+          });
+          return {
+            success: true,
+            waitlistEntry: existingReservation,
+            alreadyExists: true,
+          };
+        }
+
+        logger.warn('Reservation creation skipped due to active lock and no visible entry yet', {
+          conversationId,
+          businessId: request.businessId,
+          customerPhone,
+        });
+        return {
+          success: false,
+          error: 'Reservation creation in progress, please retry in a few seconds',
+        };
+      }
+
       // Create reservation in Supabase
       const result = await SupabaseService.createReservation(request);
 
@@ -275,7 +318,111 @@ export class ReservationService {
         success: false,
         error: 'Error creating reservation',
       };
+    } finally {
+      if (acquiredLock) {
+        await this.releaseReservationCreateLock(acquiredLock.key, acquiredLock.token, conversationId);
+      }
     }
+  }
+
+  private static getCreateLockTtlSeconds(): number {
+    const configured = this.CREATE_LOCK_TTL_SECONDS;
+    if (!Number.isFinite(configured) || configured < 5) {
+      return 20;
+    }
+    return Math.floor(configured);
+  }
+
+  private static async acquireReservationCreateLock(
+    businessId: string,
+    customerPhone: string,
+    conversationId: string
+  ): Promise<{ key: string; token: string } | null> {
+    try {
+      if (!RedisConfig.isReady()) {
+        logger.warn('Redis not connected, reservation create lock skipped', {
+          businessId,
+          conversationId,
+          customerPhone,
+        });
+        return { key: '', token: '' };
+      }
+
+      const client = RedisConfig.getClient();
+      const lockKey = `${this.CREATE_LOCK_KEY_PREFIX}${businessId}:${customerPhone}`;
+      const lockToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const wasSet = await client.set(lockKey, lockToken, {
+        NX: true,
+        EX: this.getCreateLockTtlSeconds(),
+      });
+
+      if (!wasSet) {
+        return null;
+      }
+
+      return { key: lockKey, token: lockToken };
+    } catch (error) {
+      logger.error('Error acquiring reservation create lock', {
+        error,
+        businessId,
+        conversationId,
+        customerPhone,
+      });
+      return null;
+    }
+  }
+
+  private static async releaseReservationCreateLock(
+    lockKey: string,
+    token: string,
+    conversationId: string
+  ): Promise<void> {
+    try {
+      if (!lockKey) {
+        return;
+      }
+
+      if (!RedisConfig.isReady()) {
+        return;
+      }
+
+      const client = RedisConfig.getClient();
+      const currentValue = await client.get(lockKey);
+      if (currentValue === token) {
+        await client.del(lockKey);
+      }
+    } catch (error) {
+      logger.error('Error releasing reservation create lock', {
+        error,
+        lockKey,
+        conversationId,
+      });
+    }
+  }
+
+  private static async waitForExistingActiveReservation(
+    businessId: string,
+    customerPhone: string
+  ): Promise<CreateReservationResponse['waitlistEntry'] | null> {
+    const attempts = 5;
+    const delayMs = 300;
+
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      const existingReservation = await SupabaseService.getActiveTodayReservationByPhone(
+        customerPhone,
+        businessId
+      );
+
+      if (existingReservation) {
+        return existingReservation;
+      }
+
+      if (attempt < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -335,22 +482,6 @@ export class ReservationService {
     return draft;
   }
 
-  /**
-   * Check if a conversation has an active reservation draft
-   */
-  static async hasActiveDraft(conversationId: string): Promise<boolean> {
-    const draft = await this.getDraft(conversationId);
-    return draft !== null && draft.step !== 'completed';
-  }
-
-  /**
-   * Get current step of reservation
-   */
-  static async getCurrentStep(conversationId: string): Promise<string | null> {
-    const draft = await this.getDraft(conversationId);
-    return draft?.step || null;
-  }
-
   // ========================
   // Business Cache Methods
   // ========================
@@ -358,38 +489,6 @@ export class ReservationService {
   private static readonly BUSINESS_CACHE_KEY_PREFIX = 'business:';
   private static readonly BUSINESS_CACHE_TTL = 3600; // 1 hour cache
   private static readonly BUSINESSES_LIST_CACHE_KEY = 'businesses:all';
-
-  /**
-   * Load and cache a single business in Redis
-   */
-  static async loadAndCacheBusiness(businessId: string): Promise<void> {
-    try {
-      logger.info('💾 Loading and caching business...', { businessId });
-
-      const business = await SupabaseService.getBusinessById(businessId);
-
-      if (!business) {
-        logger.warn('Business not found in Supabase', { businessId });
-        return;
-      }
-
-      const client = RedisConfig.getClient();
-      const key = `${this.BUSINESS_CACHE_KEY_PREFIX}${businessId}`;
-
-      await client.setEx(
-        key,
-        this.BUSINESS_CACHE_TTL,
-        JSON.stringify(business)
-      );
-
-      logger.info('✅ Business cached in Redis', {
-        businessId,
-        businessName: business.name,
-      });
-    } catch (error) {
-      logger.error('Error caching business', { error, businessId });
-    }
-  }
 
   /**
    * Load and cache all businesses in Redis
@@ -430,99 +529,6 @@ export class ReservationService {
       });
     } catch (error) {
       logger.error('Error caching all businesses', { error });
-    }
-  }
-
-  /**
-   * Get cached business from Redis
-   */
-  static async getCachedBusiness(businessId: string): Promise<any | null> {
-    try {
-      const client = RedisConfig.getClient();
-      const key = `${this.BUSINESS_CACHE_KEY_PREFIX}${businessId}`;
-      const cached = await client.get(key);
-
-      if (!cached) {
-        await this.loadAndCacheBusiness(businessId);
-
-        // Retry after loading
-        const retryCache = await client.get(key);
-        if (!retryCache) return null;
-        return JSON.parse(retryCache);
-      }
-
-      return JSON.parse(cached);
-    } catch (error) {
-      logger.error('Error getting cached business', { error, businessId });
-      return null;
-    }
-  }
-
-  /**
-   * Get cached list of all business IDs
-   */
-  static async getCachedBusinessIds(): Promise<string[]> {
-    try {
-      const client = RedisConfig.getClient();
-      const cached = await client.get(this.BUSINESSES_LIST_CACHE_KEY);
-
-      if (!cached) {
-        await this.loadAndCacheAllBusinesses();
-
-        // Retry after loading
-        const retryCache = await client.get(this.BUSINESSES_LIST_CACHE_KEY);
-        if (!retryCache) return [];
-        return JSON.parse(retryCache);
-      }
-
-      return JSON.parse(cached);
-    } catch (error) {
-      logger.error('Error getting cached business IDs', { error });
-      return [];
-    }
-  }
-
-  /**
-   * Invalidate business cache
-   */
-  static async invalidateBusinessCache(businessId: string): Promise<void> {
-    try {
-      const client = RedisConfig.getClient();
-      const key = `${this.BUSINESS_CACHE_KEY_PREFIX}${businessId}`;
-
-      await client.del(key);
-
-      // Also invalidate the business list
-      await client.del(this.BUSINESSES_LIST_CACHE_KEY);
-
-      logger.info('🔄 Business cache invalidated', { businessId });
-    } catch (error) {
-      logger.error('Error invalidating business cache', { error, businessId });
-    }
-  }
-
-  /**
-   * Invalidate all business caches
-   */
-  static async invalidateAllBusinessCaches(): Promise<void> {
-    try {
-      const client = RedisConfig.getClient();
-
-      // Get all cached business IDs
-      const businessIds = await this.getCachedBusinessIds();
-
-      // Delete each business cache
-      for (const businessId of businessIds) {
-        const key = `${this.BUSINESS_CACHE_KEY_PREFIX}${businessId}`;
-        await client.del(key);
-      }
-
-      // Delete the business list cache
-      await client.del(this.BUSINESSES_LIST_CACHE_KEY);
-
-      logger.info('🔄 All business caches invalidated', { count: businessIds.length });
-    } catch (error) {
-      logger.error('Error invalidating all business caches', { error });
     }
   }
 }
