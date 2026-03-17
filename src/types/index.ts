@@ -240,6 +240,7 @@ export interface BaileysMessage {
   message: string;
   timestamp: number;
   businessId: string;
+  messageId?: string;
   fromMe?: boolean;
 }
 
