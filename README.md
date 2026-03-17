@@ -752,8 +752,7 @@ ia-server/
 │   ├── services/
 │   │   ├── ollama.service.ts    # Ollama API wrapper
 │   │   ├── conversation.service.ts # Conversation history
-│   │   ├── intent.service.ts    # Intent analysis
-│   │   └── cache.service.ts     # Business context cache
+│   │   └── intent.service.ts    # Intent analysis
 │   ├── middleware/
 │   │   ├── auth.middleware.ts   # API key auth
 │   │   ├── rateLimit.middleware.ts # Rate limiting
