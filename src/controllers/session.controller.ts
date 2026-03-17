@@ -20,6 +20,18 @@ export const startSession = async (req: Request, res: Response): Promise<void> =
     }
 
     logger.info('Starting WhatsApp session via HTTP', { businessId });
+
+    if (baileysService.isSessionStartInProgress(businessId)) {
+      res.status(202).json({
+        success: true,
+        message: 'Session start already in progress',
+        data: {
+          businessId,
+          status: 'starting',
+        },
+      });
+      return;
+    }
     
     // Check if session already exists
     if (baileysService.hasSession(businessId)) {
