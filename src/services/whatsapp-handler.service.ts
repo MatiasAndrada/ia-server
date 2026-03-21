@@ -134,8 +134,20 @@ export class WhatsAppHandler {
         messageLength: messageText.length,
       });
 
-      // Check if business WhatsApp is active
-      const isActive = await SupabaseService.isBusinessWhatsAppActive(businessId);
+      // Check if business WhatsApp is active.
+      // Only send inactive fallback when we can confirm inactive state from business data.
+      const businessStatus = await SupabaseService.getBusinessById(businessId);
+      if (!businessStatus) {
+        logger.warn('Skipping inactive fallback due to unknown business state', {
+          businessId,
+          phone,
+          conversationId,
+        });
+        return;
+      }
+
+      const isActive =
+        businessStatus.whatsapp_session_id !== null && businessStatus.whatsapp_session_id !== undefined;
       if (!isActive) {
         const shouldNotifyUnavailable = await this.shouldSendInactiveFallback(businessId, phone);
         if (shouldNotifyUnavailable) {
@@ -414,6 +426,7 @@ export class WhatsAppHandler {
 
       // Send response back to WhatsApp (only if not skipped)
       if (!skipAgentResponse) {
+        const sanitizedAgentResponse = this.sanitizeAgentResponse(agentResponse.response, draft);
         const isTestEnv = process.env.NODE_ENV === 'test';
         const testRecipient = isTestEnv ? this.baileysService.getSelfJid(businessId) : null;
         const recipients = new Set<string>([from]);
@@ -423,7 +436,7 @@ export class WhatsAppHandler {
         }
 
         for (const recipient of recipients) {
-          await this.sendWhatsAppMessage(businessId, recipient, agentResponse.response);
+          await this.sendWhatsAppMessage(businessId, recipient, sanitizedAgentResponse);
         }
       } else {
         logger.info('Agent response skipped (custom message sent)', { conversationId });
@@ -750,6 +763,21 @@ export class WhatsAppHandler {
 
         await this.sendWhatsAppMessage(businessId, jid, confirmationMessage);
 
+        // Mark CONFIRMED notification as already sent to avoid duplicate sends
+        // from realtime updates without blocking NOTIFIED later.
+        try {
+          if (RedisConfig.isReady()) {
+            const redisClient = RedisConfig.getClient();
+            await redisClient.setEx(`wa:status:sent:${entry.id}:CONFIRMED`, 90, '1');
+          }
+        } catch (error) {
+          logger.warn('Failed to mark confirmation dedup key', {
+            businessId,
+            entryId: entry.id,
+            error,
+          });
+        }
+
         logger.info('✅ Confirmation message sent successfully to customer', {
           conversationId,
           jid,
@@ -834,8 +862,11 @@ export class WhatsAppHandler {
   private async shouldSendInactiveFallback(businessId: string, phone: string): Promise<boolean> {
     try {
       if (!RedisConfig.isReady()) {
-        logger.warn('Redis not ready, inactive fallback throttle skipped', { businessId, phone });
-        return true;
+        logger.warn('Redis not ready, skipping inactive fallback send to avoid false positives', {
+          businessId,
+          phone,
+        });
+        return false;
       }
 
       const client = RedisConfig.getClient();
@@ -847,8 +878,12 @@ export class WhatsAppHandler {
 
       return !!wasSet;
     } catch (error) {
-      logger.error('Error applying inactive fallback throttle', { businessId, phone, error });
-      return true;
+      logger.error('Error applying inactive fallback throttle, skipping fallback send', {
+        businessId,
+        phone,
+        error,
+      });
+      return false;
     }
   }
 
@@ -861,8 +896,8 @@ export class WhatsAppHandler {
     const isTestEnv = process.env.NODE_ENV === 'test';
 
     if (isTestEnv) {
-      // TEMP: Procesar TODOS los mensajes para debug
-      logger.info('TEST MODE: Processing all messages', { businessId, from, fromMe });
+      // In test we allow self-chat messages, but outbound bot echoes are filtered in BaileysService.
+      logger.info('TEST MODE: processing inbound message', { businessId, from, fromMe });
       return false;
     } else {
       // En producción: ignorar todos los mensajes fromMe (respuestas del bot)
@@ -872,6 +907,34 @@ export class WhatsAppHandler {
       }
       return false;
     }
+  }
+
+  private sanitizeAgentResponse(response: string, draft: ReservationDraft | null): string {
+    const trimmedResponse = response.trim();
+    const fallbackEscaped = INACTIVE_FALLBACK_MESSAGE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    let sanitized = trimmedResponse.replace(new RegExp(fallbackEscaped, 'gi'), '').trim();
+
+    const hasUnresolvedPlaceholders = /\{(?:name|qty)\}|\[(?:NOMBRE|CANTIDAD)\]/i.test(sanitized);
+    if (hasUnresolvedPlaceholders) {
+      logger.warn('Agent response contains unresolved placeholders, forcing deterministic fallback', {
+        draftStep: draft?.step,
+        preview: sanitized.substring(0, 120),
+      });
+
+      if (draft?.step === 'party_size') {
+        return '¿Para cuántas personas es la reserva?\n\nEjemplo: 2, 4, 6, etc.';
+      }
+
+      return '¿Cuál es tu nombre para continuar con la reserva?';
+    }
+
+    if (!sanitized) {
+      return draft?.step === 'party_size'
+        ? '¿Para cuántas personas es la reserva?\n\nEjemplo: 2, 4, 6, etc.'
+        : '¿Cuál es tu nombre para continuar con la reserva?';
+    }
+
+    return sanitized;
   }
 
   private normalizeWhatsAppNumber(jid: string): string {

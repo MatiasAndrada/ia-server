@@ -44,10 +44,12 @@ export class BaileysService {
   private sessionStates: Map<string, BaileysSession> = new Map();
   private reconnectAttempts: Map<string, number> = new Map();
   private startSessionInProgress: Set<string> = new Set();
+  private outboundEchoGuard: Map<string, number> = new Map();
   private whatsAppHandler: WhatsAppHandler;
   private readonly AUTH_DIR = path.join(process.cwd(), 'auth_sessions');
   private readonly MAX_RECONNECT_ATTEMPTS = 3;
   private readonly INBOUND_DEDUP_TTL_SECONDS = 600;
+  private readonly OUTBOUND_ECHO_TTL_MS = 5 * 60 * 1000;
   private readonly START_SESSION_LOCK_TTL_SECONDS = Number(
     process.env.BAILEYS_START_SESSION_LOCK_TTL_SECONDS || 20
   );
@@ -622,6 +624,15 @@ export class BaileysService {
         const fromMe = !!msg.key.fromMe;
         const timestamp = msg.messageTimestamp as number;
 
+        if (fromMe && this.isKnownOutboundMessageId(businessId, messageId)) {
+          logger.info('Skipping outbound echo message from bot', {
+            businessId,
+            from,
+            messageId,
+          });
+          continue;
+        }
+
         if (messageId) {
           const shouldProcess = await this.shouldProcessInboundMessage(businessId, messageId, from);
           if (!shouldProcess) {
@@ -703,6 +714,34 @@ export class BaileysService {
     return sock?.user?.id || null;
   }
 
+  private rememberOutboundMessageId(businessId: string, messageId: string | undefined): void {
+    if (!messageId) {
+      return;
+    }
+
+    const key = `${businessId}:${messageId}`;
+    this.outboundEchoGuard.set(key, Date.now() + this.OUTBOUND_ECHO_TTL_MS);
+  }
+
+  private isKnownOutboundMessageId(businessId: string, messageId: string | undefined): boolean {
+    if (!messageId) {
+      return false;
+    }
+
+    const key = `${businessId}:${messageId}`;
+    const expiresAt = this.outboundEchoGuard.get(key);
+    if (!expiresAt) {
+      return false;
+    }
+
+    if (expiresAt < Date.now()) {
+      this.outboundEchoGuard.delete(key);
+      return false;
+    }
+
+    return true;
+  }
+
   /**
    * Send a message
    */
@@ -734,6 +773,7 @@ export class BaileysService {
       });
 
       const result = await sock.sendMessage(jid, { text: message });
+      this.rememberOutboundMessageId(businessId, result?.key?.id);
 
       logger.info('✅ Message sent successfully via Baileys', { 
         businessId, 

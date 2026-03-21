@@ -254,10 +254,10 @@ class AgentService {
     const replacements: { [key: string]: string } = {
       '{businessName}': context.businessName || 'Restaurante',
       '[NOMBRE_NEGOCIO]': context.businessName || 'Restaurante',
-      '{name}': context.draftData?.customerName || '{name}',
-      '[NOMBRE]': context.draftData?.customerName || '[NOMBRE]',
-      '{qty}': String(context.draftData?.partySize || '{qty}'),
-      '[CANTIDAD]': String(context.draftData?.partySize || '[CANTIDAD]'),
+      '{name}': context.draftData?.customerName || 'Cliente',
+      '[NOMBRE]': context.draftData?.customerName || 'Cliente',
+      '{qty}': context.draftData?.partySize ? String(context.draftData.partySize) : 'la cantidad indicada',
+      '[CANTIDAD]': context.draftData?.partySize ? String(context.draftData.partySize) : 'la cantidad indicada',
     };
 
     // Realizar reemplazos

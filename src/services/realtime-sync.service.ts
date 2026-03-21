@@ -336,6 +336,30 @@ export class RealtimeSyncService {
         return;
       }
 
+      // Skip duplicate notifications only for the same status.
+      // CONFIRMED and NOTIFIED must not block each other.
+      try {
+        if (RedisConfig.isReady()) {
+          const redisClient = RedisConfig.getClient();
+          const dedupKey = `wa:status:sent:${newEntry.id}:${newEntry.status}`;
+          const alreadySent = await redisClient.get(dedupKey);
+          if (alreadySent) {
+            logger.info('⏭️ [REALTIME] Skipping duplicate status notification', {
+              entryId: newEntry.id,
+              businessId: newEntry.business_id,
+              status: newEntry.status,
+            });
+            return;
+          }
+        }
+      } catch (error) {
+        logger.warn('⚠️ [REALTIME] Failed dedup check for confirmation send', {
+          entryId: newEntry?.id,
+          businessId: newEntry?.business_id,
+          error,
+        });
+      }
+
       logger.info('🔔 [REALTIME] ✅ Status changed! Preparing notification...', {
         entryId: newEntry.id,
         businessId: newEntry.business_id,
@@ -470,6 +494,25 @@ export class RealtimeSyncService {
           displayCode: newEntry.display_code,
           customerName: customer.name,
         });
+
+        // Mark this status notification as sent to avoid duplicate sends.
+        try {
+          if (RedisConfig.isReady()) {
+            const redisClient = RedisConfig.getClient();
+            await redisClient.setEx(
+              `wa:status:sent:${newEntry.id}:${newEntry.status}`,
+              300,
+              '1'
+            );
+          }
+        } catch (error) {
+          logger.warn('⚠️ [REALTIME] Failed to mark status notification dedup key', {
+            entryId: newEntry.id,
+            businessId: newEntry.business_id,
+            status: newEntry.status,
+            error,
+          });
+        }
       } else {
         logger.error('❌ [REALTIME] Failed to send WhatsApp notification', {
           businessId: newEntry.business_id,

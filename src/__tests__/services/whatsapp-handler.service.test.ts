@@ -218,6 +218,7 @@ describe('WhatsAppHandler single-active-reservation policy', () => {
       .mockResolvedValue({
         id: 'business-1',
         name: 'Restaurante Test',
+        whatsapp_session_id: 'session-test-1',
       } as any);
 
     const activeReservation = {
