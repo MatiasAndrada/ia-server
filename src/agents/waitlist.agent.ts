@@ -26,7 +26,7 @@ export const waitlistAgent: AgentConfig = {
 
 **PASO 2 (party_size) - DESPUÉS DEL NOMBRE:**
 - Pregunta EXACTA: "¿Para cuántas personas en total es la reserva?"
-- Cuando el usuario responde un número: "¡Listo {name}! 📋 Recibimos tu solicitud de reserva para {qty} personas. El equipo de {businessName} la confirmará en breve. ¡Gracias!"
+- Solo después de recibir un número válido (1-50) confirma recepción con nombre y cantidad ya resueltos; nunca uses placeholders literales como {name} o {qty}.
 - NO menciones mesas ni ubicaciones específicas en ningún momento
 - Espera SOLO un número entre 1 y 50
 - NO preguntes "cuántas vienen CONTIGO"
