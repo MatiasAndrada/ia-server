@@ -763,19 +763,23 @@ export class WhatsAppHandler {
 
         await this.sendWhatsAppMessage(businessId, jid, confirmationMessage);
 
-        // Mark CONFIRMED notification as already sent to avoid duplicate sends
-        // from realtime updates without blocking NOTIFIED later.
-        try {
-          if (RedisConfig.isReady()) {
-            const redisClient = RedisConfig.getClient();
-            await redisClient.setEx(`wa:status:sent:${entry.id}:CONFIRMED`, 90, '1');
+        // Mark dedup key only when reservation is already confirmed/notified.
+        // Do not pre-mark CONFIRMED for WAITING entries, otherwise realtime
+        // status transitions (WAITING -> CONFIRMED) will be skipped.
+        if (entry.status === 'CONFIRMED' || entry.status === 'NOTIFIED') {
+          try {
+            if (RedisConfig.isReady()) {
+              const redisClient = RedisConfig.getClient();
+              await redisClient.setEx(`wa:status:sent:${entry.id}:${entry.status}`, 90, '1');
+            }
+          } catch (error) {
+            logger.warn('Failed to mark status dedup key', {
+              businessId,
+              entryId: entry.id,
+              status: entry.status,
+              error,
+            });
           }
-        } catch (error) {
-          logger.warn('Failed to mark confirmation dedup key', {
-            businessId,
-            entryId: entry.id,
-            error,
-          });
         }
 
         logger.info('✅ Confirmation message sent successfully to customer', {
