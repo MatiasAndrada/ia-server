@@ -7,6 +7,7 @@ import { RedisConfig } from '../config/redis';
 import { agentRegistry } from '../agents';
 import { BaileysMessage, ReservationDraft } from '../types';
 import { logger } from '../utils/logger';
+import { evaluateReservationScope } from '../utils/reservation-scope';
 
 type ActiveReservationSnapshot = {
   status: 'WAITING' | 'CONFIRMED' | 'NOTIFIED';
@@ -259,6 +260,64 @@ export class WhatsAppHandler {
         draft = null;
       }
 
+      // Courtesy handling: if reservation is already active/confirmed and user sends
+      // a short acknowledgment (thanks/ok/dale/etc.), reply naturally without restarting flow.
+      if (!draft) {
+        const courtesyHandled = await this.handlePostReservationCourtesy(
+          businessId,
+          from,
+          messageText
+        );
+        if (courtesyHandled) {
+          logger.info('Post-reservation courtesy handled', { conversationId, businessId, from });
+          return;
+        }
+
+        // Business rule: one active reservation per phone/day.
+        // Block explicit attempts to create a second reservation while one is active.
+        const singleReservationPolicyHandled = await this.enforceSingleActiveReservationPolicy(
+          businessId,
+          from,
+          messageText,
+          conversationId
+        );
+        if (singleReservationPolicyHandled) {
+          return;
+        }
+      }
+
+      const scopeEvaluation = evaluateReservationScope(messageText, {
+        businessName: businessStatus.name,
+        currentStep: draft?.step,
+      });
+      if (scopeEvaluation.decision !== 'allow' && scopeEvaluation.message) {
+        await this.sendWhatsAppMessage(businessId, from, scopeEvaluation.message);
+
+        logger.info('Reservation scope guard blocked WhatsApp flow', {
+          conversationId,
+          businessId,
+          decision: scopeEvaluation.decision,
+          draftStep: draft?.step,
+        });
+        return;
+      }
+
+      if (!draft) {
+        const prefilledReservationHandled = await this.handlePrefilledReservationRequest(
+          messageText,
+          conversationId,
+          businessId,
+          from
+        );
+        if (prefilledReservationHandled) {
+          logger.info('Prefilled reservation request handled deterministically', {
+            conversationId,
+            businessId,
+          });
+          return;
+        }
+      }
+
       // FAST PATH: deterministic reservation steps should not wait for AI response
       if (draft && (draft.step === 'party_size' || draft.step === 'edit_menu')) {
         logger.info('⚡ Bypassing agent for deterministic draft step', {
@@ -293,32 +352,6 @@ export class WhatsAppHandler {
           conversationId,
           step: draft.step,
         });
-      }
-
-      // Courtesy handling: if reservation is already active/confirmed and user sends
-      // a short acknowledgment (thanks/ok/dale/etc.), reply naturally without restarting flow.
-      if (!draft) {
-        const courtesyHandled = await this.handlePostReservationCourtesy(
-          businessId,
-          from,
-          messageText
-        );
-        if (courtesyHandled) {
-          logger.info('Post-reservation courtesy handled', { conversationId, businessId, from });
-          return;
-        }
-
-        // Business rule: one active reservation per phone/day.
-        // Block explicit attempts to create a second reservation while one is active.
-        const singleReservationPolicyHandled = await this.enforceSingleActiveReservationPolicy(
-          businessId,
-          from,
-          messageText,
-          conversationId
-        );
-        if (singleReservationPolicyHandled) {
-          return;
-        }
       }
       
       // Get business details for context
@@ -533,8 +566,18 @@ export class WhatsAppHandler {
 
       switch (draft.step) {
         case 'name': {
-          // User provided their name — extract it intelligently
-          const extractedName = this.extractNameFromMessage(messageText);
+          const extractedName = this.extractNameCandidate(messageText);
+          const partySize = this.extractPartySize(messageText);
+
+          if (!extractedName) {
+            await this.sendWhatsAppMessage(
+              businessId,
+              jid,
+              '¿Cuál es tu nombre para continuar con la reserva?'
+            );
+            return true;
+          }
+
           logger.info('📝 Setting customer name', { conversationId, raw: messageText, extracted: extractedName });
           const updatedDraft = await ReservationService.setCustomerName(conversationId, extractedName);
           logger.info('✅ Customer name set', { 
@@ -542,6 +585,13 @@ export class WhatsAppHandler {
             name: extractedName,
             nextStep: updatedDraft?.step,
           });
+
+          if (partySize && partySize > 0 && partySize <= 50) {
+            await ReservationService.setPartySize(conversationId, partySize);
+            logger.info('✅ Embedded party size set at name step', { conversationId, partySize });
+            await this.createAndNotifyReservation(conversationId, businessId, jid);
+            return true;
+          }
           
           // Send confirmation and ask for party size
           const nameConfirmMsg = `✅ Perfecto, *${extractedName}*!\n\n¿Para cuántas personas es la reserva?\n\nEjemplo: 2, 4, 6, etc.`;
@@ -550,19 +600,41 @@ export class WhatsAppHandler {
         }
 
         case 'party_size': {
+          const partySize = this.extractPartySize(messageText);
+
           // Check if user is correcting their name instead of providing a party size
           if (this.isNameCorrectionMessage(messageText)) {
-            const correctedName = this.extractNameFromMessage(messageText);
-            await ReservationService.setNameOnly(conversationId, correctedName);
-            logger.info('✏️ Name corrected at party_size step', { conversationId, correctedName });
-            const nameFixMsg = `✅ ¡Listo! Cambié tu nombre a *${correctedName}*.\n\n¿Para cuántas personas es la reserva?\n\nEjemplo: 2, 4, 6, etc.`;
-            await this.sendWhatsAppMessage(businessId, jid, nameFixMsg);
+            const correctedName = this.extractNameCandidate(messageText);
+
+            if (correctedName) {
+              await ReservationService.setNameOnly(conversationId, correctedName);
+              logger.info('✏️ Name corrected at party_size step', { conversationId, correctedName });
+
+              if (partySize && partySize > 0 && partySize <= 50) {
+                await ReservationService.setPartySize(conversationId, partySize);
+                logger.info('✅ Embedded party size set alongside name correction', {
+                  conversationId,
+                  partySize,
+                });
+                await this.createAndNotifyReservation(conversationId, businessId, jid);
+                return true;
+              }
+
+              const nameFixMsg = `✅ ¡Listo! Cambié tu nombre a *${correctedName}*.\n\n¿Para cuántas personas es la reserva?\n\nEjemplo: 2, 4, 6, etc.`;
+              await this.sendWhatsAppMessage(businessId, jid, nameFixMsg);
+              return true;
+            }
+
+            await this.sendWhatsAppMessage(
+              businessId,
+              jid,
+              '¿Cuál es tu nombre correcto para continuar con la reserva?'
+            );
             return true;
           }
 
           // User provided party size
           logger.info('📝 Extracting party size', { conversationId, messageText });
-          const partySize = this.extractNumber(messageText);
           logger.info('🔢 Party size extracted', { conversationId, partySize });
 
           if (partySize && partySize > 0 && partySize <= 50) {
@@ -1340,12 +1412,151 @@ export class WhatsAppHandler {
     }
   }
 
+  private async handlePrefilledReservationRequest(
+    messageText: string,
+    conversationId: string,
+    businessId: string,
+    jid: string
+  ): Promise<boolean> {
+    try {
+      if (!this.isReservationRequest(messageText)) {
+        return false;
+      }
+
+      const extractedName = this.extractNameCandidate(messageText);
+      if (!extractedName) {
+        return false;
+      }
+
+      const partySize = this.extractPartySize(messageText);
+
+      await ReservationService.startReservation(conversationId, businessId);
+      await ReservationService.setCustomerName(conversationId, extractedName);
+
+      logger.info('Prefilled reservation data captured', {
+        conversationId,
+        extractedName,
+        partySize,
+      });
+
+      if (partySize && partySize > 0 && partySize <= 50) {
+        await ReservationService.setPartySize(conversationId, partySize);
+        await this.createAndNotifyReservation(conversationId, businessId, jid);
+        return true;
+      }
+
+      const nameConfirmMsg = `✅ Perfecto, *${extractedName}*!\n\n¿Para cuántas personas es la reserva?\n\nEjemplo: 2, 4, 6, etc.`;
+      await this.sendWhatsAppMessage(businessId, jid, nameConfirmMsg);
+      return true;
+    } catch (error) {
+      logger.error('Error handling prefilled reservation request', {
+        error,
+        conversationId,
+        businessId,
+      });
+      return false;
+    }
+  }
+
   /**
    * Extract number from text
    */
   private extractNumber(text: string): number | null {
     const match = text.match(/\d+/);
     return match ? parseInt(match[0], 10) : null;
+  }
+
+  private extractPartySize(text: string): number | null {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    if (/^\d{1,2}$/.test(trimmed)) {
+      const numericValue = parseInt(trimmed, 10);
+      return numericValue >= 1 && numericValue <= 50 ? numericValue : null;
+    }
+
+    const withoutTimeHints = trimmed
+      .replace(/\b(?:[01]?\d|2[0-3])[:.]\d{2}\b/g, ' ')
+      .replace(/\b(?:1[0-2]|0?\d)\s?(?:am|pm|a\.m\.|p\.m\.)\b/gi, ' ');
+
+    const contextualPatterns = [
+      /\b(?:somos|para|de|total(?:es)?)\s+(\d{1,2})(?:\s+personas?)?\b/i,
+      /\b(\d{1,2})\s+personas?\b/i,
+    ];
+
+    for (const pattern of contextualPatterns) {
+      const match = withoutTimeHints.match(pattern);
+      if (match?.[1]) {
+        const numericValue = parseInt(match[1], 10);
+        if (numericValue >= 1 && numericValue <= 50) {
+          return numericValue;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private extractNameCandidate(text: string): string | null {
+    const explicitPatterns = [
+      /(?:me\s+llamo|mi\s+nombre\s+es|llámame|puedes?\s+llamarme|soy)\s+(.+?)(?=(?:\s+(?:somos|para)\s+\d{1,2}(?:\s+personas?)?)|(?:\s+\d{1,2}\s+personas?\b)|(?:\s+(?:a\s+las|para\s+las|tipo\s+las|sobre\s+las)\s+\d{1,2}(?::\d{2})?\b)|$)/i,
+    ];
+
+    for (const pattern of explicitPatterns) {
+      const match = text.trim().match(pattern);
+      if (match?.[1]) {
+        const explicitCandidate = this.cleanNameCandidate(match[1]);
+        if (explicitCandidate) {
+          return explicitCandidate;
+        }
+      }
+    }
+
+    return this.cleanNameCandidate(text);
+  }
+
+  private cleanNameCandidate(text: string): string | null {
+    let cleaned = text.trim();
+
+    const greetingWords = [
+      'hola', 'buenas', 'buen día', 'buenos días', 'buenas tardes',
+      'buenas noches', 'hey', 'hi', 'saludos',
+    ];
+    const greetingRegex = new RegExp(`^(${greetingWords.join('|')})[,!.\\s]*`, 'i');
+    cleaned = cleaned.replace(greetingRegex, '').trim();
+
+    const leadingReservationPatterns = [
+      /^(?:quiero|quisiera|necesito|me\s+gustaria|me\s+gustaría)\s+(?:hacer\s+)?(?:una\s+)?(?:reserva(?:r|cion)?|mesa|turno)\b/i,
+      /^(?:hacer\s+)?(?:una\s+)?(?:reserva(?:r|cion)?|mesa|turno)\b/i,
+      /^(?:me\s+llamo|mi\s+nombre\s+es|llámame|puedes?\s+llamarme|soy)\s+/i,
+    ];
+
+    for (const pattern of leadingReservationPatterns) {
+      cleaned = cleaned.replace(pattern, '').trim();
+    }
+
+    const trailingPatterns = [
+      /\b(?:somos|para)\s+\d{1,2}(?:\s+personas?)?\b.*$/i,
+      /\b\d{1,2}\s+personas?\b.*$/i,
+      /\b(?:a\s+las|para\s+las|tipo\s+las|sobre\s+las)\s+\d{1,2}(?::\d{2})?\b.*$/i,
+    ];
+
+    for (const pattern of trailingPatterns) {
+      cleaned = cleaned.replace(pattern, '').trim();
+    }
+
+    cleaned = cleaned
+      .replace(/^[,!.\s]+|[,!.\s]+$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!cleaned || !this.couldBeAName(cleaned)) {
+      return null;
+    }
+
+    return this.capitalizeName(cleaned);
   }
 
   /**
@@ -1355,9 +1566,9 @@ export class WhatsAppHandler {
    *      "Matías"              → "Matías"
    */
   private extractNameFromMessage(text: string): string {
-    // If the whole message looks like a reservation request, don't extract a name from it
-    if (this.isReservationRequest(text)) {
-      return this.capitalizeName(text.trim());
+    const extractedCandidate = this.extractNameCandidate(text);
+    if (extractedCandidate) {
+      return extractedCandidate;
     }
 
     let cleaned = text.trim();

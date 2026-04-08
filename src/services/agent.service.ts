@@ -2,6 +2,11 @@ import { AgentConfig, AgentResponse, ConversationMessage, OllamaMessage } from '
 import { ollamaService } from './ollama.service';
 import { RedisConfig } from '../config/redis';
 import { logger } from '../utils/logger';
+import {
+  buildReservationIntroMessage,
+  evaluateReservationScope,
+  isGreetingOrReservationOptInMessage,
+} from '../utils/reservation-scope';
 
 /**
  * Servicio para manejar interacciones con agentes de IA
@@ -28,6 +33,66 @@ class AgentService {
         conversationId,
         messageLength: message.length
       });
+
+      if (agent.id === 'waitlist') {
+        if (!context?.currentStep && isGreetingOrReservationOptInMessage(message)) {
+          const introMessage = buildReservationIntroMessage(context?.businessName);
+
+          if (conversationId) {
+            await this.updateConversationHistory(conversationId, message, introMessage);
+          }
+
+          const processingTime = Date.now() - startTime;
+
+          logger.info('Reservation intro returned deterministically', {
+            agentId: agent.id,
+            conversationId,
+            processingTime,
+          });
+
+          return {
+            response: introMessage,
+            action: 'CREATE_RESERVATION',
+            conversationId,
+            agent: {
+              id: agent.id,
+              name: agent.name
+            },
+            processingTime
+          };
+        }
+
+        const scopeEvaluation = evaluateReservationScope(message, {
+          businessName: context?.businessName,
+          currentStep: context?.currentStep,
+        });
+
+        if (scopeEvaluation.decision !== 'allow' && scopeEvaluation.message) {
+          if (conversationId) {
+            await this.updateConversationHistory(conversationId, message, scopeEvaluation.message);
+          }
+
+          const processingTime = Date.now() - startTime;
+
+          logger.info('Reservation scope guard blocked agent response', {
+            agentId: agent.id,
+            conversationId,
+            decision: scopeEvaluation.decision,
+            processingTime,
+          });
+
+          return {
+            response: scopeEvaluation.message,
+            action: null,
+            conversationId,
+            agent: {
+              id: agent.id,
+              name: agent.name
+            },
+            processingTime
+          };
+        }
+      }
 
       // Obtener historial de conversación si existe
       const history = conversationId 

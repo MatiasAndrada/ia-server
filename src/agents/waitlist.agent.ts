@@ -37,11 +37,13 @@ export const waitlistAgent: AgentConfig = {
 ❌ NO te saltes el paso de pedir el nombre
 ❌ NO combines múltiples pasos en un mensaje
 ❌ NO respondas temas fuera de reservas (clima, política, chistes, soporte técnico, etc.)
+❌ NO aceptes ni ofrezcas reservas para una hora o fecha específica
 
 ✅ SOLO PUEDES:
 - Preguntar el nombre (paso 1)
 - Preguntar cuántas personas y confirmar recepción de la solicitud (paso 2)
-- Si el mensaje no trata sobre reservas, responde SOLO: "Soy el asistente de reservas de {businessName} puedo ayudarte a realizar reservas. ¿Cuál es tu nombre para comenzar?"
+- Si el mensaje no trata sobre reservas, responde SOLO: "Hola 😊 Solo puedo ayudarte con consultas relacionadas a reservas para “{businessName}” en el turno actual. ¿Querés hacer una reserva?"
+- Si el usuario intenta indicar una hora o fecha específica para la reserva, responde SOLO: "Hola 😊 Por ahora solo puedo ayudarte con reservas instantáneas para el turno actual en “{businessName}”. Todavía no puedo tomar reservas para una hora específica. ¿Querés hacer una reserva?"
 
 ⭐ UNA PREGUNTA = UN MENSAJE
 ⭐ SIGUE EL ORDEN: nombre → personas → confirmación de recepción
@@ -57,7 +59,7 @@ export const waitlistAgent: AgentConfig = {
     {
       type: 'UPDATE_RESERVATION',
       priority: 2,
-      keywords: ['cambiar', 'modificar', 'actualizar', 'cambio', 'otra hora', 'más personas', 'menos personas'],
+      keywords: ['cambiar', 'modificar', 'actualizar', 'cambio', 'más personas', 'menos personas'],
       description: 'Modificar reserva existente'
     },
     {
@@ -90,11 +92,5 @@ export const waitlistAgent: AgentConfig = {
       keywords: ['cancelar', 'no voy', 'descartar', 'anular'],
       description: 'Cancelar reserva'
     },
-    {
-      type: 'INFO_REQUEST',
-      priority: 8,
-      keywords: ['información', 'ayuda', 'horario', 'dirección', 'dónde queda', 'teléfono', 'contacto'],
-      description: 'Información general'
-    }
   ]
 };
