@@ -162,18 +162,30 @@ function isGreetingMessage(normalizedMessage: string): boolean {
 }
 
 function isReservationOptInMessage(normalizedMessage: string): boolean {
+  // Suffix allowed after any base opt-in word (e.g. "si por favor", "dale gracias")
+  const politeSuffix = '(\\s+(por\\s+favor|gracias|bueno|claro|dale|de\\s+una|obvio|porfavor))?';
+
   const optInPatterns = [
-    /^si$/,
-    /^yes$/,
-    /^quiero$/,
-    /^dale$/,
-    /^(ok|okay|okey)$/,
-    /^claro$/,
-    /^perfecto$/,
-    /^genial$/,
-    /^listo$/,
-    /^de\s+una$/,
-    /^obvio$/,
+    new RegExp(`^si${politeSuffix}$`),
+    new RegExp(`^yes${politeSuffix}$`),
+    new RegExp(`^quiero${politeSuffix}$`),
+    new RegExp(`^dale${politeSuffix}$`),
+    new RegExp(`^(ok|okay|okey)${politeSuffix}$`),
+    new RegExp(`^claro${politeSuffix}$`),
+    new RegExp(`^perfecto${politeSuffix}$`),
+    new RegExp(`^genial${politeSuffix}$`),
+    new RegExp(`^listo${politeSuffix}$`),
+    new RegExp(`^de\\s+una${politeSuffix}$`),
+    new RegExp(`^obvio${politeSuffix}$`),
+    // Multi-word affirmatives
+    /^claro\s+que\s+si$/,
+    /^por\s+supuesto$/,
+    /^con\s+gusto$/,
+    /^me\s+gustaria$/,
+    /^quiero\s+reservar$/,
+    /^si\s+quiero$/,
+    /^bueno\s+si$/,
+    /^esta\s+bien$/,
   ];
 
   return optInPatterns.some((pattern) => pattern.test(normalizedMessage));
