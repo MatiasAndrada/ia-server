@@ -85,11 +85,7 @@ describe('AgentService reservation scope guard', () => {
     expect(ollamaService.chat).not.toHaveBeenCalled();
   });
 
-  it('keeps valid reservation messages flowing through Ollama with the current introduction prompt', async () => {
-    (ollamaService.chat as jest.Mock).mockResolvedValue(
-      '¡Hola! 👋 Soy el asistente de Bodegón Central y estoy para generar reservas. ¿Cuál es tu nombre?'
-    );
-
+  it('handles "Quiero reservar" as deterministic opt-in without calling Ollama', async () => {
     const response = await agentService.generateResponse(
       'Quiero reservar',
       waitlistAgent,
@@ -97,13 +93,10 @@ describe('AgentService reservation scope guard', () => {
       { businessName: 'Bodegón Central' }
     );
 
-    expect(ollamaService.chat).toHaveBeenCalledTimes(1);
-    expect((ollamaService.chat as jest.Mock).mock.calls[0][1]).toContain(
-      '¡Hola! 👋 Soy el asistente de Bodegón Central y estoy para generar reservas. ¿Cuál es tu nombre?'
-    );
-    expect(response.response).toBe(
-      '¡Hola! 👋 Soy el asistente de Bodegón Central y estoy para generar reservas. ¿Cuál es tu nombre?'
-    );
+    // "Quiero reservar" is now caught by the reservation opt-in scope guard
+    // and returns a deterministic intro without reaching Ollama
+    expect(ollamaService.chat).not.toHaveBeenCalled();
+    expect(response.response).toContain('nombre');
     expect(response.action).toBe('CREATE_RESERVATION');
   });
 });
