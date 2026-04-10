@@ -68,10 +68,10 @@ export interface HealthResponse {
 }
 
 // Action Types
-export type ActionType = 
-  | 'REGISTER' 
-  | 'CHECK_STATUS' 
-  | 'CANCEL' 
+export type ActionType =
+  | 'REGISTER'
+  | 'CHECK_STATUS'
+  | 'CANCEL'
   | 'INFO_REQUEST'
   | 'UNKNOWN';
 
@@ -98,6 +98,7 @@ export interface AgentConfig {
   actions?: AgentActionDefinition[];
   temperature?: number;
   maxTokens?: number;
+  numCtx?: number;
   enabled?: boolean;
 }
 
@@ -172,15 +173,18 @@ export interface OllamaMessage {
   content: string;
 }
 
+export interface OllamaGenerationOptions {
+  temperature?: number;
+  top_p?: number;
+  num_predict?: number;
+  num_ctx?: number;
+}
+
 export interface OllamaRequest {
   model: string;
   messages: OllamaMessage[];
   stream?: boolean;
-  options?: {
-    temperature?: number;
-    top_p?: number;
-    max_tokens?: number;
-  };
+  options?: OllamaGenerationOptions;
 }
 
 export interface OllamaResponse {
@@ -221,7 +225,7 @@ export interface EnvConfig {
   redisUrl: string;
   logLevel: string;
   supabaseUrl?: string;
-  supabaseKey?: string;  useHttps: boolean;
+  supabaseKey?: string; useHttps: boolean;
   sslKeyPath?: string;
   sslCertPath?: string;
 }
@@ -245,7 +249,7 @@ export interface BaileysMessage {
 }
 
 // WebSocket Event Types
-export type WebSocketEventType = 
+export type WebSocketEventType =
   | 'qr_generated'
   | 'session_ready'
   | 'session_error'
