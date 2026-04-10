@@ -2,12 +2,13 @@ import { BaileysService } from './baileys.service';
 import { agentService } from './agent.service';
 import { ReservationService } from './reservation.service';
 import { SupabaseService } from './supabase.service';
+import { ollamaService } from './ollama.service';
 import { SupabaseConfig } from '../config/supabase';
 import { RedisConfig } from '../config/redis';
 import { agentRegistry } from '../agents';
 import { BaileysMessage, ReservationDraft } from '../types';
 import { logger } from '../utils/logger';
-import { evaluateReservationScope } from '../utils/reservation-scope';
+import { evaluateReservationScope, isGreetingOrReservationOptInMessage } from '../utils/reservation-scope';
 
 type ActiveReservationSnapshot = {
   status: 'WAITING' | 'CONFIRMED' | 'NOTIFIED';
@@ -41,6 +42,13 @@ export class WhatsAppHandler {
    */
   private processingLock: Map<string, Promise<void>> = new Map();
 
+  /**
+   * Pending messages that arrived while a conversation was being processed.
+   * After the current processing finishes, these are merged and re-processed
+   * so the bot always responds to the full context.
+   */
+  private pendingWhileProcessing: Map<string, BaileysMessage[]> = new Map();
+
   constructor(baileysService: BaileysService) {
     this.baileysService = baileysService;
   }
@@ -49,11 +57,30 @@ export class WhatsAppHandler {
    * Debounce incoming messages per conversation.
    * Multiple messages arriving within DEBOUNCE_MS are merged into a single call
    * to _processMessage, producing exactly one response.
+   *
+   * If a previous batch is still being processed (Ollama latency), incoming
+   * messages are coalesced into a pending buffer. When the in-flight processing
+   * finishes, the pending buffer is drained and merged into a single call,
+   * ensuring the bot always responds to the latest user context.
    */
   async processMessage(message: BaileysMessage): Promise<void> {
     const { from, businessId } = message;
     const phone = this.normalizeWhatsAppNumber(from);
     const conversationId = `${businessId}-${phone}`;
+
+    // If there is active processing for this conversation (Ollama in-flight),
+    // accumulate the message for processing after the current one finishes.
+    if (this.processingLock.has(conversationId)) {
+      const pending = this.pendingWhileProcessing.get(conversationId) ?? [];
+      pending.push(message);
+      this.pendingWhileProcessing.set(conversationId, pending);
+      logger.info('📥 Message queued while processing in-flight', {
+        conversationId,
+        pendingCount: pending.length,
+        text: message.message.substring(0, 80),
+      });
+      return;
+    }
 
     const existing = this.debounceBuffer.get(conversationId);
     if (existing) {
@@ -66,39 +93,62 @@ export class WhatsAppHandler {
 
     const timer = setTimeout(() => {
       this.debounceBuffer.delete(conversationId);
-      const batch = entry.messages;
-
-      // Merge all texts into one, preserving the first message's metadata
-      const combined: BaileysMessage = {
-        ...batch[0],
-        message: batch.map(m => m.message).join('\n'),
-      };
-
-      if (batch.length > 1) {
-        logger.info('📦 Batching rapid messages into one', {
-          conversationId,
-          count: batch.length,
-          combined: combined.message.substring(0, 120),
-        });
-      }
-
-      // Serialize against any in-progress processing for this conversation
-      const previous = this.processingLock.get(conversationId) ?? Promise.resolve();
-      const current = previous
-        .then(() => this._processMessage(combined))
-        .catch(err => { logger.error('Error in _processMessage', { conversationId, err }); });
-      this.processingLock.set(conversationId, current);
-      current.finally(() => {
-        if (this.processingLock.get(conversationId) === current) {
-          this.processingLock.delete(conversationId);
-        }
-      });
+      this.dispatchBatch(conversationId, entry.messages);
     }, DEBOUNCE_MS);
 
     entry.timer = timer;
     if (!existing) {
       this.debounceBuffer.set(conversationId, entry);
     }
+  }
+
+  /**
+   * Merge a batch of messages and process them, then drain any pending messages
+   * that arrived during processing.
+   */
+  private dispatchBatch(conversationId: string, batch: BaileysMessage[]): void {
+    // Deduplicate consecutive identical messages before joining (e.g. user tapping "Si" twice fast
+    // would otherwise merge to "Si\nSi" → normalized "si si" → no opt-in pattern match → loop).
+    const deduplicatedTexts = batch
+      .map(m => m.message)
+      .filter((msg, idx, arr) => idx === 0 || msg.trim() !== arr[idx - 1].trim());
+
+    const combined: BaileysMessage = {
+      ...batch[0],
+      message: deduplicatedTexts.join('\n'),
+    };
+
+    if (batch.length > 1) {
+      logger.info('📦 Batching rapid messages into one', {
+        conversationId,
+        count: batch.length,
+        combined: combined.message.substring(0, 120),
+      });
+    }
+
+    // Serialize against any in-progress processing for this conversation
+    const previous = this.processingLock.get(conversationId) ?? Promise.resolve();
+    const current = previous
+      .then(() => this._processMessage(combined))
+      .catch(err => { logger.error('Error in _processMessage', { conversationId, err }); })
+      .finally(() => {
+        // Remove the lock BEFORE draining pending so the next batch can re-acquire it.
+        if (this.processingLock.get(conversationId) === current) {
+          this.processingLock.delete(conversationId);
+        }
+
+        // Drain any messages that accumulated while we were processing.
+        const pending = this.pendingWhileProcessing.get(conversationId);
+        if (pending && pending.length > 0) {
+          this.pendingWhileProcessing.delete(conversationId);
+          logger.info('📦 Draining pending messages accumulated during processing', {
+            conversationId,
+            count: pending.length,
+          });
+          this.dispatchBatch(conversationId, pending);
+        }
+      });
+    this.processingLock.set(conversationId, current);
   }
 
   /**
@@ -110,7 +160,7 @@ export class WhatsAppHandler {
       if (this.shouldIgnoreMessage(from, messageText, fromMe, businessId)) {
         return;
       }
-      
+
       // Normalize WhatsApp JID to raw phone number (strip domain and device suffix)
       const phone = this.normalizeWhatsAppNumber(from);
       const conversationId = `${businessId}-${phone}`;
@@ -127,8 +177,8 @@ export class WhatsAppHandler {
         logger.warn('Failed to cache JID mapping', { error, phone, from });
       }
 
-      logger.info('Processing WhatsApp message', { 
-        businessId, 
+      logger.info('Processing WhatsApp message', {
+        businessId,
         phone,
         from,
         conversationId,
@@ -316,6 +366,21 @@ export class WhatsAppHandler {
           });
           return;
         }
+
+        // FAST PATH: opt-in after a scope-guard block ("¿Querés hacer una reserva?").
+        // Pure greetings (hola, buenas, etc.) are handled earlier by handleGreeting.
+        // For explicit opt-ins like "Si", "Dale", "Ok" that are NOT greetings, start
+        // the reservation flow directly without the "¡Hola!" intro, since the bot
+        // already introduced itself in the scope-guard message.
+        if (
+          isGreetingOrReservationOptInMessage(messageText) &&
+          !this.isGreetingMessage(messageText)
+        ) {
+          await ReservationService.startReservation(conversationId, businessId);
+          await this.sendWhatsAppMessage(businessId, from, '¿Cuál es tu nombre para la reserva?');
+          logger.info('Opt-in handled deterministically after scope block', { conversationId });
+          return;
+        }
       }
 
       // FAST PATH: deterministic reservation steps should not wait for AI response
@@ -353,11 +418,11 @@ export class WhatsAppHandler {
           step: draft.step,
         });
       }
-      
+
       // Get business details for context
       const business = await SupabaseService.getBusinessById(businessId);
       const businessName = business?.name || 'el restaurante';
-      
+
       // Build context
       const context: any = {
         businessId,
@@ -383,43 +448,54 @@ export class WhatsAppHandler {
             .slice()
             .reverse()
             .find((msg: any) => msg.role === 'assistant');
-          
+
           if (lastAssistantMessage) {
             const lastBotMessage = lastAssistantMessage.content.toLowerCase();
-            const isAskingForName = 
+            const isAskingForName =
               lastBotMessage.includes('¿cuál es tu nombre') ||
               lastBotMessage.includes('cuál es tu nombre') ||
               lastBotMessage.includes('tu nombre') ||
               lastBotMessage.includes('cómo te llamas');
-            
+
             const looksLikeName =
               !/^\d+$/.test(messageText.trim()) &&
               messageText.trim().length >= 2 &&
               !this.isPostReservationCourtesyMessage(messageText) &&
               !this.isReservationRequest(messageText) &&
               this.couldBeAName(messageText);
-            
+
             if (isAskingForName && looksLikeName) {
-              logger.info('🎬 Auto-creating reservation draft', { conversationId, businessId, userName: messageText });
-              
-              // Create draft and set customer name
               const extractedName = this.extractNameFromMessage(messageText);
+              const isValidNameAI = await this.validateNameWithAI(extractedName);
+              if (!isValidNameAI) {
+                logger.info('AI rejected name candidate in auto-creation path — re-asking', { conversationId, candidate: extractedName });
+                await this.sendWhatsAppMessage(
+                  businessId,
+                  from,
+                  'No reconocí eso como un nombre. ¿Cuál es tu nombre para la reserva?'
+                );
+                return;
+              }
+
+              logger.info('🎬 Auto-creating reservation draft', { conversationId, businessId, userName: messageText });
+
+              // Create draft and set customer name
               await ReservationService.startReservation(conversationId, businessId);
               await ReservationService.setCustomerName(conversationId, extractedName);
-              
+
               // Update local draft reference
               draft = await ReservationService.getDraft(conversationId);
-              
+
               // Send confirmation message and ask for party size immediately
               const nameConfirmMsg = `✅ Perfecto, *${extractedName}*!\n\n¿Para cuántas personas es la reserva?\n\nEjemplo: 2, 4, 6, etc.`;
               await this.sendWhatsAppMessage(businessId, from, nameConfirmMsg);
-              
+
               logger.info('✅ Draft created, name saved, and party size question sent', {
                 conversationId,
                 step: draft?.step,
                 name: draft?.customerName,
               });
-              
+
               // Skip agent response since we already sent our custom message
               return;
             }
@@ -428,7 +504,7 @@ export class WhatsAppHandler {
           logger.error('Error in auto-draft creation', { error });
         }
       }
-      
+
       // Log context before calling agent
       logger.info('Agent context snapshot', {
         conversationId,
@@ -475,8 +551,8 @@ export class WhatsAppHandler {
         logger.info('Agent response skipped (custom message sent)', { conversationId });
       }
 
-      logger.info('WhatsApp message processed successfully', { 
-        businessId, 
+      logger.info('WhatsApp message processed successfully', {
+        businessId,
         phone,
         action: agentResponse.action,
       });
@@ -542,7 +618,7 @@ export class WhatsAppHandler {
     } catch (error) {
       logger.error('Error processing action', { error, action, conversationId });
     }
-    
+
     return false; // No custom message sent, send agent response
   }
 
@@ -558,14 +634,30 @@ export class WhatsAppHandler {
     jid: string
   ): Promise<boolean> {
     try {
-      logger.info('Processing draft step', { 
-        conversationId, 
+      logger.info('Processing draft step', {
+        conversationId,
         step: draft.step,
         messageText: messageText.substring(0, 50),
       });
 
       switch (draft.step) {
         case 'name': {
+          // Guard: user responded with an affirmative ("Si", "Dale", "Ok") instead of their name.
+          // This happens when a scope-guard message is sent (e.g. specific-time rejection) that ends
+          // with "¿Querés hacer una reserva?" and the user confirms — the draft is still at step 'name'.
+          if (isGreetingOrReservationOptInMessage(messageText)) {
+            logger.info('Opt-in response received at name step — re-asking for name', {
+              conversationId,
+              messageText,
+            });
+            await this.sendWhatsAppMessage(
+              businessId,
+              jid,
+              '¿Cuál es tu nombre para continuar con la reserva?'
+            );
+            return true;
+          }
+
           const extractedName = this.extractNameCandidate(messageText);
           const partySize = this.extractPartySize(messageText);
 
@@ -578,10 +670,21 @@ export class WhatsAppHandler {
             return true;
           }
 
+          const isValidName = await this.validateNameWithAI(extractedName);
+          if (!isValidName) {
+            logger.info('AI rejected name candidate — re-asking', { conversationId, candidate: extractedName });
+            await this.sendWhatsAppMessage(
+              businessId,
+              jid,
+              'No reconocí eso como un nombre. ¿Cuál es tu nombre para la reserva?'
+            );
+            return true;
+          }
+
           logger.info('📝 Setting customer name', { conversationId, raw: messageText, extracted: extractedName });
           const updatedDraft = await ReservationService.setCustomerName(conversationId, extractedName);
-          logger.info('✅ Customer name set', { 
-            conversationId, 
+          logger.info('✅ Customer name set', {
+            conversationId,
             name: extractedName,
             nextStep: updatedDraft?.step,
           });
@@ -592,7 +695,7 @@ export class WhatsAppHandler {
             await this.createAndNotifyReservation(conversationId, businessId, jid);
             return true;
           }
-          
+
           // Send confirmation and ask for party size
           const nameConfirmMsg = `✅ Perfecto, *${extractedName}*!\n\n¿Para cuántas personas es la reserva?\n\nEjemplo: 2, 4, 6, etc.`;
           await this.sendWhatsAppMessage(businessId, jid, nameConfirmMsg);
@@ -727,7 +830,7 @@ export class WhatsAppHandler {
     } catch (error) {
       logger.error('Error processing draft step', { error, conversationId, step: draft.step });
     }
-    
+
     return false; // No custom message sent, continue with agent response
   }
 
@@ -742,7 +845,7 @@ export class WhatsAppHandler {
     try {
       // Extract normalized phone number for database storage
       const phone = this.normalizeWhatsAppNumber(jid);
-      
+
       logger.info('💾 Attempting to create reservation in Supabase', {
         conversationId,
         businessId,
@@ -781,7 +884,7 @@ export class WhatsAppHandler {
           return;
         }
 
-        logger.info('Waitlist entry created successfully', { 
+        logger.info('Waitlist entry created successfully', {
           conversationId,
           entryId: result.waitlistEntry.id,
           status: result.waitlistEntry.status,
@@ -790,11 +893,11 @@ export class WhatsAppHandler {
 
         // Build and send confirmation message to customer via WhatsApp
         const entry = result.waitlistEntry;
-        
+
         // Get business configuration for conditional messaging
         const business = await SupabaseService.getBusinessById(businessId);
         const autoAccept = business?.auto_accept_reservations ?? false;
-        
+
         logger.info('Building confirmation message', {
           businessId,
           autoAccept,
@@ -867,18 +970,18 @@ export class WhatsAppHandler {
           const redis = await import('../config/redis');
           const client = redis.RedisConfig.getClient();
           const notificationKey = `notifications:${businessId}:reservation`;
-          
+
           const notification = {
             type: 'reservation_created',
             waitlistEntry: result.waitlistEntry,
             message: 'Nueva reserva creada desde WhatsApp',
             timestamp: new Date().toISOString(),
           };
-          
+
           await client.lPush(notificationKey, JSON.stringify(notification));
           await client.lTrim(notificationKey, 0, 99); // Keep last 100 notifications
           await client.expire(notificationKey, 7 * 24 * 60 * 60); // 7 days expiration
-          
+
           logger.info('Reservation notification stored in Redis', { businessId });
         } catch (error) {
           logger.error('Failed to store reservation notification', { businessId, error });
@@ -886,7 +989,7 @@ export class WhatsAppHandler {
       } else {
         // Failed to create reservation - send error message to user
         logger.error('Failed to create reservation', { conversationId, error: result.error });
-        
+
         const errorMessage = '❌ Lo siento, hubo un problema al crear tu reserva. Por favor intenta de nuevo o contacta con el restaurante.';
         await this.sendWhatsAppMessage(businessId, jid, errorMessage);
       }
@@ -920,7 +1023,7 @@ export class WhatsAppHandler {
       }
 
       const success = await this.baileysService.sendMessage(businessId, to, message);
-      
+
       if (!success) {
         logger.error('Failed to send WhatsApp message', { businessId, to });
         return;
@@ -1208,6 +1311,46 @@ export class WhatsAppHandler {
     return !sentenceMarkers.some(marker => lower.includes(marker));
   }
 
+  private async validateNameWithAI(candidate: string): Promise<boolean> {
+    try {
+      const systemPrompt =
+        'Eres un validador estricto de nombres de personas reales. ' +
+        'Responde ÚNICAMENTE con "SI" si el texto es claramente un nombre propio de persona, ' +
+        'o "NO" si no lo es (frases, exclamaciones, apodos no convencionales, etc).';
+      const response = await ollamaService.chat(
+        [{ role: 'user', content: `¿Es "${candidate}" un nombre de persona?` }],
+        systemPrompt,
+        { temperature: 0, num_predict: 5 } as any
+      );
+      // Normalize Unicode diacritics ("Sí" → "Si") so that Spanish affirmatives
+      // with accent ("Sí", "SÍ") are recognized the same as "SI".
+      const normalized = response
+        .trim()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toUpperCase();
+      const isValid = normalized.startsWith('SI');
+      const isClearNo = normalized.startsWith('NO');
+      // If Ollama returned an unexpected response (e.g. fallback "Disculpa..." when
+      // the service is unavailable), default to accepting the name.
+      if (!isValid && !isClearNo) {
+        logger.warn('AI name validation returned unexpected response — accepting by default', {
+          candidate,
+          rawResponse: response.trim(),
+        });
+        return true;
+      }
+      logger.debug('AI name validation result', { candidate, isValid, rawResponse: response.trim() });
+      return isValid;
+    } catch (error) {
+      logger.warn('AI name validation failed — falling back to accept', {
+        candidate,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+      return true;
+    }
+  }
+
   private isCancellationIntent(text: string): boolean {
     const lower = this.normalizeCourtesyText(text);
     return (
@@ -1228,7 +1371,7 @@ export class WhatsAppHandler {
     const keywords = [
       'cancelar', 'cancela', 'cancel',
       'salir', 'quiero salir', 'me quiero ir',
-      'stop', 'para', 'detener',
+      'stop', 'detener',
       'inicio', 'menu', 'volver', 'atras', 'restart',
       'no quiero', 'dejalo', 'olvidalo', 'olvidame', 'olvida',
       'no importa', 'no gracias', 'dejame', 'no hacer',
@@ -1677,8 +1820,8 @@ export class WhatsAppHandler {
           businessId,
           jid,
           `⚠️ Ya tenés una reserva activa para hoy${displayCodeText} con estado *${statusLabel}*.` +
-            `\n\nNo puedo crear una nueva hasta que la actual finalice o se cancele.` +
-            `\n\nSi querés, respondé *CANCELAR* para liberar tu cupo y luego crear otra.`
+          `\n\nNo puedo crear una nueva hasta que la actual finalice o se cancele.` +
+          `\n\nSi querés, respondé *CANCELAR* para liberar tu cupo y luego crear otra.`
         );
 
         logger.info('CREATE_RESERVATION blocked by single-active-reservation policy', {
@@ -1692,7 +1835,7 @@ export class WhatsAppHandler {
 
       // Start reservation flow
       const draft = await ReservationService.startReservation(conversationId, businessId);
-      logger.info('✅ Reservation flow started', { 
+      logger.info('✅ Reservation flow started', {
         conversationId,
         draftStep: draft.step,
       });
@@ -1712,7 +1855,7 @@ export class WhatsAppHandler {
     try {
       // Extract normalized phone number for database lookups
       const phone = this.normalizeWhatsAppNumber(jid);
-      
+
       // Get or create customer
       const customer = await SupabaseService.getOrCreateCustomer(
         'Unknown',
@@ -1761,7 +1904,7 @@ export class WhatsAppHandler {
     try {
       // Extract normalized phone number for database lookups
       const phone = this.normalizeWhatsAppNumber(jid);
-      
+
       // Get customer
       const customer = await SupabaseService.getOrCreateCustomer(
         'Unknown',
@@ -1817,7 +1960,7 @@ export class WhatsAppHandler {
     try {
       // Get business details
       const business = await SupabaseService.getBusinessById(businessId);
-      
+
       if (!business) {
         logger.warn('Business not found for info request', { businessId });
         return;

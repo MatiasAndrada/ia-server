@@ -1,8 +1,13 @@
 import { OllamaConfig } from '../config/ollama';
-import { OllamaMessage, OllamaRequest, OllamaResponse } from '../types';
+import { OllamaGenerationOptions, OllamaMessage, OllamaRequest, OllamaResponse } from '../types';
 import { logger } from '../utils/logger';
 import { buildFallbackResponse } from '../utils/prompts';
 import { AxiosError } from 'axios';
+
+const DEFAULT_OLLAMA_OPTIONS: OllamaGenerationOptions = {
+  temperature: 0.7,
+  top_p: 0.9,
+};
 
 export class OllamaService {
   private maxRetries = 2;
@@ -13,7 +18,8 @@ export class OllamaService {
    */
   async chat(
     messages: OllamaMessage[],
-    systemPrompt?: string
+    systemPrompt?: string,
+    options?: OllamaGenerationOptions
   ): Promise<string> {
     const fullMessages: OllamaMessage[] = systemPrompt
       ? [{ role: 'system', content: systemPrompt }, ...messages]
@@ -27,8 +33,8 @@ export class OllamaService {
           messageCount: fullMessages.length,
         });
 
-        const response = await this.makeRequest(fullMessages);
-        
+        const response = await this.makeRequest(fullMessages, options);
+
         logger.info('Ollama response received', {
           length: response.length,
           attempt,
@@ -63,7 +69,7 @@ export class OllamaService {
   /**
    * Make the actual request to Ollama API
    */
-  private async makeRequest(messages: OllamaMessage[]): Promise<string> {
+  private async makeRequest(messages: OllamaMessage[], options?: OllamaGenerationOptions): Promise<string> {
     const client = OllamaConfig.getClient();
     const model = OllamaConfig.getModel();
 
@@ -71,10 +77,7 @@ export class OllamaService {
       model,
       messages,
       stream: false,
-      options: {
-        temperature: 0.7,
-        top_p: 0.9,
-      },
+      options: { ...DEFAULT_OLLAMA_OPTIONS, ...options },
     };
 
     try {

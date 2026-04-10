@@ -1,4 +1,4 @@
-import { AgentConfig, AgentResponse, ConversationMessage, OllamaMessage } from '../types';
+import { AgentConfig, AgentResponse, ConversationMessage, OllamaGenerationOptions, OllamaMessage } from '../types';
 import { ollamaService } from './ollama.service';
 import { RedisConfig } from '../config/redis';
 import { logger } from '../utils/logger';
@@ -95,7 +95,7 @@ class AgentService {
       }
 
       // Obtener historial de conversación si existe
-      const history = conversationId 
+      const history = conversationId
         ? await this.getConversationHistory(conversationId)
         : [];
 
@@ -118,7 +118,7 @@ class AgentService {
       if (context) {
         // Interpolar contexto en el prompt (reemplazar placeholders)
         systemPrompt = this.interpolateContext(systemPrompt, context);
-        
+
         // Agregar contexto estructurado para referencia
         if (context.businessName || context.currentStep || context.draftData) {
           const contextInfo = [];
@@ -126,15 +126,21 @@ class AgentService {
           if (context.currentStep) contextInfo.push(`Paso: ${context.currentStep}`);
           if (context.draftData?.customerName) contextInfo.push(`Cliente: ${context.draftData.customerName}`);
           if (context.draftData?.partySize) contextInfo.push(`Personas: ${context.draftData.partySize}`);
-          
+
           if (contextInfo.length > 0) {
             systemPrompt += `\n\n## Estado Actual:\n${contextInfo.join(' | ')}`;
           }
         }
       }
 
+      // Build per-agent generation options
+      const generationOptions: OllamaGenerationOptions = {};
+      if (agent.temperature !== undefined) generationOptions.temperature = agent.temperature;
+      if (agent.maxTokens !== undefined) generationOptions.num_predict = agent.maxTokens;
+      if (agent.numCtx !== undefined) generationOptions.num_ctx = agent.numCtx;
+
       // Generar respuesta con Ollama
-      const aiResponse = await ollamaService.chat(messages, systemPrompt);
+      const aiResponse = await ollamaService.chat(messages, systemPrompt, generationOptions);
 
       // Inferir acción basada en las keywords del agente
       const inferredAction = agent.actions && agent.actions.length > 0
@@ -181,9 +187,9 @@ class AgentService {
    */
   private inferAction(message: string, actions: any[]): string | null {
     const lowerMessage = message.toLowerCase();
-    
+
     // Ordenar acciones por prioridad
-    const sortedActions = [...actions].sort((a, b) => 
+    const sortedActions = [...actions].sort((a, b) =>
       (a.priority || 999) - (b.priority || 999)
     );
 
@@ -192,11 +198,11 @@ class AgentService {
       const matches = action.keywords.some((keyword: string) =>
         lowerMessage.includes(keyword.toLowerCase())
       );
-      
+
       if (matches) {
         logger.debug('Action inferred', {
           action: action.type,
-          keyword: action.keywords.find((k: string) => 
+          keyword: action.keywords.find((k: string) =>
             lowerMessage.includes(k.toLowerCase())
           )
         });
@@ -215,13 +221,13 @@ class AgentService {
       const client = RedisConfig.getClient();
       const key = `${this.HISTORY_KEY_PREFIX}${conversationId}`;
       const cached = await client.get(key);
-      
+
       if (!cached) {
         return [];
       }
 
       const history = JSON.parse(cached) as ConversationMessage[];
-      
+
       logger.debug('Conversation history retrieved', {
         conversationId,
         messageCount: history.length
@@ -247,7 +253,7 @@ class AgentService {
   ): Promise<void> {
     try {
       const history = await this.getConversationHistory(conversationId);
-      
+
       // Agregar nuevos mensajes
       const timestamp = Date.now();
       history.push(
@@ -297,7 +303,7 @@ class AgentService {
       const client = RedisConfig.getClient();
       const key = `${this.HISTORY_KEY_PREFIX}${conversationId}`;
       await client.del(key);
-      
+
       logger.info('Conversation history cleared', { conversationId });
     } catch (error) {
       logger.error('Error clearing conversation history', {
