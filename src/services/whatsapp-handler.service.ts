@@ -2,13 +2,12 @@ import { BaileysService } from './baileys.service';
 import { agentService } from './agent.service';
 import { ReservationService } from './reservation.service';
 import { SupabaseService } from './supabase.service';
-import { ollamaService } from './ollama.service';
 import { SupabaseConfig } from '../config/supabase';
 import { RedisConfig } from '../config/redis';
 import { agentRegistry } from '../agents';
 import { BaileysMessage, ReservationDraft } from '../types';
 import { logger } from '../utils/logger';
-import { evaluateReservationScope, isGreetingOrReservationOptInMessage } from '../utils/reservation-scope';
+import { evaluateReservationScope, isGreetingOrReservationOptInMessage, isObviouslyGibberish, containsProfanity } from '../utils/reservation-scope';
 
 type ActiveReservationSnapshot = {
   status: 'WAITING' | 'CONFIRMED' | 'NOTIFIED';
@@ -384,7 +383,7 @@ export class WhatsAppHandler {
       }
 
       // FAST PATH: deterministic reservation steps should not wait for AI response
-      if (draft && (draft.step === 'party_size' || draft.step === 'edit_menu')) {
+      if (draft && (draft.step === 'name' || draft.step === 'party_size' || draft.step === 'edit_menu')) {
         logger.info('⚡ Bypassing agent for deterministic draft step', {
           conversationId,
           businessId,
@@ -466,9 +465,8 @@ export class WhatsAppHandler {
 
             if (isAskingForName && looksLikeName) {
               const extractedName = this.extractNameFromMessage(messageText);
-              const isValidNameAI = await this.validateNameWithAI(extractedName);
-              if (!isValidNameAI) {
-                logger.info('AI rejected name candidate in auto-creation path — re-asking', { conversationId, candidate: extractedName });
+              if (isObviouslyGibberish(extractedName) || containsProfanity(extractedName)) {
+                logger.info('Invalid name rejected in auto-creation path — re-asking', { conversationId, candidate: extractedName });
                 await this.sendWhatsAppMessage(
                   businessId,
                   from,
@@ -670,9 +668,8 @@ export class WhatsAppHandler {
             return true;
           }
 
-          const isValidName = await this.validateNameWithAI(extractedName);
-          if (!isValidName) {
-            logger.info('AI rejected name candidate — re-asking', { conversationId, candidate: extractedName });
+          if (isObviouslyGibberish(extractedName) || containsProfanity(extractedName)) {
+            logger.info('Invalid name rejected — re-asking', { conversationId, candidate: extractedName });
             await this.sendWhatsAppMessage(
               businessId,
               jid,
@@ -1309,46 +1306,6 @@ export class WhatsAppHandler {
     ];
 
     return !sentenceMarkers.some(marker => lower.includes(marker));
-  }
-
-  private async validateNameWithAI(candidate: string): Promise<boolean> {
-    try {
-      const systemPrompt =
-        'Eres un validador estricto de nombres de personas reales. ' +
-        'Responde ÚNICAMENTE con "SI" si el texto es claramente un nombre propio de persona, ' +
-        'o "NO" si no lo es (frases, exclamaciones, apodos no convencionales, etc).';
-      const response = await ollamaService.chat(
-        [{ role: 'user', content: `¿Es "${candidate}" un nombre de persona?` }],
-        systemPrompt,
-        { temperature: 0, num_predict: 5 } as any
-      );
-      // Normalize Unicode diacritics ("Sí" → "Si") so that Spanish affirmatives
-      // with accent ("Sí", "SÍ") are recognized the same as "SI".
-      const normalized = response
-        .trim()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .toUpperCase();
-      const isValid = normalized.startsWith('SI');
-      const isClearNo = normalized.startsWith('NO');
-      // If Ollama returned an unexpected response (e.g. fallback "Disculpa..." when
-      // the service is unavailable), default to accepting the name.
-      if (!isValid && !isClearNo) {
-        logger.warn('AI name validation returned unexpected response — accepting by default', {
-          candidate,
-          rawResponse: response.trim(),
-        });
-        return true;
-      }
-      logger.debug('AI name validation result', { candidate, isValid, rawResponse: response.trim() });
-      return isValid;
-    } catch (error) {
-      logger.warn('AI name validation failed — falling back to accept', {
-        candidate,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
-      return true;
-    }
   }
 
   private isCancellationIntent(text: string): boolean {

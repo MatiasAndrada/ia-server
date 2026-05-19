@@ -109,6 +109,282 @@ export function evaluateReservationScope(
   };
 }
 
+/**
+ * Synchronous zero-latency check for obviously invalid name inputs.
+ * Catches keyboard walks (qwerty/asdf/zxcv), character spam (aaaa), no-vowel strings,
+ * and runs of 5+ consecutive consonants. Returns true when the string is clearly NOT a name.
+ */
+export function isObviouslyGibberish(name: string): boolean {
+  const trimmed = name.trim();
+  if (trimmed.length < 2 || trimmed.length > 50) return true;
+
+  const lower = trimmed.toLowerCase();
+
+  // Must contain at least one vowel
+  if (!/[aeiouáéíóúü]/i.test(lower)) return true;
+
+  // Three or more consecutive identical characters (aaaa, bbbbb, 1111)
+  if (/(.)\1{2,}/.test(lower)) return true;
+
+  // Keyboard walk patterns (rows of QWERTY layout)
+  const walks = [
+    'qwert', 'werty', 'ertyu', 'rtyui', 'tyuio', 'yuiop',
+    'asdfg', 'sdfgh', 'dfghj', 'fghjk', 'ghjkl',
+    'zxcvb', 'xcvbn', 'cvbnm',
+    'qazxs', 'wsxed', 'edcrf', 'rfvtg', 'tgbyh',
+  ];
+  if (walks.some(w => lower.includes(w))) return true;
+
+  // Five or more consecutive consonants after removing spaces/punctuation
+  const lettersOnly = lower.replace(/[^a-záéíóúüñ]/g, '');
+  if (/[^aeiouáéíóúü]{5,}/.test(lettersOnly)) return true;
+
+  return false;
+}
+
+/**
+ * Morphological roots — any word that starts with one of these (raw or after
+ * stripping intensifier prefixes) is flagged. Only roots with zero legitimate
+ * Spanish-name overlap are included.
+ */
+const PROFANITY_ROOTS = [
+  // ── Stupidity / incompetence ───────────────────────────────────────────────
+  'bolud',     // boludo/a, boludazo, reboludos, superboludísimo...
+  'pelotud',   // pelotudo/a, pelotudazo...
+  'pendej',    // pendejo/a, pendejada...
+  'tarad',     // tarado/a, taradísimo...
+  'estupid',   // estúpido/a, estupidez...
+  'imbecil',   // imbécil, imbecilísimo...
+  'mogolic',   // mogólico/a
+  'subnorm',   // subnormal/es
+  'anorm',     // anormal/es (disability slur)
+
+  // ── Disability slurs ──────────────────────────────────────────────────────
+  'mongol',    // mongolo/a, mongolito...
+  'retard',    // retardado/a, retardísimo...
+  'oligofren', // oligofrénico/a...
+
+  // ── Scatological ──────────────────────────────────────────────────────────
+  'soret',     // sorete/s, soretazo...
+  'mierd',     // mierda, mierdoso, mierdita...
+  'cagon',     // cagón/a, cagones (also exact)
+
+  // ── Body parts / sex ──────────────────────────────────────────────────────
+  'forr',      // forro/a, forrazo...
+  'pajer',     // pajero/a, pajereada...
+  'porong',    // poronga/o (Argentine: big penis)
+  'garch',     // garcha, garcho, garchado, garchar (Argentine: sex)
+  'pijud',     // pijudo/a (big dick)
+  'vergud',    // vergudo/a
+  'conchud',   // conchudo/a
+];
+
+/**
+ * Words/phrases matched as complete tokens with word-boundary logic.
+ * Grouped by category. Add new entries here — no morphology needed.
+ */
+const PROFANITY_EXACT = [
+  // ── Abbreviations & codes ─────────────────────────────────────────────────
+  'hdp', 'hijodeputa', 'hijo de puta', 'hijueputa', 'hijuepucha',
+  'hdc', 'hdpm', 'hdpq',
+  'pt', 'ptm', 'ptm7',                     // puta / puta tu madre
+  'ctm', 'cstm',                           // concha tu madre
+  'rctm',                                  // reconcha tu madre
+
+  // ── Insultos centrales ────────────────────────────────────────────────────
+  'puto', 'puta', 'putas', 'putos',
+  'putito', 'putita', 'putona', 'puton', 'putisimo', 'putaza',
+  'cagon', 'cagona', 'cagones', 'cagada', 'cagado', 'cagadera',
+  'mierda', 'mierdera',                    // root "mierd" cubre variantes
+  'concha', 'la concha', 'concha tu madre', 'la reconcha',
+  'la concha de tu madre', 'concha de tu madre',
+  'culo', 'culos', 'culito', 'culazo', 'culudo', 'culuda',
+  'pija', 'pijon', 'pijazo',
+  'verga', 'vergon', 'vergaza',
+  'ojete', 'ojetes', 'ojetazo',
+  'rompepelotas', 'rompehuevos',
+  'sorete', 'soretes',                     // root "soret" cubre variantes
+  'pelotazo',                              // pelotud no alcanza a pelotazo solo
+
+  // ── Genitales / actos sexuales ────────────────────────────────────────────
+  'pete', 'petero', 'petera', 'petear', 'peteador',
+  'culiado', 'culiada', 'culiao', 'culiar',
+  'cogido', 'cogida', 'coger', 'cogete',
+  'garchado', 'garchada', 'garchar', 'garcho',  // root "garch" cubre variantes
+  'cornudo', 'cornuda', 'cornudazo',
+  'chupapija', 'mamapija', 'tragapija',
+  'chupaculos', 'lambeculos',
+  'nabo', 'nabon',                         // también idiotez
+  'poronga', 'porongo',                    // root "porong" cubre variantes
+  'pito',                                  // pene (arg informal)
+  'huevon', 'huevona', 'huevones',         // Latin American: idiot
+  'pelota', 'pelotas',                     // testículos / "rompeme las pelotas"
+  'pajero', 'pajera',                      // root "pajer" cubre variantes
+  'prostituta', 'prostituto',
+  'yiro', 'yira', 'yirar',                 // lunfardo: prostituta
+  'ramera',
+  'puta madre', 'la puta madre',
+
+  // ── Slurs LGBTQ+ ──────────────────────────────────────────────────────────
+  'trolo', 'trola', 'trolos', 'trolas', 'trolazo',
+  'marica', 'maricas', 'maricon', 'maricona', 'maricones', 'mariconazo',
+  'tortillera', 'tortillero',
+  'invertido', 'invertida',
+  'sarasa',                                // lunfardo: gay
+  'rosca', 'rosquete',                     // gay slur (Argentine)
+
+  // ── Insultos físicos ──────────────────────────────────────────────────────
+  'gordo', 'gorda', 'gordos', 'gordas',
+  'gordito', 'gordita', 'gordota', 'gordiflona', 'gordinflon',
+  'flacucho', 'flacucha',                  // derogatory skinny
+  'feo', 'fea', 'feos', 'feas', 'feote', 'feota',
+  'petiso', 'petisa', 'petisito',
+  'enano', 'enana', 'enanos', 'enanas',
+  'bizco', 'bizca', 'vizco', 'vizca',
+  'cojo', 'coja', 'cojos', 'cojas',
+  'tullido', 'tullida',
+  'pelado', 'pelada',                      // calvo usado peyorativamente
+  'seboso', 'sebosa',                      // greasy
+  'mugriento', 'mugrienta',
+  'asqueroso', 'asquerosa',
+  'cochino', 'cochina',
+  'puerco', 'puerca',
+  'podrido', 'podrida',
+  'apestoso', 'apestosa',
+
+  // ── Slurs de discapacidad ─────────────────────────────────────────────────
+  'down',
+  'autista',
+  'deficiente', 'deficientes',
+  'discapacitado', 'discapacitada',
+  'invalido', 'invalida',
+  'lisiado', 'lisiada',
+  'minusvalido', 'minusvalida',
+
+  // ── Insultos de inteligencia ──────────────────────────────────────────────
+  'zonzo', 'zonza', 'zonzos', 'zonzas',
+  'pavote', 'pavota',
+  'ganso', 'gansa',                        // idiota
+  'sota',                                  // idiota (lunfardo)
+  'pelela',                                // bacinilla / idiota
+  'baboso', 'babosa',                      // baver/creep
+  'cretino', 'cretina',
+  'inutil', 'inutiles',
+  'animal',                                // usado como insulto
+  'bestia',
+  'burro', 'burra',
+  'asno', 'asna',
+  'mula',                                  // idiota
+  'torpe', 'torpes',
+  'lerdo', 'lerda',
+  'bruto', 'bruta',
+  'ignorante', 'ignorantes',
+
+  // ── Insultos sociales / morales ───────────────────────────────────────────
+  'chorro', 'chorra', 'chorros', 'chorras',
+  'villero', 'villera', 'villeros', 'villeras',
+  'grasa', 'grasada', 'grasoso', 'grasosa',
+  'turro', 'turra', 'turros', 'turras',
+  'ortiva', 'ortivo', 'ortivas',
+  'buchon', 'buchona', 'buchones',
+  'otario', 'otaria', 'otarios',
+  'chabeta', 'chabeton',
+  'fracasado', 'fracasada',
+  'miserable', 'miserables',
+  'desgraciado', 'desgraciada',
+  'maldito', 'maldita',
+  'bastardo', 'bastarda',
+  'malparido', 'malparida',
+  'lacra',                                 // escoria
+  'escoria',
+  'gusano', 'gusana',                      // worm / scum
+  'rata', 'raton',                         // cheapskate / thief
+  'tramposo', 'tramposa',
+  'mentiroso', 'mentirosa',
+  'hipocrita',
+  'cobarde', 'cobardes',
+  'cageta',                                // cobarde (lunfardo)
+  'garca',                                 // traicionero (lunfardo)
+  'buchon', 'soplona', 'soplonazo',
+  'vengativo', 'vengativa',
+
+  // ── Animal insults ────────────────────────────────────────────────────────
+  'chancho', 'chancha', 'chanchito',
+  'vaca', 'vacas',
+  'zorra', 'zorras',
+  'perra', 'perras',
+  'cabron', 'cabrona', 'cabrones',
+  'perro', 'perros',                       // usado peyorativamente como insulto
+  'sapo',                                  // soplón en Argentina
+  'cucaracha',
+  'bicho',                                 // insulto vulgar
+
+  // ── Inglés ────────────────────────────────────────────────────────────────
+  'fuck', 'fucking', 'fucked', 'fucker', 'fuckface', 'motherfucker',
+  'shit', 'shithead', 'bullshit',
+  'asshole', 'ass',
+  'bitch', 'bitches', 'son of a bitch',
+  'cunt',
+  'bastard',
+  'dickhead', 'dick',
+  'cock', 'cocksucker',
+  'whore',
+  'nigger', 'nigga',
+  'faggot', 'fag',
+  'retard',                                // root "retard" cubre variantes
+  'loser', 'losers',
+  'freak',
+  'moron', 'morons',
+  'idiot', 'idiots',
+  'jerk',
+  'creep',
+  'scum',
+];
+
+function normalizeProfanityText(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Returns true if the name contains a profane or offensive word.
+ *
+ * Uses two strategies:
+ *  1. Root/stem matching — covers all morphological variants of core Argentine
+ *     insults (inflections, augmentatives, diminutives, superlatives, re- prefix)
+ *     without having to enumerate every form.
+ *  2. Exact word-boundary matching — for words whose roots are too short to be safe.
+ *
+ * Both run synchronously at 0ms — no AI call required.
+ */
+export function containsProfanity(name: string): boolean {
+  const normalized = normalizeProfanityText(name);
+  const tokens = normalized.split(' ');
+
+  // Strip Argentine intensifier prefixes before root check so that
+  // "reboludos", "requeteboludo", "superboludo" etc. are all caught.
+  const INTENSIFIER_PREFIXES = /^(requete|recontra|super|mega|cien|re)/;
+  const stripped = tokens.map(t => t.replace(INTENSIFIER_PREFIXES, ''));
+
+  // Root check: any token (raw or de-prefixed) starting with a known offensive stem
+  if (PROFANITY_ROOTS.some(root =>
+    tokens.some(t => t.startsWith(root)) ||
+    stripped.some(t => t.startsWith(root))
+  )) {
+    return true;
+  }
+
+  // Exact check: full offensive word present as a standalone token
+  return PROFANITY_EXACT.some(word => {
+    const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(^|\\s)${escaped}(\\s|$)`).test(normalized);
+  });
+}
 export function looksLikePersonName(text: string): boolean {
   const trimmed = text.trim();
   const words = trimmed.split(/\s+/);

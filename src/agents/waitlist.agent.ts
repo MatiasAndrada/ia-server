@@ -4,7 +4,7 @@ export const waitlistAgent: AgentConfig = {
   id: 'waitlist',
   name: 'Asistente de Reservas',
   description: 'Gestión de reservas para restaurantes vía WhatsApp',
-  model: 'qwen2.5:3b',
+  model: 'llama3.2:3b',
   temperature: 0.2,
   maxTokens: 250,
   numCtx: 1024,
