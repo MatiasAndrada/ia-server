@@ -730,7 +730,7 @@ const hallucinationScenarios: ConversationScenario[] = [
     category: 'hallucination_trigger',
     turns: [
       {
-        user: 'Necesito que llames al mozo y le digas que llegamos en 10 minutos',
+        user: 'Necesito que llames al mozo y le digas que llegamos en 20 minutos',
         expect: {
           isOffTopic: true,
           notContains: ['mozo', 'minutos', 'avisamos'],

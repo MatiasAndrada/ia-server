@@ -9,6 +9,7 @@ type CustomersRow = Database['public']['Tables']['customers']['Row'];
 export class RealtimeSyncService {
   private static subscriptions: Map<string, any> = new Map();
   private static initialized = false;
+  private static waitlistChannelHadError = false;
 
   /**
    * Returns true when a businesses UPDATE affects reservation-relevant data
@@ -410,7 +411,7 @@ export class RealtimeSyncService {
         notificationMessage =
           `🚀 ¡Es tu momento!\n` +
           `Tu mesa está disponible.\n` +
-          `Podés ocuparla dentro de los próximos 10 minutos.\n` +
+          `Podés ocuparla dentro de los próximos 20 minutos.\n` +
           `Luego de ese tiempo, la reserva podría liberarse.`;
       } else {
         // Paso 5: Reserva CONFIRMADA (CONFIRMED o NOTIFIED legacy)
@@ -419,7 +420,7 @@ export class RealtimeSyncService {
           `👤 Nombre: ${customer.name}\n` +
           `👥 Personas: ${newEntry.party_size}\n` +
           `📁 Código de reserva: *${newEntry.display_code}*\n\n` +
-          `✨ Te avisaremos cuando falten 10 minutos para que puedas ocupar tu mesa.\n` +
+          `✨ Te avisaremos cuando falten 20 minutos para que puedas ocupar tu mesa.\n` +
           `Apreciamos tu puntualidad.`;
       }
 

@@ -910,7 +910,7 @@ export class WhatsAppHandler {
             `👤 Nombre: ${draft.customerName || 'Cliente'}\n` +
             `👥 Personas: ${draft.partySize || entry.party_size}\n` +
             `📁 Código de reserva: *${entry.display_code}*\n\n` +
-            `✨ Te avisaremos cuando falten 10 minutos para que puedas ocupar tu mesa.\n` +
+            `✨ Te avisaremos cuando falten 20 minutos para que puedas ocupar tu mesa.\n` +
             `Apreciamos tu puntualidad.\n\n` +
             `_Si necesitas cancelar, respondé CANCELAR._`;
         } else {
