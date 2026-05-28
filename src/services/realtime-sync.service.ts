@@ -166,9 +166,10 @@ export class RealtimeSyncService {
               source: payload?.new?.source,
               status: payload?.new?.status,
             });
-            if (payload?.new?.source === 'DASHBOARD') {
-              await this.handlePanelInsertNotification(payload);
-            }
+            // Handle DASHBOARD inserts directly.
+            // For AI_CHAT inserts the WhatsApp handler already sent the confirmation;
+            // only use realtime as a fallback if that send was missed (dedup check).
+            await this.handleNewEntryNotification(payload);
           }
         )
         .on(
@@ -214,25 +215,29 @@ export class RealtimeSyncService {
   }
 
   /**
-   * Called when the panel creates a reservation (INSERT, source=PANEL).
-   * Sends a WhatsApp confirmation with message tailored to the status:
-   *   - WAITING: reserva registrada, se avisará cuando la mesa esté disponible
-   *   - SEATED:  mesa asignada, bienvenido
+   * Called on every waitlist_entries INSERT.
+   * Sends a WhatsApp notification appropriate for the entry status.
+   * Uses a unified dedup key so that if the WhatsApp handler already sent the
+   * message (AI_CHAT flow), the realtime subscriber skips it gracefully.
    */
-  private static async handlePanelInsertNotification(payload: any): Promise<void> {
+  private static async handleNewEntryNotification(payload: any): Promise<void> {
     try {
       const entry = payload?.new;
       if (!entry?.id || !entry?.customer_id || !entry?.business_id) {
-        logger.warn('⚠️ [REALTIME] Panel INSERT missing required fields', { payload });
+        logger.warn('⚠️ [REALTIME] INSERT missing required fields', { payload });
         return;
       }
 
-      const dedupKey = `wa:panel:created:${entry.id}`;
+      // Unified dedup key shared with the WhatsApp handler's createAndNotifyReservation
+      const dedupKey = `wa:created:${entry.id}`;
 
       if (RedisConfig.isReady()) {
         const alreadySent = await RedisConfig.getClient().get(dedupKey);
         if (alreadySent) {
-          logger.info('⏭️ [REALTIME] Skipping duplicate panel INSERT notification', { entryId: entry.id });
+          logger.info('⏭️ [REALTIME] Skipping INSERT notification — already sent by handler', {
+            entryId: entry.id,
+            source: entry.source,
+          });
           return;
         }
       }
@@ -247,7 +252,7 @@ export class RealtimeSyncService {
         .single();
 
       if (customerError || !customerData) {
-        logger.error('❌ [REALTIME] Customer not found for panel INSERT notification', {
+        logger.error('❌ [REALTIME] Customer not found for INSERT notification', {
           customerId: entry.customer_id,
           error: customerError,
         });
@@ -262,14 +267,24 @@ export class RealtimeSyncService {
           `✅ ¡Bienvenido/a, ${customer.name}!\n\n` +
           `Tu mesa ha sido asignada. ¡Que disfrutes tu visita! 🍽️\n` +
           `📁 Código de reserva: *${entry.display_code}*`;
+      } else if (entry.status === 'CONFIRMED' || entry.status === 'NOTIFIED') {
+        notificationMessage =
+          `✅ ¡Tu reserva está CONFIRMADA!\n\n` +
+          `👤 Nombre: ${customer.name}\n` +
+          `👥 Personas: ${entry.party_size}\n` +
+          `📁 Código de reserva: *${entry.display_code}*\n\n` +
+          `✨ Te avisaremos cuando falten 20 minutos para que puedas ocupar tu mesa.\n` +
+          `Apreciamos tu puntualidad.\n\n` +
+          `_Si necesitas cancelar, respondé CANCELAR._`;
       } else {
-        // WAITING
+        // WAITING — requiere confirmación manual del operador
         notificationMessage =
           `✅ ¡Tu reserva ha sido registrada!\n\n` +
           `👤 Nombre: ${customer.name}\n` +
           `👥 Personas: ${entry.party_size}\n` +
           `📁 Código de reserva: *${entry.display_code}*\n\n` +
-          `Te avisaremos cuando tu mesa esté disponible.`;
+          `⏰ Te notificaremos cuando el restaurante confirme tu reserva.\n\n` +
+          `_Si necesitas cancelar, respondé CANCELAR._`;
       }
 
       let recipientJid = customer.phone;
@@ -286,24 +301,26 @@ export class RealtimeSyncService {
       const sent = await baileys.sendMessage(entry.business_id, recipientJid, notificationMessage);
 
       if (sent) {
-        logger.info('✅ [REALTIME] Panel INSERT notification sent', {
+        logger.info('✅ [REALTIME] INSERT notification sent', {
           entryId: entry.id,
           businessId: entry.business_id,
-          phone: customer.phone,
+          source: entry.source,
           status: entry.status,
+          phone: customer.phone,
         });
         if (RedisConfig.isReady()) {
           await RedisConfig.getClient().setEx(dedupKey, 86400, '1');
         }
       } else {
-        logger.error('❌ [REALTIME] Failed to send panel INSERT notification', {
+        logger.error('❌ [REALTIME] Failed to send INSERT notification', {
           entryId: entry.id,
           businessId: entry.business_id,
+          source: entry.source,
           phone: customer.phone,
         });
       }
     } catch (error) {
-      logger.error('❌ [REALTIME] Error in handlePanelInsertNotification', {
+      logger.error('❌ [REALTIME] Error in handleNewEntryNotification', {
         error,
         errorMessage: error instanceof Error ? error.message : 'Unknown error',
       });
@@ -344,27 +361,26 @@ export class RealtimeSyncService {
         }
       }
 
-      // Recover missed panel INSERTs (WAITING / SEATED)
-      const { data: panelEntries, error: panelError } = await supabaseClient
+      // Recover missed INSERT notifications for any source (DASHBOARD or AI_CHAT)
+      const { data: newEntries, error: newEntriesError } = await supabaseClient
         .from('waitlist_entries')
         .select('*')
-        .eq('source', 'DASHBOARD')
-        .in('status', ['WAITING', 'SEATED'])
+        .in('status', ['WAITING', 'CONFIRMED', 'SEATED'])
         .gte('created_at', twoHoursAgo);
 
-      if (panelError) {
-        logger.error('❌ [RECOVERY] Failed to query panel entries', { error: panelError });
-      } else if (panelEntries && panelEntries.length > 0) {
-        logger.info(`🔍 [RECOVERY] Found ${panelEntries.length} recent PANEL entries to check`);
-        for (const entry of panelEntries) {
-          const dedupKey = `wa:panel:created:${entry.id}`;
+      if (newEntriesError) {
+        logger.error('❌ [RECOVERY] Failed to query new entries', { error: newEntriesError });
+      } else if (newEntries && newEntries.length > 0) {
+        logger.info(`🔍 [RECOVERY] Found ${newEntries.length} recent entries to check for missed INSERT notifications`);
+        for (const entry of newEntries) {
+          const dedupKey = `wa:created:${entry.id}`;
           let alreadySent = false;
           if (RedisConfig.isReady()) {
             alreadySent = !!(await RedisConfig.getClient().get(dedupKey));
           }
           if (!alreadySent) {
-            logger.info('🔔 [RECOVERY] Sending missed panel INSERT notification', { entryId: entry.id, status: entry.status });
-            await this.handlePanelInsertNotification({ new: entry });
+            logger.info('🔔 [RECOVERY] Sending missed INSERT notification', { entryId: entry.id, source: entry.source, status: entry.status });
+            await this.handleNewEntryNotification({ new: entry });
           }
         }
       }

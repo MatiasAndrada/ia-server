@@ -891,20 +891,15 @@ export class WhatsAppHandler {
         // Build and send confirmation message to customer via WhatsApp
         const entry = result.waitlistEntry;
 
-        // Get business configuration for conditional messaging
-        const business = await SupabaseService.getBusinessById(businessId);
-        const autoAccept = business?.auto_accept_reservations ?? false;
-
         logger.info('Building confirmation message', {
           businessId,
-          autoAccept,
           status: entry.status,
           displayCode: entry.display_code,
         });
 
         let confirmationMessage: string;
 
-        if (autoAccept && (entry.status === 'CONFIRMED' || entry.status === 'NOTIFIED')) {
+        if (entry.status === 'CONFIRMED' || entry.status === 'NOTIFIED') {
           confirmationMessage =
             `✅ ¡Tu reserva está CONFIRMADA!\n\n` +
             `👤 Nombre: ${draft.customerName || 'Cliente'}\n` +
@@ -914,12 +909,13 @@ export class WhatsAppHandler {
             `Apreciamos tu puntualidad.\n\n` +
             `_Si necesitas cancelar, respondé CANCELAR._`;
         } else {
+          // WAITING — el operador debe confirmar manualmente
           confirmationMessage =
             `⏳ *Reserva RECIBIDA*\n\n` +
             `👤 Nombre: ${draft.customerName || 'Cliente'}\n` +
             `👥 Personas: ${draft.partySize || entry.party_size}\n` +
             `📁 Código: *${entry.display_code}*\n\n` +
-            `⏰ Le notificaremos cuando el restaurante confirme su reserva.\n\n` +
+            `⏰ Te notificaremos cuando el restaurante confirme tu reserva.\n\n` +
             `_Si necesitas cancelar, respondé CANCELAR._`;
         }
 
@@ -927,7 +923,6 @@ export class WhatsAppHandler {
           businessId,
           jid,
           phone,
-          autoAccept,
           status: entry.status,
           displayCode: entry.display_code,
           messagePreview: confirmationMessage.substring(0, 100),
@@ -935,23 +930,25 @@ export class WhatsAppHandler {
 
         await this.sendWhatsAppMessage(businessId, jid, confirmationMessage);
 
-        // Mark dedup key only when reservation is already confirmed/notified.
-        // Do not pre-mark CONFIRMED for WAITING entries, otherwise realtime
-        // status transitions (WAITING -> CONFIRMED) will be skipped.
-        if (entry.status === 'CONFIRMED' || entry.status === 'NOTIFIED') {
-          try {
-            if (RedisConfig.isReady()) {
-              const redisClient = RedisConfig.getClient();
+        // Mark dedup keys after sending:
+        // - For CONFIRMED/NOTIFIED: short-lived key (90s) to prevent realtime duplicate.
+        // - For WAITING: mark as "creation notification sent" so realtime fallback skips it.
+        try {
+          if (RedisConfig.isReady()) {
+            const redisClient = RedisConfig.getClient();
+            if (entry.status === 'CONFIRMED' || entry.status === 'NOTIFIED') {
               await redisClient.setEx(`wa:status:sent:${entry.id}:${entry.status}`, 90, '1');
             }
-          } catch (error) {
-            logger.warn('Failed to mark status dedup key', {
-              businessId,
-              entryId: entry.id,
-              status: entry.status,
-              error,
-            });
+            // Always mark initial creation notification so realtime subscriber doesn't duplicate it
+            await redisClient.setEx(`wa:created:${entry.id}`, 86400, '1');
           }
+        } catch (error) {
+          logger.warn('Failed to mark notification dedup keys', {
+            businessId,
+            entryId: entry.id,
+            status: entry.status,
+            error,
+          });
         }
 
         logger.info('✅ Confirmation message sent successfully to customer', {
