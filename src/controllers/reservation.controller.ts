@@ -73,6 +73,7 @@ export async function createReservationHandler(req: Request, res: Response) {
       customerPhone,
       partySize,
       tableId,
+      source: 'DASHBOARD',
     });
 
     if (!result.success) {

@@ -340,7 +340,7 @@ export class SupabaseService {
         party_size: request.partySize,
         display_code: displayCode,
         status: initialStatus,
-        source: 'AI_CHAT',
+        source: request.source ?? 'AI_CHAT',
         table_id: tableId,
         ...(confirmedAt ? { confirmed_at: confirmedAt } : {}),
       };

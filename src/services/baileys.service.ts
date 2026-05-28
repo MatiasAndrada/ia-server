@@ -745,13 +745,60 @@ export class BaileysService {
   /**
    * Send a message
    */
+  /**
+   * Resolves a phone number to the correct WhatsApp JID using onWhatsApp().
+   * Falls back to constructing the JID manually if the lookup fails.
+   * Results are cached in Redis for 7 days.
+   */
+  async resolveJid(businessId: string, phone: string): Promise<string> {
+    // If already a full JID, return as-is
+    if (phone.includes('@')) return phone;
+
+    const normalized = phone.replace(/^\+/, '');
+    const cacheKey = `jid:${businessId}:${phone}`;
+
+    // Check Redis cache first
+    try {
+      if (RedisConfig.isReady()) {
+        const cached = await RedisConfig.getClient().get(cacheKey);
+        if (cached) {
+          logger.info('✅ [JID] Using cached JID', { phone, jid: cached });
+          return cached;
+        }
+      }
+    } catch (_) { /* ignore cache errors */ }
+
+    // Ask WhatsApp for the real JID
+    try {
+      const sock = this.sessions.get(businessId);
+      if (sock && this.isSessionConnected(businessId)) {
+        const [result] = await sock.onWhatsApp(normalized);
+        if (result?.exists && result?.jid) {
+          logger.info('✅ [JID] Resolved via onWhatsApp', { phone, jid: result.jid });
+          try {
+            if (RedisConfig.isReady()) {
+              await RedisConfig.getClient().setEx(cacheKey, 7 * 24 * 3600, result.jid);
+            }
+          } catch (_) { /* ignore cache errors */ }
+          return result.jid;
+        }
+        logger.warn('⚠️ [JID] Number not found on WhatsApp', { phone, normalized });
+      }
+    } catch (error) {
+      logger.warn('⚠️ [JID] onWhatsApp lookup failed, falling back to manual JID', { phone, error });
+    }
+
+    // Fallback: construct JID manually
+    return `${normalized}@s.whatsapp.net`;
+  }
+
   async sendMessage(businessId: string, to: string, message: string): Promise<boolean> {
     try {
       // Ensure Baileys module is loaded
       await loadBaileys();
-      
+
       const sock = this.sessions.get(businessId);
-      
+
       if (!sock) {
         logger.error('Session not found', { businessId });
         return false;
@@ -762,8 +809,8 @@ export class BaileysService {
         return false;
       }
 
-      // Ensure number has @s.whatsapp.net
-      const jid = to.includes('@') ? to : `${to}@s.whatsapp.net`;
+      // Resolve to the correct WhatsApp JID (handles Argentine mobile 9-prefix, @lid, etc.)
+      const jid = await this.resolveJid(businessId, to);
 
       logger.info('🚀 Attempting to send message via Baileys', {
         businessId,
@@ -772,7 +819,11 @@ export class BaileysService {
         messageLength: message.length,
       });
 
-      const result = await sock.sendMessage(jid, { text: message });
+      const sendPromise = sock.sendMessage(jid, { text: message });
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('sendMessage timeout after 15s')), 15000)
+      );
+      const result = await Promise.race([sendPromise, timeoutPromise]);
       this.rememberOutboundMessageId(businessId, result?.key?.id);
 
       logger.info('✅ Message sent successfully via Baileys', { 

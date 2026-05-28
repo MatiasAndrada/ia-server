@@ -307,6 +307,7 @@ export interface CreateReservationRequest {
   customerPhone: string;
   partySize: number;
   tableId?: string;
+  source?: 'AI_CHAT' | 'DASHBOARD';
 }
 
 export interface CreateReservationResponse {

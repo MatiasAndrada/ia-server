@@ -141,14 +141,36 @@ export class RealtimeSyncService {
   }
 
   /**
-   * Subscribe to waitlist_entries table changes for auto-notifications
+   * Subscribe to waitlist_entries table changes for auto-notifications.
+   * Handles:
+   *   - INSERT from panel (source = PANEL, status WAITING or SEATED): sends reservation confirmation
+   *   - UPDATE to CONFIRMED/NOTIFIED: sends status notification
+   * On reconnection after a CHANNEL_ERROR, runs recovery to catch missed events.
    */
   private static subscribeToWaitlistEntries(client: any): void {
     try {
-      logger.info('🔌 [REALTIME] Setting up waitlist_entries subscription for WAITING → NOTIFIED notifications...');
-      
+      logger.info('🔌 [REALTIME] Setting up waitlist_entries subscription...');
+
       const subscription = client
         .channel('public:waitlist_entries')
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'waitlist_entries',
+          },
+          async (payload: any) => {
+            logger.info('📨 [REALTIME] INSERT received on waitlist_entries', {
+              entryId: payload?.new?.id,
+              source: payload?.new?.source,
+              status: payload?.new?.status,
+            });
+            if (payload?.new?.source === 'DASHBOARD') {
+              await this.handlePanelInsertNotification(payload);
+            }
+          }
+        )
         .on(
           'postgres_changes',
           {
@@ -166,27 +188,193 @@ export class RealtimeSyncService {
         )
         .subscribe((status: string) => {
           if (status === 'SUBSCRIBED') {
-            logger.info('✅ [REALTIME] Successfully subscribed to waitlist_entries - listening for status changes!', {
+            logger.info('✅ [REALTIME] Successfully subscribed to waitlist_entries - listening for INSERT (panel) and UPDATE (status changes)', {
               channel: 'public:waitlist_entries',
-              event: 'UPDATE',
-              purpose: 'Auto-send WhatsApp notifications on WAITING → NOTIFIED',
             });
+            if (this.waitlistChannelHadError) {
+              this.waitlistChannelHadError = false;
+              logger.info('🔄 [REALTIME] Reconnected after error — starting missed-event recovery...');
+              this.recoverMissedNotifications().catch((err) =>
+                logger.error('❌ [REALTIME] Recovery failed', { error: err })
+              );
+            }
           } else if (status === 'CHANNEL_ERROR') {
-            logger.error('❌ [REALTIME] Error subscribing to waitlist_entries', {
-              status,
-            });
+            this.waitlistChannelHadError = true;
+            logger.error('❌ [REALTIME] Error subscribing to waitlist_entries', { status });
           } else {
-            logger.info('📡 [REALTIME] Waitlist subscription status update', {
-              status,
-            });
+            logger.info('📡 [REALTIME] Waitlist subscription status update', { status });
           }
         });
 
       this.subscriptions.set('waitlist_entries', subscription);
-      
       logger.info('💾 [REALTIME] Waitlist subscription stored in registry');
     } catch (error) {
       logger.error('❌ [REALTIME] Failed to subscribe to waitlist_entries', { error });
+    }
+  }
+
+  /**
+   * Called when the panel creates a reservation (INSERT, source=PANEL).
+   * Sends a WhatsApp confirmation with message tailored to the status:
+   *   - WAITING: reserva registrada, se avisará cuando la mesa esté disponible
+   *   - SEATED:  mesa asignada, bienvenido
+   */
+  private static async handlePanelInsertNotification(payload: any): Promise<void> {
+    try {
+      const entry = payload?.new;
+      if (!entry?.id || !entry?.customer_id || !entry?.business_id) {
+        logger.warn('⚠️ [REALTIME] Panel INSERT missing required fields', { payload });
+        return;
+      }
+
+      const dedupKey = `wa:panel:created:${entry.id}`;
+
+      if (RedisConfig.isReady()) {
+        const alreadySent = await RedisConfig.getClient().get(dedupKey);
+        if (alreadySent) {
+          logger.info('⏭️ [REALTIME] Skipping duplicate panel INSERT notification', { entryId: entry.id });
+          return;
+        }
+      }
+
+      const { BaileysService } = await import('./baileys.service');
+      const supabaseClient = SupabaseConfig.getClient();
+
+      const { data: customerData, error: customerError } = await supabaseClient
+        .from('customers')
+        .select('*')
+        .eq('id', entry.customer_id)
+        .single();
+
+      if (customerError || !customerData) {
+        logger.error('❌ [REALTIME] Customer not found for panel INSERT notification', {
+          customerId: entry.customer_id,
+          error: customerError,
+        });
+        return;
+      }
+
+      const customer = customerData as CustomersRow;
+
+      let notificationMessage: string;
+      if (entry.status === 'SEATED') {
+        notificationMessage =
+          `✅ ¡Bienvenido/a, ${customer.name}!\n\n` +
+          `Tu mesa ha sido asignada. ¡Que disfrutes tu visita! 🍽️\n` +
+          `📁 Código de reserva: *${entry.display_code}*`;
+      } else {
+        // WAITING
+        notificationMessage =
+          `✅ ¡Tu reserva ha sido registrada!\n\n` +
+          `👤 Nombre: ${customer.name}\n` +
+          `👥 Personas: ${entry.party_size}\n` +
+          `📁 Código de reserva: *${entry.display_code}*\n\n` +
+          `Te avisaremos cuando tu mesa esté disponible.`;
+      }
+
+      let recipientJid = customer.phone;
+      try {
+        if (RedisConfig.isReady()) {
+          const cachedJid = await RedisConfig.getClient().get(`jid:${entry.business_id}:${customer.phone}`);
+          if (cachedJid) recipientJid = cachedJid;
+        }
+      } catch (_) {
+        /* usar phone como fallback */
+      }
+
+      const baileys = BaileysService.getInstance();
+      const sent = await baileys.sendMessage(entry.business_id, recipientJid, notificationMessage);
+
+      if (sent) {
+        logger.info('✅ [REALTIME] Panel INSERT notification sent', {
+          entryId: entry.id,
+          businessId: entry.business_id,
+          phone: customer.phone,
+          status: entry.status,
+        });
+        if (RedisConfig.isReady()) {
+          await RedisConfig.getClient().setEx(dedupKey, 86400, '1');
+        }
+      } else {
+        logger.error('❌ [REALTIME] Failed to send panel INSERT notification', {
+          entryId: entry.id,
+          businessId: entry.business_id,
+          phone: customer.phone,
+        });
+      }
+    } catch (error) {
+      logger.error('❌ [REALTIME] Error in handlePanelInsertNotification', {
+        error,
+        errorMessage: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  }
+
+  /**
+   * Queries Supabase for recent entries that missed a WhatsApp notification
+   * while the Realtime channel was down (checks Redis dedup key to avoid resends).
+   * Lookback window: 2 hours. Runs automatically after reconnection.
+   */
+  private static async recoverMissedNotifications(): Promise<void> {
+    try {
+      const supabaseClient = SupabaseConfig.getClient();
+      const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+
+      // Recover missed status UPDATEs (CONFIRMED / NOTIFIED)
+      const { data: statusEntries, error: statusError } = await supabaseClient
+        .from('waitlist_entries')
+        .select('*')
+        .in('status', ['CONFIRMED', 'NOTIFIED'])
+        .gte('updated_at', twoHoursAgo);
+
+      if (statusError) {
+        logger.error('❌ [RECOVERY] Failed to query status entries', { error: statusError });
+      } else if (statusEntries && statusEntries.length > 0) {
+        logger.info(`🔍 [RECOVERY] Found ${statusEntries.length} recent CONFIRMED/NOTIFIED entries to check`);
+        for (const entry of statusEntries) {
+          const dedupKey = `wa:status:sent:${entry.id}:${entry.status}`;
+          let alreadySent = false;
+          if (RedisConfig.isReady()) {
+            alreadySent = !!(await RedisConfig.getClient().get(dedupKey));
+          }
+          if (!alreadySent) {
+            logger.info('🔔 [RECOVERY] Sending missed status notification', { entryId: entry.id, status: entry.status });
+            await this.handleWaitlistStatusChange({ eventType: 'UPDATE', new: entry, old: { status: 'WAITING' } });
+          }
+        }
+      }
+
+      // Recover missed panel INSERTs (WAITING / SEATED)
+      const { data: panelEntries, error: panelError } = await supabaseClient
+        .from('waitlist_entries')
+        .select('*')
+        .eq('source', 'DASHBOARD')
+        .in('status', ['WAITING', 'SEATED'])
+        .gte('created_at', twoHoursAgo);
+
+      if (panelError) {
+        logger.error('❌ [RECOVERY] Failed to query panel entries', { error: panelError });
+      } else if (panelEntries && panelEntries.length > 0) {
+        logger.info(`🔍 [RECOVERY] Found ${panelEntries.length} recent PANEL entries to check`);
+        for (const entry of panelEntries) {
+          const dedupKey = `wa:panel:created:${entry.id}`;
+          let alreadySent = false;
+          if (RedisConfig.isReady()) {
+            alreadySent = !!(await RedisConfig.getClient().get(dedupKey));
+          }
+          if (!alreadySent) {
+            logger.info('🔔 [RECOVERY] Sending missed panel INSERT notification', { entryId: entry.id, status: entry.status });
+            await this.handlePanelInsertNotification({ new: entry });
+          }
+        }
+      }
+
+      logger.info('✅ [RECOVERY] Missed notification recovery complete');
+    } catch (error) {
+      logger.error('❌ [RECOVERY] Unexpected error during recovery', {
+        error,
+        errorMessage: error instanceof Error ? error.message : 'Unknown error',
+      });
     }
   }
 
@@ -502,7 +690,7 @@ export class RealtimeSyncService {
             const redisClient = RedisConfig.getClient();
             await redisClient.setEx(
               `wa:status:sent:${newEntry.id}:${newEntry.status}`,
-              300,
+              86400,
               '1'
             );
           }
