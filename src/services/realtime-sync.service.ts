@@ -283,7 +283,7 @@ export class RealtimeSyncService {
           `👤 Nombre: ${customer.name}\n` +
           `👥 Personas: ${entry.party_size}\n` +
           `📁 Código de reserva: *${entry.display_code}*\n\n` +
-          `⏰ Te notificaremos cuando el restaurante confirme tu reserva.\n\n` +
+          `⏰ Te notificaremos cuando confirmen tu reserva.\n\n` +
           `_Si necesitas cancelar, respondé CANCELAR._`;
       }
 

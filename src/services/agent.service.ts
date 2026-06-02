@@ -323,8 +323,8 @@ class AgentService {
 
     // Mapeo de placeholders antiguos al contexto nuevo
     const replacements: { [key: string]: string } = {
-      '{businessName}': context.businessName || 'Restaurante',
-      '[NOMBRE_NEGOCIO]': context.businessName || 'Restaurante',
+      '{businessName}': context.businessName || 'el local',
+      '[NOMBRE_NEGOCIO]': context.businessName || 'el local',
       '{name}': context.draftData?.customerName || 'Cliente',
       '[NOMBRE]': context.draftData?.customerName || 'Cliente',
       '{qty}': context.draftData?.partySize ? String(context.draftData.partySize) : 'la cantidad indicada',

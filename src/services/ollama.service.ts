@@ -120,15 +120,17 @@ export class OllamaService {
         };
       }
 
-      // Try a simple chat to verify model is available
+      // Verify the configured model exists in the available models list
       try {
-        await this.makeRequest([
-          { role: 'user', content: 'Hi' },
-        ]);
+        const client = OllamaConfig.getClient();
+        const response = await client.get('/api/tags', { timeout: 5000 });
+        const models: string[] = (response.data?.models ?? []).map((m: { name: string }) => m.name);
+        const modelAvailable = models.includes(model);
 
         return {
-          available: true,
+          available: modelAvailable,
           model,
+          error: modelAvailable ? undefined : `Model ${model} not found in Ollama`,
         };
       } catch (error) {
         return {

@@ -420,7 +420,7 @@ export class WhatsAppHandler {
 
       // Get business details for context
       const business = await SupabaseService.getBusinessById(businessId);
-      const businessName = business?.name || 'el restaurante';
+      const businessName = business?.name || 'el local';
 
       // Build context
       const context: any = {
@@ -807,7 +807,7 @@ export class WhatsAppHandler {
             const cancelled = await SupabaseService.updateReservationStatus(reservationId, 'CANCELLED');
             const msg = cancelled
               ? '✅ Tu reserva fue cancelada. Podés crear una nueva cuando quieras.'
-              : '❌ No se pudo cancelar la reserva. Por favor contactá al restaurante.';
+              : '❌ No se pudo cancelar la reserva. Por favor contactá al local.';
             await this.sendWhatsAppMessage(businessId, jid, msg);
             return true;
           } else {
@@ -915,7 +915,7 @@ export class WhatsAppHandler {
             `👤 Nombre: ${draft.customerName || 'Cliente'}\n` +
             `👥 Personas: ${draft.partySize || entry.party_size}\n` +
             `📁 Código: *${entry.display_code}*\n\n` +
-            `⏰ Te notificaremos cuando el restaurante confirme tu reserva.\n\n` +
+            `⏰ Te notificaremos cuando confirmen tu reserva.\n\n` +
             `_Si necesitas cancelar, respondé CANCELAR._`;
         }
 
@@ -984,7 +984,7 @@ export class WhatsAppHandler {
         // Failed to create reservation - send error message to user
         logger.error('Failed to create reservation', { conversationId, error: result.error });
 
-        const errorMessage = '❌ Lo siento, hubo un problema al crear tu reserva. Por favor intenta de nuevo o contacta con el restaurante.';
+        const errorMessage = '❌ Lo siento, hubo un problema al crear tu reserva. Por favor intenta de nuevo o contacta con el local.';
         await this.sendWhatsAppMessage(businessId, jid, errorMessage);
       }
     } catch (error) {
@@ -1444,8 +1444,8 @@ export class WhatsAppHandler {
       const response =
         activeReservation.status === 'WAITING'
           ? isGratitude
-            ? `¡De nada! 🙌\n\nTu reserva${reservationRef} sigue pendiente de confirmación. Apenas el restaurante la confirme, te avisamos por acá.`
-            : `¡Perfecto! 🙌\n\nTu reserva${reservationRef} sigue pendiente de confirmación. Apenas el restaurante la confirme, te avisamos por acá.`
+            ? `¡De nada! 🙌\n\nTu reserva${reservationRef} sigue pendiente de confirmación. Apenas confirmen, te avisamos por acá.`
+            : `¡Perfecto! 🙌\n\nTu reserva${reservationRef} sigue pendiente de confirmación. Apenas confirmen, te avisamos por acá.`
           : isGratitude
             ? `¡De nada! 🙌\n\nTu reserva${reservationRef} ya está confirmada. Si necesitas algo más, estoy para ayudarte.`
             : `¡Genial! 🙌\n\nTu reserva${reservationRef} ya está confirmada. Si necesitas algo más, estoy para ayudarte.`;
