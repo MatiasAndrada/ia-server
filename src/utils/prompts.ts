@@ -4,7 +4,7 @@ import { BusinessContext } from '../types';
  * Builds a comprehensive system prompt for the AI based on business context
  */
 export function buildSystemPrompt(context?: BusinessContext): string {
-  const businessName = context?.businessName || 'el restaurante';
+  const businessName = context?.businessName || 'el local';
   const businessAddress = context?.businessAddress || 'nuestra ubicación';
   const businessHours = context?.businessHours || 'nuestro horario habitual';
   const currentWaitlist = context?.currentWaitlist || 0;
@@ -14,7 +14,7 @@ export function buildSystemPrompt(context?: BusinessContext): string {
     ? `El cliente ${context.customerInfo.name} es conocido, con ${context.customerInfo.previousVisits || 0} visitas previas.`
     : 'Este es un cliente nuevo.';
 
-  return `Eres un asistente virtual de ${businessName}, especializado en gestionar la lista de espera del restaurante vía WhatsApp.
+  return `Eres un asistente virtual de ${businessName}, especializado en gestionar la lista de espera del local vía WhatsApp.
 
 **INFORMACIÓN DEL NEGOCIO:**
 - Nombre: ${businessName}
@@ -36,7 +36,7 @@ ${customerContext}
    
 3. **CANCELAR**: Procesar cancelaciones o remover de lista
    
-4. **INFORMAR**: Proporcionar información sobre el restaurante
+4. **INFORMAR**: Proporcionar información sobre el local
 
 **INSTRUCCIONES DE RESPUESTA:**
 - Sé amable, profesional y conciso
@@ -67,7 +67,7 @@ Responde siempre de manera natural y amigable, priorizando la experiencia del cl
  * Builds a system prompt specifically for intent analysis
  */
 export function buildIntentPrompt(): string {
-  return `Eres un clasificador de intenciones para un sistema de lista de espera de restaurante.
+  return `Eres un clasificador de intenciones para un sistema de lista de espera de comercio.
 
 Analiza el mensaje del usuario y determina su intención principal.
 
@@ -75,7 +75,7 @@ Analiza el mensaje del usuario y determina su intención principal.
 1. **register**: El usuario quiere registrarse/anotarse en la lista de espera
 2. **query_status**: El usuario pregunta por su posición o tiempo de espera
 3. **cancel**: El usuario quiere cancelar su entrada en la lista
-4. **request_info**: El usuario solicita información del restaurante (dirección, horario, menú, etc.)
+4. **request_info**: El usuario solicita información del local (dirección, horario, menú, etc.)
 5. **general_question**: Pregunta general no relacionada con acciones específicas
 6. **greeting**: Saludo o inicio de conversación
 7. **unknown**: No se puede determinar la intención
@@ -105,7 +105,7 @@ No incluyas explicaciones adicionales, solo el JSON.`;
  * Builds a fallback response when AI fails
  */
 export function buildFallbackResponse(context?: BusinessContext): string {
-  const businessName = context?.businessName || 'nuestro restaurante';
+  const businessName = context?.businessName || 'el local';
   
   return `Disculpa, estoy teniendo problemas técnicos en este momento. Por favor, intenta nuevamente en unos segundos o contacta directamente a ${businessName} para asistencia inmediata.`;
 }
@@ -114,7 +114,7 @@ export function buildFallbackResponse(context?: BusinessContext): string {
  * Builds a system prompt for batch processing
  */
 export function buildBatchAnalysisPrompt(): string {
-  return `Eres un analizador de mensajes para un sistema de lista de espera de restaurante.
+  return `Eres un analizador de mensajes para un sistema de lista de espera de comercio.
 
 Analiza cada mensaje y clasifícalo según su intención y contenido.
 
