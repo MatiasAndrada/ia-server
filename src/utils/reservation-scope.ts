@@ -1,6 +1,6 @@
 import { ReservationDraft } from '../types';
 
-export type ReservationScopeDecision = 'allow' | 'off_topic' | 'specific_time';
+export type ReservationScopeDecision = 'allow' | 'off_topic' | 'out_of_window';
 
 export interface ReservationScopeContext {
   businessName?: string;
@@ -24,9 +24,9 @@ export function buildReservationOffTopicMessage(businessName?: string): string {
   return `Hola 😊 Solo puedo ayudarte con consultas relacionadas a reservas para “${resolvedBusinessName}” en el turno actual. ¿Querés hacer una reserva?`;
 }
 
-export function buildReservationSpecificTimeMessage(businessName?: string): string {
+export function buildReservationOutOfWindowMessage(businessName?: string): string {
   const resolvedBusinessName = resolveBusinessName(businessName);
-  return `Hola 😊 Por ahora solo puedo ayudarte con reservas instantáneas para el turno actual en “${resolvedBusinessName}”. Todavía no puedo tomar reservas para una hora específica. ¿Querés hacer una reserva?`;
+  return `Hola 😊 En “${resolvedBusinessName}” por ahora solo puedo tomar reservas dentro de los próximos 7 días. ¿Querés elegir un día más cercano?`;
 }
 
 export function evaluateReservationScope(
@@ -55,10 +55,10 @@ export function evaluateReservationScope(
   const reservationRelated = isReservationRelatedMessage(normalizedMessage);
   const reservationOptIn = isReservationOptInMessage(normalizedMessage);
 
-  if (isSpecificTimeReservationIntent(trimmedMessage, normalizedMessage, hasActiveDraft, reservationRelated)) {
+  if (isOutOfWindowDateIntent(normalizedMessage, hasActiveDraft, reservationRelated)) {
     return {
-      decision: 'specific_time',
-      message: buildReservationSpecificTimeMessage(context.businessName),
+      decision: 'out_of_window',
+      message: buildReservationOutOfWindowMessage(context.businessName),
     };
   }
 
@@ -89,7 +89,7 @@ export function evaluateReservationScope(
   }
 
   if (currentStep === 'edit_menu') {
-    if (/^[12]$/.test(trimmedMessage) || reservationRelated) {
+    if (/^[123]$/.test(trimmedMessage) || reservationRelated) {
       return { decision: 'allow' };
     }
 
@@ -97,6 +97,38 @@ export function evaluateReservationScope(
       decision: 'off_topic',
       message: buildReservationOffTopicMessage(context.businessName),
     };
+  }
+
+  if (currentStep === 'schedule_choice') {
+    if (
+      /^[12]$/.test(trimmedMessage) ||
+      isInstantChoiceMessage(normalizedMessage) ||
+      hasDateOrTimeSignal(trimmedMessage, normalizedMessage) ||
+      reservationRelated
+    ) {
+      return { decision: 'allow' };
+    }
+
+    return {
+      decision: 'off_topic',
+      message: buildReservationOffTopicMessage(context.businessName),
+    };
+  }
+
+  if (currentStep === 'date' || currentStep === 'time') {
+    if (hasDateOrTimeSignal(trimmedMessage, normalizedMessage) || reservationRelated) {
+      return { decision: 'allow' };
+    }
+
+    return {
+      decision: 'off_topic',
+      message: buildReservationOffTopicMessage(context.businessName),
+    };
+  }
+
+  if (currentStep === 'confirm_slot') {
+    // Only "yes" or "no" style answers are valid here
+    return { decision: 'allow' };
   }
 
   if (isGreetingMessage(normalizedMessage) || reservationRelated || reservationOptIn) {
@@ -443,7 +475,7 @@ function resolveBusinessName(businessName?: string): string {
     : DEFAULT_BUSINESS_NAME;
 }
 
-function normalizeReservationScopeText(text: string): string {
+export function normalizeReservationScopeText(text: string): string {
   return text
     .toLowerCase()
     .normalize('NFD')
@@ -618,31 +650,71 @@ function isPromptInjectionAttempt(normalizedMessage: string): boolean {
   return patterns.some((pattern) => pattern.test(normalizedMessage));
 }
 
-function isSpecificTimeReservationIntent(
-  message: string,
-  normalizedMessage: string,
-  hasActiveDraft: boolean,
-  reservationRelated: boolean
-): boolean {
+/**
+ * Detects mentions of a clock time, a relative/weekday date reference, or both.
+ * Used to ALLOW messages at the `schedule_choice`/`date`/`time` draft steps (the
+ * customer is expected to answer with exactly this kind of content there), and as
+ * part of the (narrower) out-of-window check below.
+ */
+export function hasDateOrTimeSignal(message: string, normalizedMessage: string): boolean {
   const lowerMessage = message.toLowerCase();
   const hasClockPattern = /\b(?:[01]?\d|2[0-3])[:\.]\d{2}\b/.test(lowerMessage);
   const hasMeridiemPattern = /\b(?:1[0-2]|0?\d)\s?(?:am|pm|a\.m\.|p\.m\.)\b/.test(lowerMessage);
   const hasTimePhrasePattern = /\b(?:a\s+las|para\s+las|tipo\s+las|como\s+a\s+las|como\s+las|sobre\s+las|a\s+eso\s+de\s+las|eso\s+de\s+las)\s+\d{1,2}(?::\d{2})?\b/.test(normalizedMessage);
   const hasHourAbbreviation = /\b\d{1,2}\s?(?:hs|horas)\b/.test(normalizedMessage);
-  // Day names, relative dates, Argentine expressions (finde, a la noche, proximo, etc.)
-  const hasDateReference = /\b(?:manana|hoy|pasado\s+manana|esta\s+tarde|esta\s+noche|al\s+mediodia|otro\s+dia|otro\s+turno|mas\s+tarde|a\s+la\s+noche|a\s+la\s+tarde|a\s+la\s+manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo|finde|fin\s+de\s+semana|semana\s+que\s+viene|proximo|proxima|siguiente)\b/.test(normalizedMessage);
+  // Day names and relative dates within (or near) the supported 7-day window.
+  const hasDateReference = /\b(?:manana|hoy|pasado\s+manana|esta\s+tarde|esta\s+noche|al\s+mediodia|otro\s+dia|otro\s+turno|mas\s+tarde|a\s+la\s+noche|a\s+la\s+tarde|a\s+la\s+manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo|finde|fin\s+de\s+semana)\b/.test(normalizedMessage);
   // "9 y media", "3 y cuarto" — common Argentine half/quarter-hour expressions
   const hasHalfHour = /\b\d{1,2}\s*y\s*(media|cuarto|menos\s+(cuarto|quince))\b/.test(normalizedMessage);
+  // A bare 1-2 digit number alone (e.g. answering "21" or "9" to "¿A qué hora?")
+  const hasBareNumber = /^\d{1,2}$/.test(message.trim());
 
-  const hasSpecificTimeSignal =
+  return (
     hasClockPattern ||
     hasMeridiemPattern ||
     hasTimePhrasePattern ||
     hasHourAbbreviation ||
     hasDateReference ||
-    hasHalfHour;
+    hasHalfHour ||
+    hasBareNumber
+  );
+}
 
-  if (!hasSpecificTimeSignal) {
+/**
+ * Matches answers that mean "ahora" / "turno actual" at the `schedule_choice` step,
+ * as opposed to naming a future day.
+ */
+export function isInstantChoiceMessage(normalizedMessage: string): boolean {
+  return /\b(ahora|hoy\s+mismo|turno\s+actual|ya\s+mismo)\b/.test(normalizedMessage);
+}
+
+/**
+ * Detects references to dates clearly OUTSIDE the supported 7-day rolling window
+ * (today + next 6 days), e.g. "la semana que viene", "el mes que viene", "en 15 días".
+ * Near-term references (mañana, el viernes, etc.) are NOT flagged here — those are
+ * valid and handled by the `schedule_choice`/`date`/`time` step branches instead.
+ */
+function isOutOfWindowDateIntent(
+  normalizedMessage: string,
+  hasActiveDraft: boolean,
+  reservationRelated: boolean
+): boolean {
+  const farFuturePatterns = [
+    /\bsemana\s+que\s+viene\b/,
+    /\bproxima\s+semana\b/,
+    /\bel\s+mes\s+que\s+viene\b/,
+    /\bmes\s+que\s+viene\b/,
+    /\bproximo\s+mes\b/,
+    /\bel\s+ano\s+que\s+viene\b/,
+    /\ben\s+\d+\s+semanas?\b/,
+    /\bdentro\s+de\s+\d+\s+semanas?\b/,
+    /\ben\s+(7|8|9|[1-9]\d+)\s+dias?\b/,
+    /\bdentro\s+de\s+(7|8|9|[1-9]\d+)\s+dias?\b/,
+  ];
+
+  const hasFarFutureSignal = farFuturePatterns.some((pattern) => pattern.test(normalizedMessage));
+
+  if (!hasFarFutureSignal) {
     return false;
   }
 
