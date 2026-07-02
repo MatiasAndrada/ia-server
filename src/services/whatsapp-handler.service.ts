@@ -27,10 +27,14 @@ import {
   formatBaDateKey,
   describeScheduledDateTime,
   describeScheduledAtUtc,
+  describeBaDateKey,
   isDayOpen,
   checkBusinessHours,
   findNextOpenSlot,
   findNextSlotOnDay,
+  addBaDays,
+  formatDayLabel,
+  type ParsedDay,
 } from '../utils/reservation-datetime';
 
 type ActiveReservationSnapshot = {
@@ -674,6 +678,16 @@ export class WhatsAppHandler {
         messageText: messageText.substring(0, 50),
       });
 
+      if (draft.pendingWeekdayDisambiguation) {
+        return await this.resolvePendingWeekdayDisambiguation(
+          draft,
+          messageText,
+          conversationId,
+          businessId,
+          jid
+        );
+      }
+
       switch (draft.step) {
         case 'name': {
           // Guard: user responded with an affirmative ("Si", "Dale", "Ok") instead of their name.
@@ -936,11 +950,24 @@ export class WhatsAppHandler {
               return true;
             }
 
-            await ReservationService.setScheduledDate(conversationId, parsedDay);
-
             // The customer may have already given the time in the same message too
             // (e.g. "el viernes a las 21") — skip the redundant "¿A qué hora?" ask.
             const parsedTimeSameMsg = parseTimeOfDay(messageText);
+
+            if (
+              await this.raiseWeekdayAmbiguityIfNeeded(
+                draft,
+                parsedDay,
+                businessId,
+                jid,
+                parsedTimeSameMsg ?? undefined
+              )
+            ) {
+              return true;
+            }
+
+            await ReservationService.setScheduledDate(conversationId, parsedDay);
+
             if (parsedTimeSameMsg) {
               await this.finalizeScheduledTime(
                 draft,
@@ -1046,11 +1073,24 @@ export class WhatsAppHandler {
             }
           }
 
-          await ReservationService.setScheduledDate(conversationId, parsedDay);
-
           // The customer may have already given the time in the same message too
           // (e.g. "el miércoles a las 19") — skip the redundant "¿A qué hora?" ask.
           const parsedTimeSameMsg = parseTimeOfDay(messageText);
+
+          if (
+            await this.raiseWeekdayAmbiguityIfNeeded(
+              draft,
+              parsedDay,
+              businessId,
+              jid,
+              parsedTimeSameMsg ?? undefined
+            )
+          ) {
+            return true;
+          }
+
+          await ReservationService.setScheduledDate(conversationId, parsedDay);
+
           if (parsedTimeSameMsg) {
             await this.finalizeScheduledTime(
               draft,
@@ -1074,6 +1114,7 @@ export class WhatsAppHandler {
           // the draft was still holding the previously chosen Wednesday).
           const nowBAForTime = nowInBuenosAires();
           const dayOverride = parseRelativeDay(messageText, nowBAForTime);
+          const parsedTime = parseTimeOfDay(messageText);
           let scheduledDate = draft.scheduledDate;
 
           if (dayOverride && formatBaDateKey(dayOverride.baDate) !== scheduledDate) {
@@ -1096,6 +1137,18 @@ export class WhatsAppHandler {
               }
             }
 
+            if (
+              await this.raiseWeekdayAmbiguityIfNeeded(
+                draft,
+                dayOverride,
+                businessId,
+                jid,
+                parsedTime ?? undefined
+              )
+            ) {
+              return true;
+            }
+
             scheduledDate = formatBaDateKey(dayOverride.baDate);
             await ReservationService.setScheduledDate(conversationId, dayOverride);
           }
@@ -1108,8 +1161,6 @@ export class WhatsAppHandler {
             await ReservationService.setPartySize(conversationId, partySizeOverride);
             draft.partySize = partySizeOverride;
           }
-
-          const parsedTime = parseTimeOfDay(messageText);
 
           if (!parsedTime || !scheduledDate) {
             draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
@@ -1299,6 +1350,119 @@ export class WhatsAppHandler {
     }
 
     return false; // No custom message sent, continue with agent response
+  }
+
+  /**
+   * When `parsedDay` was resolved by naming a weekday that happens to be TODAY
+   * (e.g. "el jueves" said on a Thursday), it's genuinely ambiguous whether the
+   * customer means today or next week. If so, stashes both candidate dates
+   * (plus any time already given in the same message) on the draft, asks the
+   * customer to clarify, and returns true — the caller should stop processing
+   * and let the next inbound message resolve it (see the top of
+   * {@link processDraftStep}). Returns false when there's nothing ambiguous.
+   */
+  private async raiseWeekdayAmbiguityIfNeeded(
+    draft: ReservationDraft,
+    parsedDay: ParsedDay,
+    businessId: string,
+    jid: string,
+    pendingTime?: { hour: number; minute: number }
+  ): Promise<boolean> {
+    if (!parsedDay.isToday || !parsedDay.matchedWeekdayName) {
+      return false;
+    }
+
+    const todayDateKey = formatBaDateKey(parsedDay.baDate);
+    const nextBaDate = addBaDays(parsedDay.baDate, 7);
+    const nextDateKey = formatBaDateKey(nextBaDate);
+    const weekdayLabel = formatDayLabel(parsedDay.baDate, false); // e.g. "jueves 02/07"
+    const nextLabel = formatDayLabel(nextBaDate, false); // e.g. "jueves 09/07"
+
+    draft.pendingWeekdayDisambiguation = {
+      weekdayLabel,
+      todayDateKey,
+      nextDateKey,
+      pendingHour: pendingTime?.hour,
+      pendingMinute: pendingTime?.minute,
+    };
+    await ReservationService.saveDraft(draft);
+
+    await this.sendWhatsAppMessage(
+      businessId,
+      jid,
+      `¿Te referís a *hoy ${weekdayLabel}* o al *${nextLabel}* que viene?\n\nRespondé *1* para hoy o *2* para la semana que viene.`
+    );
+    return true;
+  }
+
+  /**
+   * Resolves a pending weekday-disambiguation question (see
+   * {@link raiseWeekdayAmbiguityIfNeeded}) from the customer's reply. Returns
+   * true once handled (either resolved and continued, or re-asked because the
+   * reply wasn't recognized).
+   */
+  private async resolvePendingWeekdayDisambiguation(
+    draft: ReservationDraft,
+    messageText: string,
+    conversationId: string,
+    businessId: string,
+    jid: string
+  ): Promise<boolean> {
+    const pending = draft.pendingWeekdayDisambiguation;
+    if (!pending) return false;
+
+    const trimmed = messageText.trim();
+    const normalized = normalizeReservationScopeText(messageText);
+    const wantsToday = trimmed === '1' || /\bhoy\b/.test(normalized);
+    const wantsNext = trimmed === '2' || /\b(que viene|proxim\w*|semana que viene|el otro)\b/.test(normalized);
+
+    if (!wantsToday && !wantsNext) {
+      draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
+      if (draft.invalidAttempts >= 2) {
+        await ReservationService.deleteDraft(conversationId);
+        await this.sendWhatsAppMessage(
+          businessId,
+          jid,
+          '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+        );
+      } else {
+        await ReservationService.saveDraft(draft);
+        await this.sendWhatsAppMessage(
+          businessId,
+          jid,
+          `No te entendí. Respondé *1* para hoy o *2* para el ${pending.weekdayLabel.split(' ')[0]} que viene.`
+        );
+      }
+      return true;
+    }
+
+    const chosenDateKey = wantsToday ? pending.todayDateKey : pending.nextDateKey;
+    draft.pendingWeekdayDisambiguation = undefined;
+
+    if (pending.pendingHour !== undefined && pending.pendingMinute !== undefined) {
+      await ReservationService.saveDraft(draft);
+      await this.finalizeScheduledTime(
+        draft,
+        conversationId,
+        businessId,
+        jid,
+        chosenDateKey,
+        pending.pendingHour,
+        pending.pendingMinute
+      );
+      return true;
+    }
+
+    const chosenBaDate = parseBaDateKey(chosenDateKey);
+    const chosenLabel = describeBaDateKey(chosenDateKey, nowInBuenosAires());
+    await ReservationService.setScheduledDate(conversationId, {
+      baDate: chosenBaDate,
+      label: chosenLabel,
+      isToday: chosenDateKey === pending.todayDateKey,
+      matchedWeekdayName: true,
+    });
+    await this.sendWhatsAppMessage(businessId, jid, `¿A qué hora el ${chosenLabel}?`);
+    return true;
   }
 
   /**
