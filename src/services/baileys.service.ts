@@ -87,8 +87,10 @@ export class BaileysService {
    * Check whether a session directory holds credentials from a completed pairing.
    * useMultiFileAuthState() always returns a truthy `creds` object even when
    * creds.json is missing (it falls back to a freshly generated, unpaired one),
-   * so file presence alone isn't enough - we need `registered`/`me` to confirm
-   * the phone actually finished scanning the QR at some point.
+   * so file presence alone isn't enough. `creds.registered` isn't reliable in
+   * this Baileys version (stays `false` even on fully linked, working sessions),
+   * so `me.id` - only populated once the phone actually confirms the pairing -
+   * is the signal we use instead.
    */
   private hasPersistedCredentials(sessionPath: string): boolean {
     try {
@@ -98,7 +100,7 @@ export class BaileysService {
       }
 
       const creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
-      return Boolean(creds?.registered && creds?.me?.id);
+      return Boolean(creds?.me?.id);
     } catch (error) {
       logger.warn('Failed to read creds.json while checking persisted credentials', {
         sessionPath,
