@@ -310,6 +310,9 @@ export interface ReservationDraft {
   scheduledAt?: string; // ISO UTC instant combining scheduledDate + scheduledTime
   // confirm_slot step: which step triggered the suggestion (to know where to go back on "no")
   confirmSlotOrigin?: 'schedule_choice' | 'time';
+  // party_size step: true right after asking "¿Cuál es tu nombre correcto?" — the
+  // next reply should be treated as the name itself, not as a party size answer.
+  awaitingNameCorrection?: boolean;
   // Edit mode fields
   editMode?: boolean;
   editingField?: 'party_size' | 'schedule';
