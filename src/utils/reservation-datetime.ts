@@ -13,6 +13,13 @@ export interface ParsedDay {
   baDate: Date;
   label: string;
   isToday: boolean;
+  /**
+   * True when the day was resolved by naming an explicit weekday (e.g. "el
+   * jueves"), as opposed to "hoy"/"mañana"/"pasado mañana". Combined with
+   * `isToday`, signals a genuine ambiguity: naming today's own weekday could
+   * mean today OR next week, and the caller should confirm which.
+   */
+  matchedWeekdayName: boolean;
 }
 
 export interface ParsedTime {
@@ -55,13 +62,13 @@ export function describeBaDateKey(key: string, nowBA: Date): string {
   return formatDayLabel(baDate, isToday);
 }
 
-function addBaDays(baDate: Date, days: number): Date {
+export function addBaDays(baDate: Date, days: number): Date {
   const result = new Date(baDate);
   result.setUTCDate(result.getUTCDate() + days);
   return result;
 }
 
-function formatDayLabel(baDate: Date, isToday: boolean): string {
+export function formatDayLabel(baDate: Date, isToday: boolean): string {
   const dayName = isToday ? 'hoy' : WEEKDAY_LABELS[baDate.getUTCDay()];
   const dd = String(baDate.getUTCDate()).padStart(2, '0');
   const mm = String(baDate.getUTCMonth() + 1).padStart(2, '0');
@@ -80,16 +87,16 @@ export function parseRelativeDay(text: string, nowBA: Date): ParsedDay | null {
 
   if (/\bpasado\s+manana\b/.test(normalized)) {
     const baDate = addBaDays(todayStart, 2);
-    return { baDate, label: formatDayLabel(baDate, false), isToday: false };
+    return { baDate, label: formatDayLabel(baDate, false), isToday: false, matchedWeekdayName: false };
   }
 
   if (/\bmanana\b/.test(normalized)) {
     const baDate = addBaDays(todayStart, 1);
-    return { baDate, label: formatDayLabel(baDate, false), isToday: false };
+    return { baDate, label: formatDayLabel(baDate, false), isToday: false, matchedWeekdayName: false };
   }
 
   if (/\bhoy\b/.test(normalized)) {
-    return { baDate: todayStart, label: formatDayLabel(todayStart, true), isToday: true };
+    return { baDate: todayStart, label: formatDayLabel(todayStart, true), isToday: true, matchedWeekdayName: false };
   }
 
   for (let i = 0; i < WEEKDAY_KEYS.length; i += 1) {
@@ -97,7 +104,7 @@ export function parseRelativeDay(text: string, nowBA: Date): ParsedDay | null {
       const todayDow = todayStart.getUTCDay();
       const diff = (i - todayDow + 7) % 7;
       const baDate = addBaDays(todayStart, diff);
-      return { baDate, label: formatDayLabel(baDate, diff === 0), isToday: diff === 0 };
+      return { baDate, label: formatDayLabel(baDate, diff === 0), isToday: diff === 0, matchedWeekdayName: true };
     }
   }
 
