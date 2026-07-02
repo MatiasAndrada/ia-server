@@ -135,11 +135,24 @@ export type IntentType =
   | 'greeting'
   | 'unknown';
 
+// Business hours schema stored in businesses.weekly_hours (JSONB)
+export interface WeeklyHoursShift {
+  open: string;  // "HH:mm" in local Buenos Aires time
+  close: string; // "HH:mm" — may be past midnight (e.g. "02:00" = 02:00 next day)
+}
+export interface WeeklyHoursDayEntry {
+  closed: boolean;
+  shifts: WeeklyHoursShift[];
+}
+export type WeeklyHoursDayKey = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
+export type WeeklyHours = Partial<Record<WeeklyHoursDayKey, WeeklyHoursDayEntry>>;
+
 // Business Context
 export interface BusinessContext {
   businessName: string;
   businessAddress?: string;
   businessHours?: string;
+  weeklyHours?: WeeklyHours;
   currentWaitlist: number;
   averageWaitTime: number;
   customerInfo?: CustomerInfo;
@@ -290,10 +303,16 @@ export interface ReservationDraft {
   businessId: string;
   customerName?: string;
   partySize?: number;
-  step: 'name' | 'party_size' | 'completed' | 'edit_menu';
+  step: 'name' | 'party_size' | 'schedule_choice' | 'date' | 'time' | 'confirm_slot' | 'completed' | 'edit_menu';
+  // Scheduling fields (day/time chosen within the next 7 days; absent = instant/turno actual)
+  scheduledDate?: string; // YYYY-MM-DD, Buenos Aires local day
+  scheduledTime?: string; // HH:mm, 24h
+  scheduledAt?: string; // ISO UTC instant combining scheduledDate + scheduledTime
+  // confirm_slot step: which step triggered the suggestion (to know where to go back on "no")
+  confirmSlotOrigin?: 'schedule_choice' | 'time';
   // Edit mode fields
   editMode?: boolean;
-  editingField?: 'party_size';
+  editingField?: 'party_size' | 'schedule';
   existingReservationId?: string;
   // Invalid attempt tracking (for exit-on-repeat)
   invalidAttempts?: number;
@@ -308,6 +327,8 @@ export interface CreateReservationRequest {
   partySize: number;
   tableId?: string;
   source?: 'AI_CHAT' | 'DASHBOARD';
+  /** ISO UTC instant for a future day/time within the next 7 days; omitted/null = instant reservation for the current turn. */
+  scheduledAt?: string | null;
 }
 
 export interface CreateReservationResponse {
