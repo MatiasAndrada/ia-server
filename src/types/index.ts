@@ -313,6 +313,17 @@ export interface ReservationDraft {
   // party_size step: true right after asking "¿Cuál es tu nombre correcto?" — the
   // next reply should be treated as the name itself, not as a party size answer.
   awaitingNameCorrection?: boolean;
+  // Set when the customer names a weekday that resolves to TODAY (e.g. "el
+  // jueves" said on a Thursday) — genuinely ambiguous between "today" and
+  // "next week". Holds both candidate dates (and any time already given in
+  // the same message) until the customer confirms which one they meant.
+  pendingWeekdayDisambiguation?: {
+    weekdayLabel: string; // e.g. "jueves" — used to phrase the question
+    todayDateKey: string; // YYYY-MM-DD
+    nextDateKey: string; // YYYY-MM-DD, exactly 7 days later
+    pendingHour?: number;
+    pendingMinute?: number;
+  };
   // Edit mode fields
   editMode?: boolean;
   editingField?: 'party_size' | 'schedule';
