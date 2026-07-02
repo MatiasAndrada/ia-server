@@ -530,21 +530,32 @@ export class RealtimeSyncService {
         return;
       }
 
+      // Only a genuine transition INTO CONFIRMED/NOTIFIED should notify. Without
+      // this, any update that leaves the status unchanged (e.g. editing the
+      // scheduled time or party size on an already-CONFIRMED reservation) would
+      // re-send the "your reservation is confirmed" message even though nothing
+      // about the status actually changed. If `old` is missing from the payload
+      // we can't tell either way, so fail open (assume it changed) to preserve
+      // the previous behavior in that case.
+      const statusChanged = !oldEntry || oldEntry.status !== newEntry?.status;
+
       // Check if new status is CONFIRMED or NOTIFIED
-      const isConfirmed = newEntry?.status === 'CONFIRMED';
+      const isConfirmed = statusChanged && newEntry?.status === 'CONFIRMED';
       // Keep backward compat: NOTIFIED still sends the confirmation message
-      const isNotified = newEntry?.status === 'NOTIFIED';
-      
+      const isNotified = statusChanged && newEntry?.status === 'NOTIFIED';
+
       logger.info('🔍 [REALTIME] Status validation', {
         oldStatus: oldEntry?.status,
         newStatus: newEntry?.status,
+        statusChanged,
         isConfirmed,
         isNotified,
       });
-      
+
       if (!isConfirmed && !isNotified) {
         logger.info('⏭️ [REALTIME] Skipping - status is not CONFIRMED or NOTIFIED', {
           newStatus: newEntry?.status,
+          statusChanged,
         });
         return;
       }

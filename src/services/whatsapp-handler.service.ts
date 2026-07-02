@@ -329,8 +329,11 @@ export class WhatsAppHandler {
           logger.info('Greeting handled with reservation menu', { conversationId });
           return;
         }
-        // No active reservation — clear old draft and fall through to agent
-        draft = null;
+        // handleGreeting may have left an in-progress draft untouched (e.g. mid-edit,
+        // or a slot pending confirmation) instead of cancelling it — re-sync our local
+        // reference rather than blindly nulling it out, so that case still falls
+        // through to its own step handler below instead of restarting the flow.
+        draft = await ReservationService.getDraft(conversationId);
       }
 
       // Courtesy handling: if reservation is already active/confirmed and user sends
@@ -362,6 +365,7 @@ export class WhatsAppHandler {
       const scopeEvaluation = evaluateReservationScope(messageText, {
         businessName: businessStatus.name,
         currentStep: draft?.step,
+        awaitingNameCorrection: draft?.awaitingNameCorrection,
       });
       if (scopeEvaluation.decision !== 'allow' && scopeEvaluation.message) {
         await this.sendWhatsAppMessage(businessId, from, scopeEvaluation.message);
@@ -732,6 +736,50 @@ export class WhatsAppHandler {
         }
 
         case 'party_size': {
+          // We just asked "¿Cuál es tu nombre correcto?" — this reply IS the
+          // name, full stop. Don't require an explicit correction phrase like
+          // "me llamo X" this time; the customer has no reason to know that's
+          // expected, and rejecting a bare name here used to trap them in an
+          // unrecoverable off-topic loop (the scope guard never let a bare
+          // name through at this step either — see awaitingNameCorrection).
+          if (draft.awaitingNameCorrection) {
+            const correctedName = this.extractNameCandidate(messageText);
+
+            if (correctedName) {
+              draft.awaitingNameCorrection = false;
+              await ReservationService.saveDraft(draft);
+              await ReservationService.setNameOnly(conversationId, correctedName);
+              logger.info('✏️ Name corrected at party_size step (follow-up)', {
+                conversationId,
+                correctedName,
+              });
+              await this.sendWhatsAppMessage(
+                businessId,
+                jid,
+                `✅ ¡Listo! Cambié tu nombre a *${correctedName}*.\n\n¿Para cuántas personas es la reserva?\n\nEjemplo: 2, 4, 6, etc.`
+              );
+              return true;
+            }
+
+            draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
+            if (draft.invalidAttempts >= 2) {
+              await ReservationService.deleteDraft(conversationId);
+              await this.sendWhatsAppMessage(
+                businessId,
+                jid,
+                '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+              );
+            } else {
+              await ReservationService.saveDraft(draft);
+              await this.sendWhatsAppMessage(
+                businessId,
+                jid,
+                'No reconocí eso como un nombre. ¿Cuál es tu nombre para continuar con la reserva?'
+              );
+            }
+            return true;
+          }
+
           const partySize = this.extractPartySize(messageText);
 
           // Check if user is correcting their name instead of providing a party size
@@ -757,6 +805,8 @@ export class WhatsAppHandler {
               return true;
             }
 
+            draft.awaitingNameCorrection = true;
+            await ReservationService.saveDraft(draft);
             await this.sendWhatsAppMessage(
               businessId,
               jid,
@@ -887,6 +937,23 @@ export class WhatsAppHandler {
             }
 
             await ReservationService.setScheduledDate(conversationId, parsedDay);
+
+            // The customer may have already given the time in the same message too
+            // (e.g. "el viernes a las 21") — skip the redundant "¿A qué hora?" ask.
+            const parsedTimeSameMsg = parseTimeOfDay(messageText);
+            if (parsedTimeSameMsg) {
+              await this.finalizeScheduledTime(
+                draft,
+                conversationId,
+                businessId,
+                jid,
+                formatBaDateKey(parsedDay.baDate),
+                parsedTimeSameMsg.hour,
+                parsedTimeSameMsg.minute
+              );
+              return true;
+            }
+
             await this.sendWhatsAppMessage(businessId, jid, `¿A qué hora el ${parsedDay.label}?`);
             return true;
           }
@@ -980,13 +1047,69 @@ export class WhatsAppHandler {
           }
 
           await ReservationService.setScheduledDate(conversationId, parsedDay);
+
+          // The customer may have already given the time in the same message too
+          // (e.g. "el miércoles a las 19") — skip the redundant "¿A qué hora?" ask.
+          const parsedTimeSameMsg = parseTimeOfDay(messageText);
+          if (parsedTimeSameMsg) {
+            await this.finalizeScheduledTime(
+              draft,
+              conversationId,
+              businessId,
+              jid,
+              formatBaDateKey(parsedDay.baDate),
+              parsedTimeSameMsg.hour,
+              parsedTimeSameMsg.minute
+            );
+            return true;
+          }
+
           await this.sendWhatsAppMessage(businessId, jid, `¿A qué hora el ${parsedDay.label}?`);
           return true;
         }
 
         case 'time': {
+          // The customer may be naming a different day in this same message
+          // instead of just answering the hour (e.g. "el martes a las 14" while
+          // the draft was still holding the previously chosen Wednesday).
+          const nowBAForTime = nowInBuenosAires();
+          const dayOverride = parseRelativeDay(messageText, nowBAForTime);
+          let scheduledDate = draft.scheduledDate;
+
+          if (dayOverride && formatBaDateKey(dayOverride.baDate) !== scheduledDate) {
+            if (!isWithinNextWeek(dayOverride.baDate, nowBAForTime)) {
+              await this.sendWhatsAppMessage(
+                businessId,
+                jid,
+                'Por ahora solo puedo tomar reservas dentro de los próximos 7 días. ¿Para qué día de esa semana la querés?'
+              );
+              return true;
+            }
+
+            const businessForDayOverride = await SupabaseService.getBusinessById(businessId);
+            const weeklyHoursForDayOverride = businessForDayOverride?.weekly_hours as WeeklyHours | null | undefined;
+            if (weeklyHoursForDayOverride && Object.keys(weeklyHoursForDayOverride).length > 0) {
+              const dayCheck = isDayOpen(dayOverride.baDate, weeklyHoursForDayOverride);
+              if (!dayCheck.open) {
+                await this.sendWhatsAppMessage(businessId, jid, `❌ ${dayCheck.reason} ¿Para qué otro día querés reservar?`);
+                return true;
+              }
+            }
+
+            scheduledDate = formatBaDateKey(dayOverride.baDate);
+            await ReservationService.setScheduledDate(conversationId, dayOverride);
+          }
+
+          // The customer may also be changing the party size in the same
+          // message (e.g. "...para 2 personas"). Only an explicit "N personas"
+          // mention counts here — a bare number means the hour, not the size.
+          const partySizeOverride = this.extractExplicitPartySizeMention(messageText);
+          if (partySizeOverride) {
+            await ReservationService.setPartySize(conversationId, partySizeOverride);
+            draft.partySize = partySizeOverride;
+          }
+
           const parsedTime = parseTimeOfDay(messageText);
-          const scheduledDate = draft.scheduledDate;
 
           if (!parsedTime || !scheduledDate) {
             draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
@@ -1009,90 +1132,7 @@ export class WhatsAppHandler {
             return true;
           }
 
-          const baDate = parseBaDateKey(scheduledDate);
-          const scheduledAt = combineToUtcISO(baDate, parsedTime.hour, parsedTime.minute);
-
-          if (isInPast(scheduledAt)) {
-            draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
-            await ReservationService.saveDraft(draft);
-
-            if (draft.invalidAttempts >= 2) {
-              await ReservationService.deleteDraft(conversationId);
-              await this.sendWhatsAppMessage(
-                businessId,
-                jid,
-                '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
-              );
-            } else {
-              await this.sendWhatsAppMessage(
-                businessId,
-                jid,
-                '❌ Ese horario ya pasó. Decime otro horario, o otro día si preferís.'
-              );
-            }
-            return true;
-          }
-
-          // Check business hours if weekly_hours is configured
-          const businessForTime = await SupabaseService.getBusinessById(businessId);
-          const weeklyHoursForTime = businessForTime?.weekly_hours as WeeklyHours | null | undefined;
-          if (weeklyHoursForTime && Object.keys(weeklyHoursForTime).length > 0) {
-            const hoursCheck = checkBusinessHours(baDate, parsedTime.hour, parsedTime.minute, weeklyHoursForTime);
-            if (!hoursCheck.allowed) {
-              const margin = businessForTime?.reservation_opening_margin_minutes ?? 15;
-              const afterMinutes = parsedTime.hour * 60 + parsedTime.minute;
-              const nextSlot = findNextSlotOnDay(baDate, afterMinutes, weeklyHoursForTime, margin);
-
-              if (nextSlot) {
-                // Offer the next available opening on the same day
-                const slotTime = `${String(nextSlot.hour).padStart(2, '0')}:${String(nextSlot.minute).padStart(2, '0')}`;
-                const slotAt = combineToUtcISO(baDate, nextSlot.hour, nextSlot.minute);
-                await ReservationService.moveToConfirmSlot(conversationId, scheduledDate, slotTime, slotAt, 'time');
-                await this.sendWhatsAppMessage(
-                  businessId,
-                  jid,
-                  `❌ ${hoursCheck.reason}\n\nEl próximo horario disponible ese día es a las *${slotTime}*. ¿Reservamos para esa hora? Respondé *sí* o *no*.`
-                );
-              } else {
-                // No more openings today — ask user to pick a different time or day
-                draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
-                await ReservationService.saveDraft(draft);
-                if (draft.invalidAttempts >= 2) {
-                  await ReservationService.deleteDraft(conversationId);
-                  await this.sendWhatsAppMessage(
-                    businessId,
-                    jid,
-                    '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
-                  );
-                } else {
-                  await this.sendWhatsAppMessage(
-                    businessId,
-                    jid,
-                    `❌ ${hoursCheck.reason} No hay más turnos disponibles ese día. ¿Querés elegir otro horario o día?`
-                  );
-                }
-              }
-              return true;
-            }
-          }
-
-          const timeLabel = `${String(parsedTime.hour).padStart(2, '0')}:${String(parsedTime.minute).padStart(2, '0')}`;
-
-          // ----- EDIT MODE: update the existing reservation's schedule -----
-          if (draft.editMode && draft.existingReservationId) {
-            const ok = await SupabaseService.updateReservationSchedule(draft.existingReservationId, scheduledAt);
-            await ReservationService.deleteDraft(conversationId);
-            const label = describeScheduledDateTime(scheduledDate, parsedTime.hour, parsedTime.minute, nowInBuenosAires());
-            const msg = ok
-              ? `✅ ¡Listo! Tu reserva fue actualizada para el ${label}.`
-              : '❌ No se pudo actualizar tu reserva. Por favor intentá de nuevo.';
-            await this.sendWhatsAppMessage(businessId, jid, msg);
-            return true;
-          }
-
-          // ----- NORMAL MODE: finish creating the reservation -----
-          await ReservationService.setScheduledTime(conversationId, timeLabel, scheduledAt);
-          await this.createAndNotifyReservation(conversationId, businessId, jid);
+          await this.finalizeScheduledTime(draft, conversationId, businessId, jid, scheduledDate, parsedTime.hour, parsedTime.minute);
           return true;
         }
 
@@ -1105,6 +1145,60 @@ export class WhatsAppHandler {
           const proposedDate = draft.scheduledDate;
           const proposedTime = draft.scheduledTime;
           const origin = draft.confirmSlotOrigin;
+
+          // The customer may be naming a different day/time instead of a plain yes/no
+          // (e.g. "¿puede ser el martes?", "si el martes a las 10", "no, mejor a las 21").
+          // Re-parse and re-propose that slot rather than repeating the generic prompt.
+          if (!isYes && hasDateOrTimeSignal(messageText, normalized)) {
+            const nowBA = nowInBuenosAires();
+            const parsedDay = parseRelativeDay(messageText, nowBA);
+            const parsedTimeOverride = parseTimeOfDay(messageText);
+
+            if (parsedDay || parsedTimeOverride) {
+              const targetBaDate = parsedDay ? parsedDay.baDate : (proposedDate ? parseBaDateKey(proposedDate) : null);
+              const [proposedHour, proposedMinute] = proposedTime ? proposedTime.split(':').map(Number) : [null, null];
+              const targetHour = parsedTimeOverride ? parsedTimeOverride.hour : proposedHour;
+              const targetMinute = parsedTimeOverride ? parsedTimeOverride.minute : proposedMinute;
+
+              if (targetBaDate && targetHour !== null && targetMinute !== null && isWithinNextWeek(targetBaDate, nowBA)) {
+                const newAt = combineToUtcISO(targetBaDate, targetHour, targetMinute);
+
+                if (isInPast(newAt)) {
+                  await this.sendWhatsAppMessage(businessId, jid, '❌ Ese horario ya pasó. ¿Para qué otro día y hora lo querés?');
+                  return true;
+                }
+
+                const businessForConfirm = await SupabaseService.getBusinessById(businessId);
+                const weeklyHoursForConfirm = businessForConfirm?.weekly_hours as WeeklyHours | null | undefined;
+                const hoursCheck = weeklyHoursForConfirm && Object.keys(weeklyHoursForConfirm).length > 0
+                  ? checkBusinessHours(targetBaDate, targetHour, targetMinute, weeklyHoursForConfirm)
+                  : { allowed: true as const };
+
+                if (!hoursCheck.allowed) {
+                  await this.sendWhatsAppMessage(
+                    businessId,
+                    jid,
+                    `❌ ${hoursCheck.reason} ¿Para qué otro día y hora lo querés?`
+                  );
+                  return true;
+                }
+
+                const newDateKey = formatBaDateKey(targetBaDate);
+                const newTimeLabel = `${String(targetHour).padStart(2, '0')}:${String(targetMinute).padStart(2, '0')}`;
+                await ReservationService.moveToConfirmSlot(conversationId, newDateKey, newTimeLabel, newAt, origin ?? 'schedule_choice');
+                const label = describeScheduledAtUtc(newAt, nowBA);
+                await this.sendWhatsAppMessage(
+                  businessId,
+                  jid,
+                  `Respondé *sí* o *no*: ¿confirmamos la reserva para el *${label}*?`
+                );
+                return true;
+              }
+
+              await this.sendWhatsAppMessage(businessId, jid, '❌ No entendí bien el día y la hora. ¿Para qué día y hora lo querés?');
+              return true;
+            }
+          }
 
           if (isYes && proposedAt && proposedDate && proposedTime) {
             if (draft.editMode && draft.existingReservationId) {
@@ -1141,7 +1235,14 @@ export class WhatsAppHandler {
             return true;
           }
 
-          await this.sendWhatsAppMessage(businessId, jid, 'Respondé *sí* para confirmar ese horario o *no* para elegir otro.');
+          const fallbackLabel = proposedAt ? describeScheduledAtUtc(proposedAt, nowInBuenosAires()) : null;
+          await this.sendWhatsAppMessage(
+            businessId,
+            jid,
+            fallbackLabel
+              ? `Respondé *sí* o *no*: ¿confirmamos la reserva para el *${fallbackLabel}*? (Si preferís otro día u horario, decímelo directamente).`
+              : 'Respondé *sí* para confirmar ese horario o *no* para elegir otro.'
+          );
           return true;
         }
 
@@ -1198,6 +1299,107 @@ export class WhatsAppHandler {
     }
 
     return false; // No custom message sent, continue with agent response
+  }
+
+  /**
+   * Validates a day+hour pair and either finishes the reservation (create or,
+   * in edit mode, update) or offers the next same-day slot on a business-hours
+   * conflict. Shared by the `time` step and by `date`/`schedule_choice` when the
+   * customer names a day AND a time together (e.g. "el miércoles a las 19").
+   */
+  private async finalizeScheduledTime(
+    draft: ReservationDraft,
+    conversationId: string,
+    businessId: string,
+    jid: string,
+    scheduledDate: string,
+    hour: number,
+    minute: number
+  ): Promise<void> {
+    const baDate = parseBaDateKey(scheduledDate);
+    const scheduledAt = combineToUtcISO(baDate, hour, minute);
+
+    if (isInPast(scheduledAt)) {
+      draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
+      await ReservationService.saveDraft(draft);
+
+      if (draft.invalidAttempts >= 2) {
+        await ReservationService.deleteDraft(conversationId);
+        await this.sendWhatsAppMessage(
+          businessId,
+          jid,
+          '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+        );
+      } else {
+        await this.sendWhatsAppMessage(
+          businessId,
+          jid,
+          '❌ Ese horario ya pasó. Decime otro horario, o otro día si preferís.'
+        );
+      }
+      return;
+    }
+
+    // Check business hours if weekly_hours is configured
+    const business = await SupabaseService.getBusinessById(businessId);
+    const weeklyHours = business?.weekly_hours as WeeklyHours | null | undefined;
+    if (weeklyHours && Object.keys(weeklyHours).length > 0) {
+      const hoursCheck = checkBusinessHours(baDate, hour, minute, weeklyHours);
+      if (!hoursCheck.allowed) {
+        const margin = business?.reservation_opening_margin_minutes ?? 15;
+        const afterMinutes = hour * 60 + minute;
+        const nextSlot = findNextSlotOnDay(baDate, afterMinutes, weeklyHours, margin);
+
+        if (nextSlot) {
+          // Offer the next available opening on the same day
+          const slotTime = `${String(nextSlot.hour).padStart(2, '0')}:${String(nextSlot.minute).padStart(2, '0')}`;
+          const slotAt = combineToUtcISO(baDate, nextSlot.hour, nextSlot.minute);
+          await ReservationService.moveToConfirmSlot(conversationId, scheduledDate, slotTime, slotAt, 'time');
+          await this.sendWhatsAppMessage(
+            businessId,
+            jid,
+            `❌ ${hoursCheck.reason}\n\nEl próximo horario disponible ese día es a las *${slotTime}*. ¿Reservamos para esa hora? Respondé *sí* o *no*.`
+          );
+        } else {
+          // No more openings today — ask user to pick a different time or day
+          draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
+          await ReservationService.saveDraft(draft);
+          if (draft.invalidAttempts >= 2) {
+            await ReservationService.deleteDraft(conversationId);
+            await this.sendWhatsAppMessage(
+              businessId,
+              jid,
+              '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+            );
+          } else {
+            await this.sendWhatsAppMessage(
+              businessId,
+              jid,
+              `❌ ${hoursCheck.reason} No hay más turnos disponibles ese día. ¿Querés elegir otro horario o día?`
+            );
+          }
+        }
+        return;
+      }
+    }
+
+    const timeLabel = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+
+    // ----- EDIT MODE: update the existing reservation's schedule -----
+    if (draft.editMode && draft.existingReservationId) {
+      const ok = await SupabaseService.updateReservationSchedule(draft.existingReservationId, scheduledAt);
+      await ReservationService.deleteDraft(conversationId);
+      const label = describeScheduledDateTime(scheduledDate, hour, minute, nowInBuenosAires());
+      const msg = ok
+        ? `✅ ¡Listo! Tu reserva fue actualizada para el ${label}.`
+        : '❌ No se pudo actualizar tu reserva. Por favor intentá de nuevo.';
+      await this.sendWhatsAppMessage(businessId, jid, msg);
+      return;
+    }
+
+    // ----- NORMAL MODE: finish creating the reservation -----
+    await ReservationService.setScheduledTime(conversationId, timeLabel, scheduledAt);
+    await this.createAndNotifyReservation(conversationId, businessId, jid);
   }
 
   /**
@@ -1766,8 +1968,31 @@ export class WhatsAppHandler {
     conversationId: string
   ): Promise<boolean> {
     try {
-      // 1. Cancel any active draft silently
       const existingDraft = await ReservationService.getDraft(conversationId);
+
+      // A slot has already been proposed and is awaiting sí/no, or the customer
+      // is mid-edit of a real, already-confirmed reservation: a stray "Hola"
+      // (e.g. sent alongside another message in the same debounce batch)
+      // must NOT silently wipe that progress. Leave the draft untouched and
+      // let the message fall through to be handled as normal step input —
+      // the step's own handler will re-show the pending question.
+      const isProtectedDraft =
+        !!existingDraft &&
+        existingDraft.step !== 'completed' &&
+        (existingDraft.editMode === true ||
+          existingDraft.step === 'confirm_slot' ||
+          existingDraft.step === 'edit_menu');
+
+      if (isProtectedDraft) {
+        logger.info('Greeting ignored — preserving in-progress draft', {
+          conversationId,
+          step: existingDraft!.step,
+          editMode: existingDraft!.editMode ?? false,
+        });
+        return false;
+      }
+
+      // 1. Cancel any active draft silently
       if (existingDraft && existingDraft.step !== 'completed') {
         await ReservationService.deleteDraft(conversationId);
         logger.info('Draft cancelled on greeting', { conversationId, step: existingDraft.step });
@@ -2007,6 +2232,24 @@ export class WhatsAppHandler {
     }
 
     return null;
+  }
+
+  /**
+   * Narrower party-size sniff for steps where a bare number already means
+   * something else (e.g. the `time` step, where "14" is an hour). Only an
+   * explicit "N personas" mention counts — never a bare digit or a "para N"
+   * without the word "personas", both of which would collide with an hour.
+   */
+  private extractExplicitPartySizeMention(text: string): number | null {
+    const withoutTimeHints = text
+      .replace(/\b(?:[01]?\d|2[0-3])[:.]\d{2}\b/g, ' ')
+      .replace(/\b(?:1[0-2]|0?\d)\s?(?:am|pm|a\.m\.|p\.m\.)\b/gi, ' ');
+
+    const match = withoutTimeHints.match(/\b(\d{1,2})\s+personas?\b/i);
+    if (!match) return null;
+
+    const numericValue = parseInt(match[1], 10);
+    return numericValue >= 1 && numericValue <= 50 ? numericValue : null;
   }
 
   private extractNameCandidate(text: string): string | null {
