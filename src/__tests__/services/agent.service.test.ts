@@ -70,7 +70,9 @@ describe('AgentService reservation scope guard', () => {
     expect(ollamaService.chat).not.toHaveBeenCalled();
   });
 
-  it('returns the specific-time fallback without calling Ollama', async () => {
+  it('no longer hard-blocks specific-time messages — they are reservation-related and reach the agent', async () => {
+    (ollamaService.chat as jest.Mock).mockResolvedValue('¿Para cuántas personas es la reserva?');
+
     const response = await agentService.generateResponse(
       'Quiero reservar a las 22:30 para 4 personas',
       waitlistAgent,
@@ -78,11 +80,11 @@ describe('AgentService reservation scope guard', () => {
       { businessName: 'Bodegón Central' }
     );
 
-    expect(response.response).toBe(
-      'Hola 😊 Por ahora solo puedo ayudarte con reservas instantáneas para el turno actual en “Bodegón Central”. Todavía no puedo tomar reservas para una hora específica. ¿Querés hacer una reserva?'
-    );
-    expect(response.action).toBeNull();
-    expect(ollamaService.chat).not.toHaveBeenCalled();
+    // Since scheduled reservations are now supported, a specific-time mention no
+    // longer trips the scope guard — it's classified as reservation-related and
+    // passed through to the agent instead of being rejected outright.
+    expect(ollamaService.chat).toHaveBeenCalledTimes(1);
+    expect(response.response).toBe('¿Para cuántas personas es la reserva?');
   });
 
   it('handles "Quiero reservar" as deterministic opt-in without calling Ollama', async () => {

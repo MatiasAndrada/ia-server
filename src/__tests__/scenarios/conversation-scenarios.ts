@@ -88,6 +88,13 @@ const happyPathScenarios: ConversationScenario[] = [
       {
         user: '4',
         expect: {
+          contains: ['turno actual'],
+          draftStep: 'schedule_choice',
+        },
+      },
+      {
+        user: '1',
+        expect: {
           reservationCreated: true,
         },
       },
@@ -114,6 +121,13 @@ const happyPathScenarios: ConversationScenario[] = [
       },
       {
         user: '2',
+        expect: {
+          contains: ['turno actual'],
+          draftStep: 'schedule_choice',
+        },
+      },
+      {
+        user: '1',
         expect: {
           reservationCreated: true,
         },
@@ -142,6 +156,13 @@ const happyPathScenarios: ConversationScenario[] = [
       {
         user: 'Somos 6',
         expect: {
+          contains: ['turno actual'],
+          draftStep: 'schedule_choice',
+        },
+      },
+      {
+        user: '1',
+        expect: {
           reservationCreated: true,
         },
       },
@@ -169,6 +190,13 @@ const happyPathScenarios: ConversationScenario[] = [
       {
         user: 'para 3 personas',
         expect: {
+          contains: ['turno actual'],
+          draftStep: 'schedule_choice',
+        },
+      },
+      {
+        user: '1',
+        expect: {
           reservationCreated: true,
         },
       },
@@ -195,6 +223,13 @@ const happyPathScenarios: ConversationScenario[] = [
       {
         user: '8',
         expect: {
+          contains: ['turno actual'],
+          draftStep: 'schedule_choice',
+        },
+      },
+      {
+        user: '1',
+        expect: {
           reservationCreated: true,
         },
       },
@@ -216,6 +251,15 @@ const happyPathScenarios: ConversationScenario[] = [
         user: 'Ana',
         expect: {
           contains: ['Ana'],
+        },
+      },
+      {
+        user: '1',
+        expect: {
+          // "1" here answers "¿cuántas personas?" (party size 1), not the
+          // schedule_choice menu — the bot must still ask turno actual/otro día.
+          contains: ['turno actual'],
+          draftStep: 'schedule_choice',
         },
       },
       {
@@ -251,6 +295,13 @@ const happyPathScenarios: ConversationScenario[] = [
       {
         user: '3',
         expect: {
+          contains: ['turno actual'],
+          draftStep: 'schedule_choice',
+        },
+      },
+      {
+        user: '1',
+        expect: {
           reservationCreated: true,
         },
       },
@@ -276,6 +327,13 @@ const happyPathScenarios: ConversationScenario[] = [
       },
       {
         user: '10',
+        expect: {
+          contains: ['turno actual'],
+          draftStep: 'schedule_choice',
+        },
+      },
+      {
+        user: '1',
         expect: {
           reservationCreated: true,
         },
@@ -674,7 +732,8 @@ const hallucinationScenarios: ConversationScenario[] = [
       {
         user: '¿A qué hora abren? ¿Puedo reservar para las 21?',
         expect: {
-          isSpecificTime: true,
+          // Should never hallucinate opening hours — real hours are only ever
+          // surfaced via checkBusinessHours/findNextOpenSlot inside the guided flow.
           notContains: ['abrimos', 'cerramos', '21', 'horario'],
         },
       },
@@ -805,80 +864,91 @@ const hallucinationScenarios: ConversationScenario[] = [
 ];
 
 // =============================================================================
-// SPECIFIC TIME REJECTION SCENARIOS
+// SPECIFIC TIME SCENARIOS
+//
+// Scheduled reservations (specific day/time, within the next 7 days) are now a
+// supported feature — these scenarios used to assert a hard "instant-only"
+// rejection, which no longer applies. They now assert the opposite: a
+// specific-time mention is reservation-related and reaches the normal flow
+// (never hallucinating a confirmation on the spot, and never mistaking the
+// date/time reference itself for the customer's name — see couldBeAName's
+// hasDateOrTimeSignal guard in whatsapp-handler.service.ts).
 // =============================================================================
 
 const specificTimeScenarios: ConversationScenario[] = [
   {
     id: 'st-01',
-    description: 'Reserva para hora específica con HH:MM',
+    description: 'Reserva para hora específica con HH:MM — ya no se rechaza, sigue el flujo',
     category: 'specific_time',
     turns: [
       {
         user: 'Quiero reservar para las 21:30',
         expect: {
-          isSpecificTime: true,
-          contains: ['instantáneas', 'turno actual'],
+          contains: ['nombre'],
+          notContains: ['instantáneas', 'hora específica'],
         },
       },
     ],
   },
   {
     id: 'st-02',
-    description: 'Reserva para "mañana"',
+    description: 'Reserva para "mañana" — "mañana" no debe confundirse con el nombre del cliente',
     category: 'specific_time',
     turns: [
       {
         user: 'Quiero reservar mesa para mañana',
         expect: {
-          isSpecificTime: true,
-          contains: ['turno actual'],
+          contains: ['nombre'],
+          notContains: ['instantáneas', 'hora específica', 'Mañana!'],
         },
       },
     ],
   },
   {
     id: 'st-03',
-    description: 'Reserva con AM/PM',
+    description: 'Reserva con AM/PM — ya no se rechaza, sigue el flujo',
     category: 'specific_time',
     turns: [
       {
         user: 'Necesito una mesa para 4 a las 8pm',
         expect: {
-          isSpecificTime: true,
+          contains: ['nombre'],
+          notContains: ['instantáneas', 'hora específica'],
         },
       },
     ],
   },
   {
     id: 'st-04',
-    description: 'Reserva con "esta noche"',
+    description: 'Reserva con "esta noche" — no debe confundirse con el nombre del cliente',
     category: 'specific_time',
     turns: [
       {
         user: 'Me gustaría una reserva para esta noche',
         expect: {
-          isSpecificTime: true,
+          contains: ['nombre'],
+          notContains: ['instantáneas', 'hora específica', 'Noche!'],
         },
       },
     ],
   },
   {
     id: 'st-05',
-    description: '"A las 10hs quiero reservar mesa para 6"',
+    description: '"A las 10hs quiero reservar mesa para 6" — ya no se rechaza, sigue el flujo',
     category: 'specific_time',
     turns: [
       {
         user: 'A las 10hs quiero reservar mesa para 6',
         expect: {
-          isSpecificTime: true,
+          contains: ['nombre'],
+          notContains: ['instantáneas', 'hora específica'],
         },
       },
     ],
   },
   {
     id: 'st-06',
-    description: 'Mid-flow: hora específica en party_size step',
+    description: 'Mid-flow: hora específica en party_size step ahora avanza a schedule_choice',
     category: 'specific_time',
     turns: [
       {
@@ -892,30 +962,10 @@ const specificTimeScenarios: ConversationScenario[] = [
       {
         user: 'Somos 4, tipo las 22',
         expect: {
-          // Should detect specific time mid-flow
-          isSpecificTime: true,
-        },
-      },
-    ],
-  },
-  {
-    id: 'st-07',
-    description: 'Opt-in después de rechazo specific-time — no debe repetir "Hola"',
-    category: 'specific_time',
-    turns: [
-      {
-        user: 'Quiero reservar para las 21:30',
-        expect: {
-          isSpecificTime: true,
+          // Party size (4) is extracted and the bot asks whether "22" should be
+          // used as a specific time — via the new schedule_choice step.
           contains: ['turno actual'],
-        },
-      },
-      {
-        user: 'Si',
-        expect: {
-          // Should ask for name WITHOUT repeating "Hola"
-          contains: ['nombre'],
-          notContains: ['¡Hola!', 'Hola 😊'],
+          draftStep: 'schedule_choice',
         },
       },
     ],
@@ -959,6 +1009,13 @@ const doubleMessageScenarios: ConversationScenario[] = [
         user: 'Juan\n4 personas',
         expect: {
           // Merged: "Juan\n4 personas" → should extract name + party size
+          contains: ['turno actual'],
+          draftStep: 'schedule_choice',
+        },
+      },
+      {
+        user: '1',
+        expect: {
           reservationCreated: true,
         },
       },
@@ -987,6 +1044,13 @@ const doubleMessageScenarios: ConversationScenario[] = [
         user: 'Hola quiero reservar\nPedro\n5 personas',
         expect: {
           // Full prefilled reservation via merged messages
+          contains: ['turno actual'],
+          draftStep: 'schedule_choice',
+        },
+      },
+      {
+        user: '1',
+        expect: {
           reservationCreated: true,
         },
       },
@@ -1095,6 +1159,13 @@ const nameCorrectionScenarios: ConversationScenario[] = [
       },
       {
         user: '3',
+        expect: {
+          contains: ['turno actual'],
+          draftStep: 'schedule_choice',
+        },
+      },
+      {
+        user: '1',
         expect: { reservationCreated: true },
       },
     ],
@@ -1136,8 +1207,15 @@ const prefilledScenarios: ConversationScenario[] = [
       {
         user: 'Hola quiero reservar Matías somos 4',
         expect: {
-          reservationCreated: true,
+          contains: ['turno actual'],
+          draftStep: 'schedule_choice',
           noOllama: true,
+        },
+      },
+      {
+        user: '1',
+        expect: {
+          reservationCreated: true,
         },
       },
     ],
@@ -1150,8 +1228,15 @@ const prefilledScenarios: ConversationScenario[] = [
       {
         user: 'Quiero reservar, Lucía, 2 personas',
         expect: {
-          reservationCreated: true,
+          contains: ['turno actual'],
+          draftStep: 'schedule_choice',
           noOllama: true,
+        },
+      },
+      {
+        user: '1',
+        expect: {
+          reservationCreated: true,
         },
       },
     ],
@@ -1164,8 +1249,15 @@ const prefilledScenarios: ConversationScenario[] = [
       {
         user: 'Hola quiero reservar Matías Andrada 4 personas',
         expect: {
-          reservationCreated: true,
+          contains: ['turno actual'],
+          draftStep: 'schedule_choice',
           noOllama: true,
+        },
+      },
+      {
+        user: '1',
+        expect: {
+          reservationCreated: true,
         },
       },
     ],
@@ -1218,7 +1310,8 @@ const editFlowScenarios: ConversationScenario[] = [
         },
       },
       {
-        user: '2',
+        // Edit menu now has 3 options (1=cantidad, 2=día y horario, 3=cancelar).
+        user: '3',
         expect: {
           contains: ['cancelada'],
         },
@@ -1302,6 +1395,13 @@ const mixedInputScenarios: ConversationScenario[] = [
         user: 'Somos 4 pero tal vez se sume alguien más',
         expect: {
           // Should extract "4" from the narrative (contains party_size signal words)
+          contains: ['turno actual'],
+          draftStep: 'schedule_choice',
+        },
+      },
+      {
+        user: '1',
+        expect: {
           reservationCreated: true,
         },
       },

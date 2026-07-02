@@ -99,14 +99,14 @@ function setupMocks(scenario: ConversationScenario): ScenarioRunContext {
 
   // Active reservation for the scenario
   if (scenario.activeReservation) {
-    jest.spyOn(SupabaseService, 'getActiveTodayReservationByPhone').mockResolvedValue({
+    jest.spyOn(SupabaseService, 'getActiveReservationByPhone').mockResolvedValue({
       id: scenario.activeReservation.id,
       status: scenario.activeReservation.status,
       display_code: scenario.activeReservation.displayCode,
       party_size: 4,
     } as any);
   } else {
-    jest.spyOn(SupabaseService, 'getActiveTodayReservationByPhone').mockResolvedValue(null);
+    jest.spyOn(SupabaseService, 'getActiveReservationByPhone').mockResolvedValue(null);
   }
 
   // Reservation status update
