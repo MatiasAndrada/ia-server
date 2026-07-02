@@ -77,6 +77,36 @@ describe('reservation-scope', () => {
           evaluateReservationScope('contame un chiste', { currentStep: 'party_size' }).decision
         ).toBe('off_topic');
       });
+
+      it('allows a bare name reply when a name correction was just requested', () => {
+        // Regression: the bot asks "¿Cuál es tu nombre correcto?" expecting a bare
+        // name back, but without awaitingNameCorrection a plain "Marta Juarez"
+        // (no "me llamo" phrase) used to get bounced as off-topic — forever, since
+        // no reply without an explicit correction phrase could ever satisfy this
+        // step's normal allow-list, trapping the customer in a loop.
+        expect(
+          evaluateReservationScope('Marta Juarez', {
+            currentStep: 'party_size',
+            awaitingNameCorrection: true,
+          }).decision
+        ).toBe('allow');
+
+        expect(
+          evaluateReservationScope('Si', {
+            currentStep: 'party_size',
+            awaitingNameCorrection: true,
+          }).decision
+        ).toBe('allow');
+      });
+
+      it('still rejects unrelated chatter at party_size when no name correction was requested', () => {
+        expect(
+          evaluateReservationScope('Marta Juarez', {
+            currentStep: 'party_size',
+            awaitingNameCorrection: false,
+          }).decision
+        ).toBe('off_topic');
+      });
     });
 
     describe('at the "schedule_choice" step', () => {
@@ -115,6 +145,15 @@ describe('reservation-scope', () => {
           evaluateReservationScope('cual es la capital de francia', { currentStep: 'date' })
             .decision
         ).toBe('off_topic');
+      });
+
+      it('allows a bare-number time answer even with trailing punctuation', () => {
+        // Regression: a reply like "14?" to "¿A qué hora?" was misclassified as
+        // off-topic because hasBareNumber tested the raw message (with the "?")
+        // instead of the accent/punctuation-stripped normalized text.
+        expect(evaluateReservationScope('14?', { currentStep: 'time' }).decision).toBe('allow');
+        expect(evaluateReservationScope('14.', { currentStep: 'time' }).decision).toBe('allow');
+        expect(evaluateReservationScope('9,', { currentStep: 'date' }).decision).toBe('allow');
       });
     });
 
@@ -199,6 +238,12 @@ describe('reservation-scope', () => {
 
     it('detects a bare number answer', () => {
       expect(hasDateOrTimeSignal('21', normalizeReservationScopeText('21'))).toBe(true);
+    });
+
+    it('detects a bare number answer even with trailing punctuation', () => {
+      expect(hasDateOrTimeSignal('14?', normalizeReservationScopeText('14?'))).toBe(true);
+      expect(hasDateOrTimeSignal('14.', normalizeReservationScopeText('14.'))).toBe(true);
+      expect(hasDateOrTimeSignal('¡9!', normalizeReservationScopeText('¡9!'))).toBe(true);
     });
 
     it('returns false for unrelated text', () => {
