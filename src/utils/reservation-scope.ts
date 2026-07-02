@@ -5,6 +5,10 @@ export type ReservationScopeDecision = 'allow' | 'off_topic' | 'out_of_window';
 export interface ReservationScopeContext {
   businessName?: string;
   currentStep?: ReservationDraft['step'] | null;
+  // true right after the bot asked "¿Cuál es tu nombre correcto?" at the
+  // party_size step — a bare name-like reply must be allowed through even
+  // without an explicit correction phrase like "me llamo X".
+  awaitingNameCorrection?: boolean;
 }
 
 export interface ReservationScopeEvaluation {
@@ -78,7 +82,18 @@ export function evaluateReservationScope(
   }
 
   if (currentStep === 'party_size') {
-    if (containsPartySizeSignal(trimmedMessage, normalizedMessage) || isNameCorrectionLikeMessage(normalizedMessage) || reservationRelated) {
+    // We just asked "¿Cuál es tu nombre correcto?" — any reply is expected to
+    // be that name, so (like confirm_slot's yes/no) always let it through and
+    // let the step handler validate/retry instead of bouncing it as off-topic.
+    if (context.awaitingNameCorrection) {
+      return { decision: 'allow' };
+    }
+
+    if (
+      containsPartySizeSignal(trimmedMessage, normalizedMessage) ||
+      isNameCorrectionLikeMessage(normalizedMessage) ||
+      reservationRelated
+    ) {
       return { decision: 'allow' };
     }
 
@@ -666,8 +681,9 @@ export function hasDateOrTimeSignal(message: string, normalizedMessage: string):
   const hasDateReference = /\b(?:manana|hoy|pasado\s+manana|esta\s+tarde|esta\s+noche|al\s+mediodia|otro\s+dia|otro\s+turno|mas\s+tarde|a\s+la\s+noche|a\s+la\s+tarde|a\s+la\s+manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo|finde|fin\s+de\s+semana)\b/.test(normalizedMessage);
   // "9 y media", "3 y cuarto" — common Argentine half/quarter-hour expressions
   const hasHalfHour = /\b\d{1,2}\s*y\s*(media|cuarto|menos\s+(cuarto|quince))\b/.test(normalizedMessage);
-  // A bare 1-2 digit number alone (e.g. answering "21" or "9" to "¿A qué hora?")
-  const hasBareNumber = /^\d{1,2}$/.test(message.trim());
+  // A bare 1-2 digit number alone (e.g. answering "21" or "9" to "¿A qué hora?").
+  // Uses the normalized text so trailing punctuation ("14?", "14.") still counts.
+  const hasBareNumber = /^\d{1,2}$/.test(normalizedMessage);
 
   return (
     hasClockPattern ||
