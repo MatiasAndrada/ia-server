@@ -84,6 +84,31 @@ export class BaileysService {
   }
 
   /**
+   * Check whether a session directory holds credentials from a completed pairing.
+   * useMultiFileAuthState() always returns a truthy `creds` object even when
+   * creds.json is missing (it falls back to a freshly generated, unpaired one),
+   * so file presence alone isn't enough - we need `registered`/`me` to confirm
+   * the phone actually finished scanning the QR at some point.
+   */
+  private hasPersistedCredentials(sessionPath: string): boolean {
+    try {
+      const credsPath = path.join(sessionPath, 'creds.json');
+      if (!fs.existsSync(credsPath)) {
+        return false;
+      }
+
+      const creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
+      return Boolean(creds?.registered && creds?.me?.id);
+    } catch (error) {
+      logger.warn('Failed to read creds.json while checking persisted credentials', {
+        sessionPath,
+        error,
+      });
+      return false;
+    }
+  }
+
+  /**
    * Extract normalized phone number from WhatsApp JID.
    * Example: 5493532401540:55@s.whatsapp.net -> +5493532401540
    */
@@ -888,15 +913,22 @@ export class BaileysService {
       for (const dirent of sessionDirs) {
         try {
           const sessionPath = path.join(this.AUTH_DIR, dirent.name);
-          
+
+          if (!this.hasPersistedCredentials(sessionPath)) {
+            logger.info('Skipping recovery, no persisted credentials (never fully linked)', {
+              dirName: dirent.name,
+            });
+            continue;
+          }
+
           // Try to get businessId from metadata file
           const businessId = await this.getBusinessIdFromSession(sessionPath);
-          
+
           if (!businessId) {
             // Fallback: use directory name as businessId (for backward compatibility)
             logger.warn('No business metadata found, using directory name as businessId', { dirName: dirent.name });
             const fallbackBusinessId = dirent.name;
-            
+
             // Start session with fallback businessId
             await this.startSession(fallbackBusinessId);
             logger.info('Session recovery initiated (fallback)', { businessId: fallbackBusinessId });
