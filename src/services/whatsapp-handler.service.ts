@@ -5,9 +5,33 @@ import { SupabaseService } from './supabase.service';
 import { SupabaseConfig } from '../config/supabase';
 import { RedisConfig } from '../config/redis';
 import { agentRegistry } from '../agents';
-import { BaileysMessage, ReservationDraft } from '../types';
+import { BaileysMessage, ReservationDraft, WeeklyHours } from '../types';
 import { logger } from '../utils/logger';
-import { evaluateReservationScope, isGreetingOrReservationOptInMessage, isObviouslyGibberish, containsProfanity } from '../utils/reservation-scope';
+import {
+  evaluateReservationScope,
+  isGreetingOrReservationOptInMessage,
+  isObviouslyGibberish,
+  containsProfanity,
+  isInstantChoiceMessage,
+  normalizeReservationScopeText,
+  hasDateOrTimeSignal,
+} from '../utils/reservation-scope';
+import {
+  nowInBuenosAires,
+  parseRelativeDay,
+  isWithinNextWeek,
+  parseTimeOfDay,
+  combineToUtcISO,
+  isInPast,
+  parseBaDateKey,
+  formatBaDateKey,
+  describeScheduledDateTime,
+  describeScheduledAtUtc,
+  isDayOpen,
+  checkBusinessHours,
+  findNextOpenSlot,
+  findNextSlotOnDay,
+} from '../utils/reservation-datetime';
 
 type ActiveReservationSnapshot = {
   status: 'WAITING' | 'CONFIRMED' | 'NOTIFIED';
@@ -248,7 +272,7 @@ export class WhatsAppHandler {
 
           if (this.isCancellationIntent(messageText)) {
             const phone = this.normalizeWhatsAppNumber(from);
-            const activeRes = await SupabaseService.getActiveTodayReservationByPhone(phone, businessId);
+            const activeRes = await SupabaseService.getActiveReservationByPhone(phone, businessId);
             if (activeRes) {
               const cancelled = await SupabaseService.updateReservationStatus(activeRes.id, 'CANCELLED');
               const msg = cancelled
@@ -277,7 +301,7 @@ export class WhatsAppHandler {
       // e.g. "la quiero cancelar", "cancelar mi reserva", "quiero cancelar"
       if (!draft && this.isCancellationIntent(messageText)) {
         const phone = this.normalizeWhatsAppNumber(from);
-        const activeRes = await SupabaseService.getActiveTodayReservationByPhone(phone, businessId);
+        const activeRes = await SupabaseService.getActiveReservationByPhone(phone, businessId);
         if (activeRes) {
           const cancelled = await SupabaseService.updateReservationStatus(activeRes.id, 'CANCELLED');
           const msg = cancelled
@@ -292,7 +316,7 @@ export class WhatsAppHandler {
           await this.sendWhatsAppMessage(
             businessId,
             from,
-            'No encontré ninguna reserva activa para hoy. ¿Algo más en lo que pueda ayudarte?'
+            'No encontré ninguna reserva activa. ¿Algo más en lo que pueda ayudarte?'
           );
         }
         return;
@@ -383,7 +407,15 @@ export class WhatsAppHandler {
       }
 
       // FAST PATH: deterministic reservation steps should not wait for AI response
-      if (draft && (draft.step === 'name' || draft.step === 'party_size' || draft.step === 'edit_menu')) {
+      if (
+        draft &&
+        (draft.step === 'name' ||
+          draft.step === 'party_size' ||
+          draft.step === 'edit_menu' ||
+          draft.step === 'schedule_choice' ||
+          draft.step === 'date' ||
+          draft.step === 'time')
+      ) {
         logger.info('⚡ Bypassing agent for deterministic draft step', {
           conversationId,
           businessId,
@@ -689,7 +721,7 @@ export class WhatsAppHandler {
           if (partySize && partySize > 0 && partySize <= 50) {
             await ReservationService.setPartySize(conversationId, partySize);
             logger.info('✅ Embedded party size set at name step', { conversationId, partySize });
-            await this.createAndNotifyReservation(conversationId, businessId, jid);
+            await this.promptScheduleChoice(conversationId, businessId, jid);
             return true;
           }
 
@@ -716,7 +748,7 @@ export class WhatsAppHandler {
                   conversationId,
                   partySize,
                 });
-                await this.createAndNotifyReservation(conversationId, businessId, jid);
+                await this.promptScheduleChoice(conversationId, businessId, jid);
                 return true;
               }
 
@@ -756,9 +788,8 @@ export class WhatsAppHandler {
             await ReservationService.setPartySize(conversationId, partySize);
             logger.info('✅ Party size set', { conversationId, partySize });
 
-            // Create reservation immediately after party size is confirmed
-            logger.info('💾 Creating reservation', { conversationId, businessId, jid });
-            await this.createAndNotifyReservation(conversationId, businessId, jid);
+            // Ask whether this is for the current turn or a future day/time
+            await this.promptScheduleChoice(conversationId, businessId, jid);
             return true;
           } else {
             // Invalid party size — track attempts and cancel after 2
@@ -783,8 +814,339 @@ export class WhatsAppHandler {
           break;
         }
 
+        case 'schedule_choice': {
+          const trimmedChoice = messageText.trim();
+          const normalizedChoice = normalizeReservationScopeText(messageText);
+          const wantsInstant = trimmedChoice === '1' || isInstantChoiceMessage(normalizedChoice);
+          const wantsToPickDay = trimmedChoice === '2';
+
+          if (wantsInstant) {
+            if (draft.editMode && draft.existingReservationId) {
+              const ok = await SupabaseService.updateReservationSchedule(draft.existingReservationId, null);
+              await ReservationService.deleteDraft(conversationId);
+              const msg = ok
+                ? '✅ ¡Listo! Tu reserva vuelve a ser para el turno actual.'
+                : '❌ No se pudo actualizar tu reserva. Por favor intentá de nuevo.';
+              await this.sendWhatsAppMessage(businessId, jid, msg);
+              return true;
+            }
+
+            // Check if the business is currently open before creating an instant reservation
+            const businessNow = await SupabaseService.getBusinessById(businessId);
+            const weeklyHoursNow = businessNow?.weekly_hours as WeeklyHours | null | undefined;
+
+            if (weeklyHoursNow && Object.keys(weeklyHoursNow).length > 0) {
+              const nowBA = nowInBuenosAires();
+              const nowCheck = checkBusinessHours(nowBA, nowBA.getUTCHours(), nowBA.getUTCMinutes(), weeklyHoursNow);
+
+              if (!nowCheck.allowed) {
+                const margin = businessNow?.reservation_opening_margin_minutes ?? 15;
+                const nextSlot = findNextOpenSlot(nowBA, weeklyHoursNow, margin);
+
+                if (!nextSlot) {
+                  await this.sendWhatsAppMessage(
+                    businessId,
+                    jid,
+                    '❌ El local está cerrado en este momento y no encontré disponibilidad en los próximos 7 días.'
+                  );
+                  await ReservationService.deleteDraft(conversationId);
+                  return true;
+                }
+
+                const slotTime = `${String(nextSlot.hour).padStart(2, '0')}:${String(nextSlot.minute).padStart(2, '0')}`;
+                const slotAt = combineToUtcISO(nextSlot.baDate, nextSlot.hour, nextSlot.minute);
+                const slotDate = formatBaDateKey(nextSlot.baDate);
+
+                await ReservationService.moveToConfirmSlot(conversationId, slotDate, slotTime, slotAt, 'schedule_choice');
+                await this.sendWhatsAppMessage(
+                  businessId,
+                  jid,
+                  `❌ El local está cerrado en este momento.\n\nEl próximo horario disponible es el *${nextSlot.label}*.\n\n¿Reservamos para esa hora? Respondé *sí* o *no*.`
+                );
+                return true;
+              }
+            }
+
+            await ReservationService.setInstantSchedule(conversationId);
+            await this.createAndNotifyReservation(conversationId, businessId, jid);
+            return true;
+          }
+
+          // The customer may have already named a day in this same message (e.g. "el viernes")
+          const nowBA = nowInBuenosAires();
+          const parsedDay = wantsToPickDay ? null : parseRelativeDay(messageText, nowBA);
+
+          if (parsedDay) {
+            if (!isWithinNextWeek(parsedDay.baDate, nowBA)) {
+              await this.sendWhatsAppMessage(
+                businessId,
+                jid,
+                'Por ahora solo puedo tomar reservas dentro de los próximos 7 días. ¿Para qué día de esa semana la querés?'
+              );
+              return true;
+            }
+
+            await ReservationService.setScheduledDate(conversationId, parsedDay);
+            await this.sendWhatsAppMessage(businessId, jid, `¿A qué hora el ${parsedDay.label}?`);
+            return true;
+          }
+
+          if (wantsToPickDay) {
+            await ReservationService.moveToDateStep(conversationId);
+            await this.sendWhatsAppMessage(
+              businessId,
+              jid,
+              '¿Para qué día de la semana lo quiere? Podés decir "mañana", "el viernes", etc.'
+            );
+            return true;
+          }
+
+          draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
+          await ReservationService.saveDraft(draft);
+
+          if (draft.invalidAttempts >= 2) {
+            await ReservationService.deleteDraft(conversationId);
+            await this.sendWhatsAppMessage(
+              businessId,
+              jid,
+              '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+            );
+          } else {
+            await this.sendWhatsAppMessage(
+              businessId,
+              jid,
+              '❌ Respondé *1* para ahora o *2* para elegir día y horario.'
+            );
+          }
+          return true;
+        }
+
+        case 'date': {
+          const nowBA = nowInBuenosAires();
+          const parsedDay = parseRelativeDay(messageText, nowBA);
+
+          if (!parsedDay || !isWithinNextWeek(parsedDay.baDate, nowBA)) {
+            draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
+            await ReservationService.saveDraft(draft);
+
+            if (draft.invalidAttempts >= 2) {
+              await ReservationService.deleteDraft(conversationId);
+              await this.sendWhatsAppMessage(
+                businessId,
+                jid,
+                '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+              );
+            } else if (parsedDay) {
+              // Parsed but outside the 7-day window
+              await this.sendWhatsAppMessage(
+                businessId,
+                jid,
+                'Por ahora solo puedo tomar reservas dentro de los próximos 7 días. ¿Para qué día de esa semana la querés?'
+              );
+            } else {
+              await this.sendWhatsAppMessage(
+                businessId,
+                jid,
+                '❌ No entendí el día. Podés decir "hoy", "mañana" o un día de la semana (ej: "el viernes").'
+              );
+            }
+            return true;
+          }
+
+          // Reject days the business is closed (if weekly_hours is configured)
+          const businessForDate = await SupabaseService.getBusinessById(businessId);
+          const weeklyHoursForDate = businessForDate?.weekly_hours as WeeklyHours | null | undefined;
+          if (weeklyHoursForDate && Object.keys(weeklyHoursForDate).length > 0) {
+            const dayCheck = isDayOpen(parsedDay.baDate, weeklyHoursForDate);
+            if (!dayCheck.open) {
+              draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
+              await ReservationService.saveDraft(draft);
+              if (draft.invalidAttempts >= 2) {
+                await ReservationService.deleteDraft(conversationId);
+                await this.sendWhatsAppMessage(
+                  businessId,
+                  jid,
+                  '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+                );
+              } else {
+                await this.sendWhatsAppMessage(
+                  businessId,
+                  jid,
+                  `❌ ${dayCheck.reason} ¿Para qué otro día querés reservar?`
+                );
+              }
+              return true;
+            }
+          }
+
+          await ReservationService.setScheduledDate(conversationId, parsedDay);
+          await this.sendWhatsAppMessage(businessId, jid, `¿A qué hora el ${parsedDay.label}?`);
+          return true;
+        }
+
+        case 'time': {
+          const parsedTime = parseTimeOfDay(messageText);
+          const scheduledDate = draft.scheduledDate;
+
+          if (!parsedTime || !scheduledDate) {
+            draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
+            await ReservationService.saveDraft(draft);
+
+            if (draft.invalidAttempts >= 2) {
+              await ReservationService.deleteDraft(conversationId);
+              await this.sendWhatsAppMessage(
+                businessId,
+                jid,
+                '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+              );
+            } else {
+              await this.sendWhatsAppMessage(
+                businessId,
+                jid,
+                '❌ No entendí el horario. Por ejemplo: "21:00", "9pm" o "a las 9 y media".'
+              );
+            }
+            return true;
+          }
+
+          const baDate = parseBaDateKey(scheduledDate);
+          const scheduledAt = combineToUtcISO(baDate, parsedTime.hour, parsedTime.minute);
+
+          if (isInPast(scheduledAt)) {
+            draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
+            await ReservationService.saveDraft(draft);
+
+            if (draft.invalidAttempts >= 2) {
+              await ReservationService.deleteDraft(conversationId);
+              await this.sendWhatsAppMessage(
+                businessId,
+                jid,
+                '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+              );
+            } else {
+              await this.sendWhatsAppMessage(
+                businessId,
+                jid,
+                '❌ Ese horario ya pasó. Decime otro horario, o otro día si preferís.'
+              );
+            }
+            return true;
+          }
+
+          // Check business hours if weekly_hours is configured
+          const businessForTime = await SupabaseService.getBusinessById(businessId);
+          const weeklyHoursForTime = businessForTime?.weekly_hours as WeeklyHours | null | undefined;
+          if (weeklyHoursForTime && Object.keys(weeklyHoursForTime).length > 0) {
+            const hoursCheck = checkBusinessHours(baDate, parsedTime.hour, parsedTime.minute, weeklyHoursForTime);
+            if (!hoursCheck.allowed) {
+              const margin = businessForTime?.reservation_opening_margin_minutes ?? 15;
+              const afterMinutes = parsedTime.hour * 60 + parsedTime.minute;
+              const nextSlot = findNextSlotOnDay(baDate, afterMinutes, weeklyHoursForTime, margin);
+
+              if (nextSlot) {
+                // Offer the next available opening on the same day
+                const slotTime = `${String(nextSlot.hour).padStart(2, '0')}:${String(nextSlot.minute).padStart(2, '0')}`;
+                const slotAt = combineToUtcISO(baDate, nextSlot.hour, nextSlot.minute);
+                await ReservationService.moveToConfirmSlot(conversationId, scheduledDate, slotTime, slotAt, 'time');
+                await this.sendWhatsAppMessage(
+                  businessId,
+                  jid,
+                  `❌ ${hoursCheck.reason}\n\nEl próximo horario disponible ese día es a las *${slotTime}*. ¿Reservamos para esa hora? Respondé *sí* o *no*.`
+                );
+              } else {
+                // No more openings today — ask user to pick a different time or day
+                draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
+                await ReservationService.saveDraft(draft);
+                if (draft.invalidAttempts >= 2) {
+                  await ReservationService.deleteDraft(conversationId);
+                  await this.sendWhatsAppMessage(
+                    businessId,
+                    jid,
+                    '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+                  );
+                } else {
+                  await this.sendWhatsAppMessage(
+                    businessId,
+                    jid,
+                    `❌ ${hoursCheck.reason} No hay más turnos disponibles ese día. ¿Querés elegir otro horario o día?`
+                  );
+                }
+              }
+              return true;
+            }
+          }
+
+          const timeLabel = `${String(parsedTime.hour).padStart(2, '0')}:${String(parsedTime.minute).padStart(2, '0')}`;
+
+          // ----- EDIT MODE: update the existing reservation's schedule -----
+          if (draft.editMode && draft.existingReservationId) {
+            const ok = await SupabaseService.updateReservationSchedule(draft.existingReservationId, scheduledAt);
+            await ReservationService.deleteDraft(conversationId);
+            const label = describeScheduledDateTime(scheduledDate, parsedTime.hour, parsedTime.minute, nowInBuenosAires());
+            const msg = ok
+              ? `✅ ¡Listo! Tu reserva fue actualizada para el ${label}.`
+              : '❌ No se pudo actualizar tu reserva. Por favor intentá de nuevo.';
+            await this.sendWhatsAppMessage(businessId, jid, msg);
+            return true;
+          }
+
+          // ----- NORMAL MODE: finish creating the reservation -----
+          await ReservationService.setScheduledTime(conversationId, timeLabel, scheduledAt);
+          await this.createAndNotifyReservation(conversationId, businessId, jid);
+          return true;
+        }
+
+        case 'confirm_slot': {
+          const normalized = normalizeReservationScopeText(messageText);
+          const isYes = /^(si|sí|yes|dale|ok|bueno|perfecto|claro|va|vamos|genial|listo)$/.test(normalized.trim());
+          const isNo = /^(no|nope|nel|para nada|prefiero|otro|diferente)$/.test(normalized.trim()) || /\bno\b/.test(normalized);
+
+          const proposedAt = draft.scheduledAt;
+          const proposedDate = draft.scheduledDate;
+          const proposedTime = draft.scheduledTime;
+          const origin = draft.confirmSlotOrigin;
+
+          if (isYes && proposedAt && proposedDate && proposedTime) {
+            if (draft.editMode && draft.existingReservationId) {
+              const ok = await SupabaseService.updateReservationSchedule(draft.existingReservationId, proposedAt);
+              await ReservationService.deleteDraft(conversationId);
+              const label = describeScheduledAtUtc(proposedAt, nowInBuenosAires());
+              const msg = ok
+                ? `✅ ¡Listo! Tu reserva fue actualizada para el ${label}.`
+                : '❌ No se pudo actualizar tu reserva. Por favor intentá de nuevo.';
+              await this.sendWhatsAppMessage(businessId, jid, msg);
+            } else {
+              await this.createAndNotifyReservation(conversationId, businessId, jid);
+            }
+            return true;
+          }
+
+          if (isNo) {
+            if (origin === 'schedule_choice') {
+              // Let the user choose again: instant or future day
+              await ReservationService.moveToScheduleChoice(conversationId);
+              await this.promptScheduleChoice(conversationId, businessId, jid);
+            } else {
+              // Come back from time step: ask for a different time on the same day
+              const dateDraft = await ReservationService.getDraft(conversationId);
+              if (dateDraft) {
+                dateDraft.step = 'time';
+                dateDraft.scheduledAt = undefined;
+                dateDraft.scheduledTime = undefined;
+                dateDraft.confirmSlotOrigin = undefined;
+                await ReservationService.saveDraft(dateDraft);
+              }
+              await this.sendWhatsAppMessage(businessId, jid, '¿A qué hora preferís entonces?');
+            }
+            return true;
+          }
+
+          await this.sendWhatsAppMessage(businessId, jid, 'Respondé *sí* para confirmar ese horario o *no* para elegir otro.');
+          return true;
+        }
+
         case 'edit_menu': {
-          // User is choosing what to edit: 1=party_size, 2=cancel
+          // User is choosing what to edit: 1=party_size, 2=día y horario, 3=cancelar
           const choice = this.extractNumber(messageText);
           const reservationId = draft.existingReservationId;
 
@@ -802,6 +1164,13 @@ export class WhatsAppHandler {
             await this.sendWhatsAppMessage(businessId, jid, '¿Para cuántas personas querés cambiar la reserva?\n\nEjemplo: 2, 4, 6, etc.');
             return true;
           } else if (choice === 2) {
+            await ReservationService.startEditSchedule(conversationId, businessId, reservationId, {
+              customerName: draft.customerName,
+              partySize: draft.partySize,
+            });
+            await this.promptScheduleChoice(conversationId, businessId, jid);
+            return true;
+          } else if (choice === 3) {
             // Cancel reservation
             await ReservationService.deleteDraft(conversationId);
             const cancelled = await SupabaseService.updateReservationStatus(reservationId, 'CANCELLED');
@@ -814,7 +1183,7 @@ export class WhatsAppHandler {
             await this.sendWhatsAppMessage(
               businessId,
               jid,
-              '❌ Por favor respondé con *1* o *2* según la opción que elegiste.'
+              '❌ Por favor respondé con *1*, *2* o *3* según la opción que elegiste.'
             );
             return true;
           }
@@ -829,6 +1198,26 @@ export class WhatsAppHandler {
     }
 
     return false; // No custom message sent, continue with agent response
+  }
+
+  /**
+   * Ask the customer whether the reservation is for the current turn or for a
+   * specific day/time within the next 7 days, advancing the draft to `schedule_choice`.
+   */
+  private async promptScheduleChoice(
+    conversationId: string,
+    businessId: string,
+    jid: string
+  ): Promise<void> {
+    await ReservationService.moveToScheduleChoice(conversationId);
+    await this.sendWhatsAppMessage(
+      businessId,
+      jid,
+      '¿Para el turno actual (ahora) o para otro día de la semana?\n\n' +
+        '1️⃣ Ahora (turno actual)\n' +
+        '2️⃣ Elegir día y horario\n\n' +
+        'Respondé con el *número* de la opción, o directamente decime el día (ej: "el viernes").'
+    );
   }
 
   /**
@@ -863,17 +1252,17 @@ export class WhatsAppHandler {
       });
 
       if (result.success && result.waitlistEntry && draft) {
-        // -- Duplicate: customer already has a reservation today --
+        // -- Duplicate: customer already has an active reservation --
         if (result.alreadyExists) {
           const entry = result.waitlistEntry;
-          logger.info('Reservation already exists for today, showing summary', {
+          logger.info('Reservation already exists, showing summary', {
             conversationId,
             entryId: entry.id,
             displayCode: entry.display_code,
           });
           await ReservationService.deleteDraft(conversationId);
           const summaryMsg =
-            `⚠️ Ya tenés una reserva para hoy:\n\n` +
+            `⚠️ Ya tenés una reserva para ${this.describeReservationWhen(entry.scheduled_at)}:\n\n` +
             `👥 Personas: *${entry.party_size}*\n` +
             `📋 Código: *${entry.display_code}*\n\n` +
             `Si querés modificarla, respondé *hola* para ver las opciones.`;
@@ -898,22 +1287,32 @@ export class WhatsAppHandler {
         });
 
         let confirmationMessage: string;
+        const isScheduled = !!entry.scheduled_at;
+        const whenLine = isScheduled
+          ? `📅 Día y hora: ${this.describeReservationWhen(entry.scheduled_at)}\n`
+          : '';
 
         if (entry.status === 'CONFIRMED' || entry.status === 'NOTIFIED') {
+          const followUpLine = isScheduled
+            ? `✨ Te esperamos en el horario agendado.\n`
+            : `✨ Te avisaremos cuando falten 20 minutos para que puedas ocupar tu mesa.\n` +
+              `Apreciamos tu puntualidad.\n`;
+
           confirmationMessage =
             `✅ ¡Tu reserva está CONFIRMADA!\n\n` +
             `👤 Nombre: ${draft.customerName || 'Cliente'}\n` +
             `👥 Personas: ${draft.partySize || entry.party_size}\n` +
+            whenLine +
             `📁 Código de reserva: *${entry.display_code}*\n\n` +
-            `✨ Te avisaremos cuando falten 20 minutos para que puedas ocupar tu mesa.\n` +
-            `Apreciamos tu puntualidad.\n\n` +
-            `_Si necesitas cancelar, respondé CANCELAR._`;
+            followUpLine +
+            `\n_Si necesitas cancelar, respondé CANCELAR._`;
         } else {
           // WAITING — el operador debe confirmar manualmente
           confirmationMessage =
             `⏳ *Reserva RECIBIDA*\n\n` +
             `👤 Nombre: ${draft.customerName || 'Cliente'}\n` +
             `👥 Personas: ${draft.partySize || entry.party_size}\n` +
+            whenLine +
             `📁 Código: *${entry.display_code}*\n\n` +
             `⏰ Te notificaremos cuando confirmen tu reserva.\n\n` +
             `_Si necesitas cancelar, respondé CANCELAR._`;
@@ -1142,7 +1541,7 @@ export class WhatsAppHandler {
       }
 
       const phone = this.normalizeWhatsAppNumber(jid);
-      const activeReservation = await SupabaseService.getActiveTodayReservationByPhone(phone, businessId);
+      const activeReservation = await SupabaseService.getActiveReservationByPhone(phone, businessId);
       if (!activeReservation) {
         return false;
       }
@@ -1153,7 +1552,8 @@ export class WhatsAppHandler {
         : '';
 
       const reminderMessage =
-        `⚠️ Recordatorio: ya tenés una reserva para hoy${displayCodeText} con estado *${statusLabel}*.` +
+        `⚠️ Recordatorio: ya tenés una reserva para ${this.describeReservationWhen(activeReservation.scheduled_at)}` +
+        `${displayCodeText} con estado *${statusLabel}*.` +
         `\n\nNo puedo crear otra reserva hasta que la actual cambie a *finalizada* o se *cancele*.` +
         `\n\nSi querés, respondé *CANCELAR* para anularla y después crear una nueva.`;
 
@@ -1192,6 +1592,14 @@ export class WhatsAppHandler {
     ];
 
     return explicitPatterns.some((pattern) => pattern.test(normalized));
+  }
+
+  /** "hoy" for instant reservations, or "viernes 17/07 a las 21:00" for scheduled ones. */
+  private describeReservationWhen(scheduledAt: string | null | undefined): string {
+    if (!scheduledAt) {
+      return 'hoy';
+    }
+    return describeScheduledAtUtc(scheduledAt, nowInBuenosAires());
   }
 
   private getReservationStatusLabel(status: string): string {
@@ -1293,6 +1701,10 @@ export class WhatsAppHandler {
     ];
     if (socialPhrases.some(p => lower.includes(p))) return false;
 
+    // Reject leftover date/time references (e.g. "para mañana", "esta noche") that
+    // survive stripping of reservation phrasing — these are never a person's name.
+    if (hasDateOrTimeSignal(trimmed, normalizeReservationScopeText(trimmed))) return false;
+
     // Reject if it contains conjugated verbs or pronouns that signal a full sentence
     const sentenceMarkers = [
       'puedo', 'puede', 'podes', 'quiero', 'quiere', 'queres',
@@ -1372,7 +1784,7 @@ export class WhatsAppHandler {
       const phone = this.normalizeWhatsAppNumber(jid);
 
       // 3. Check for an active reservation today (Buenos Aires timezone)
-      const activeReservation = await SupabaseService.getActiveTodayReservationByPhone(
+      const activeReservation = await SupabaseService.getActiveReservationByPhone(
         phone,
         businessId
       );
@@ -1385,14 +1797,15 @@ export class WhatsAppHandler {
             : '⏳ Pendiente';
 
         const summaryMsg =
-          `¡Hola! Ya tenés una reserva para hoy:\n\n` +
+          `¡Hola! Ya tenés una reserva para ${this.describeReservationWhen(activeReservation.scheduled_at)}:\n\n` +
           `👥 Personas: *${activeReservation.party_size}*\n` +
           `📋 Código: *${activeReservation.display_code}*\n` +
           `📌 Estado: ${statusLabel}\n\n` +
           `⚠️ Mientras esta reserva siga activa, no puedo crear una nueva.\n\n` +
           `¿Qué querés hacer?\n` +
           `1️⃣ Editar cantidad de personas\n` +
-          `2️⃣ Cancelar la reserva\n\n` +
+          `2️⃣ Editar día y horario\n` +
+          `3️⃣ Cancelar la reserva\n\n` +
           `Responde con el *número* de la opción.`;
 
         await this.sendWhatsAppMessage(businessId, jid, summaryMsg);
@@ -1538,7 +1951,7 @@ export class WhatsAppHandler {
 
       if (partySize && partySize > 0 && partySize <= 50) {
         await ReservationService.setPartySize(conversationId, partySize);
-        await this.createAndNotifyReservation(conversationId, businessId, jid);
+        await this.promptScheduleChoice(conversationId, businessId, jid);
         return true;
       }
 
@@ -1763,7 +2176,7 @@ export class WhatsAppHandler {
       logger.info('🎯 Starting CREATE_RESERVATION action', { conversationId, businessId });
 
       const phone = this.normalizeWhatsAppNumber(jid);
-      const activeReservation = await SupabaseService.getActiveTodayReservationByPhone(phone, businessId);
+      const activeReservation = await SupabaseService.getActiveReservationByPhone(phone, businessId);
       if (activeReservation) {
         const statusLabel = this.getReservationStatusLabel(activeReservation.status);
         const displayCodeText = activeReservation.display_code
@@ -1773,7 +2186,8 @@ export class WhatsAppHandler {
         await this.sendWhatsAppMessage(
           businessId,
           jid,
-          `⚠️ Ya tenés una reserva activa para hoy${displayCodeText} con estado *${statusLabel}*.` +
+          `⚠️ Ya tenés una reserva activa para ${this.describeReservationWhen(activeReservation.scheduled_at)}` +
+          `${displayCodeText} con estado *${statusLabel}*.` +
           `\n\nNo puedo crear una nueva hasta que la actual finalice o se cancele.` +
           `\n\nSi querés, respondé *CANCELAR* para liberar tu cupo y luego crear otra.`
         );

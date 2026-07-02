@@ -1,12 +1,13 @@
 import { RedisConfig } from '../config/redis';
 import { SupabaseService } from './supabase.service';
-import { 
-  ReservationDraft, 
+import {
+  ReservationDraft,
   CreateReservationRequest,
-  CreateReservationResponse 
+  CreateReservationResponse
 } from '../types';
 import { logger } from '../utils/logger';
 import { formatName } from '../utils/formatters';
+import { ParsedDay, formatBaDateKey } from '../utils/reservation-datetime';
 
 export class ReservationService {
   private static readonly DRAFT_TTL = 3600; // 1 hour
@@ -189,6 +190,118 @@ export class ReservationService {
   }
 
   /**
+   * Move the draft into the schedule_choice step after party size is confirmed.
+   */
+  static async moveToScheduleChoice(conversationId: string): Promise<ReservationDraft | null> {
+    const draft = await this.getDraft(conversationId);
+    if (!draft) {
+      logger.warn('Draft not found for moveToScheduleChoice', { conversationId });
+      return null;
+    }
+
+    draft.step = 'schedule_choice';
+    await this.saveDraft(draft);
+    return draft;
+  }
+
+  /**
+   * Customer chose the instant/current-turn reservation — clears any scheduling fields.
+   */
+  static async setInstantSchedule(conversationId: string): Promise<ReservationDraft | null> {
+    const draft = await this.getDraft(conversationId);
+    if (!draft) {
+      logger.warn('Draft not found for setInstantSchedule', { conversationId });
+      return null;
+    }
+
+    draft.scheduledDate = undefined;
+    draft.scheduledTime = undefined;
+    draft.scheduledAt = undefined;
+    await this.saveDraft(draft);
+    return draft;
+  }
+
+  /**
+   * Move the draft into the date step (asking which day within the next 7 days).
+   */
+  /**
+   * Saves a pre-computed proposed slot into the draft and transitions to the
+   * `confirm_slot` step, where the user must confirm "yes" or "no".
+   */
+  static async moveToConfirmSlot(
+    conversationId: string,
+    scheduledDate: string,
+    scheduledTime: string,
+    scheduledAt: string,
+    origin: 'schedule_choice' | 'time'
+  ): Promise<ReservationDraft | null> {
+    const draft = await this.getDraft(conversationId);
+    if (!draft) {
+      logger.warn('Draft not found for moveToConfirmSlot', { conversationId });
+      return null;
+    }
+
+    draft.scheduledDate = scheduledDate;
+    draft.scheduledTime = scheduledTime;
+    draft.scheduledAt = scheduledAt;
+    draft.confirmSlotOrigin = origin;
+    draft.step = 'confirm_slot';
+    await this.saveDraft(draft);
+    return draft;
+  }
+
+  static async moveToDateStep(conversationId: string): Promise<ReservationDraft | null> {
+    const draft = await this.getDraft(conversationId);
+    if (!draft) {
+      logger.warn('Draft not found for moveToDateStep', { conversationId });
+      return null;
+    }
+
+    draft.step = 'date';
+    await this.saveDraft(draft);
+    return draft;
+  }
+
+  /**
+   * Update draft with the chosen day (within the next 7 days) and advance to the time step.
+   */
+  static async setScheduledDate(
+    conversationId: string,
+    parsedDay: ParsedDay
+  ): Promise<ReservationDraft | null> {
+    const draft = await this.getDraft(conversationId);
+    if (!draft) {
+      logger.warn('Draft not found for setting scheduled date', { conversationId });
+      return null;
+    }
+
+    draft.scheduledDate = formatBaDateKey(parsedDay.baDate);
+    draft.step = 'time';
+    await this.saveDraft(draft);
+    return draft;
+  }
+
+  /**
+   * Update draft with the final scheduled instant (UTC ISO) combining the chosen day + time.
+   */
+  static async setScheduledTime(
+    conversationId: string,
+    scheduledTime: string,
+    scheduledAt: string
+  ): Promise<ReservationDraft | null> {
+    const draft = await this.getDraft(conversationId);
+    if (!draft) {
+      logger.warn('Draft not found for setting scheduled time', { conversationId });
+      return null;
+    }
+
+    draft.scheduledTime = scheduledTime;
+    draft.scheduledAt = scheduledAt;
+    await this.saveDraft(draft);
+    return draft;
+  }
+
+  /**
    * Create the reservation in Supabase
    */
   static async createReservation(
@@ -239,6 +352,7 @@ export class ReservationService {
         customerName: draft.customerName,
         customerPhone,
         partySize: draft.partySize,
+        scheduledAt: draft.scheduledAt ?? null,
       };
 
       logger.info('📤 Sending reservation to Supabase', {
@@ -408,7 +522,7 @@ export class ReservationService {
     const delayMs = 300;
 
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
-      const existingReservation = await SupabaseService.getActiveTodayReservationByPhone(
+      const existingReservation = await SupabaseService.getActiveReservationByPhone(
         customerPhone,
         businessId
       );
@@ -452,6 +566,41 @@ export class ReservationService {
       conversationId,
       reservationId,
       step: 'party_size',
+    });
+    return draft;
+  }
+
+  /**
+   * Start an edit-mode draft to modify the day/time of an existing reservation.
+   * Reuses the same schedule_choice → date → time steps as creation; the only
+   * difference is that completing the flow updates the existing entry instead
+   * of creating a new one (see editMode/editingField === 'schedule' handling
+   * in WhatsAppHandler).
+   */
+  static async startEditSchedule(
+    conversationId: string,
+    businessId: string,
+    reservationId: string,
+    existingData: { customerName?: string; partySize?: number }
+  ): Promise<ReservationDraft> {
+    const draft: ReservationDraft = {
+      conversationId,
+      businessId,
+      customerName: existingData.customerName,
+      partySize: existingData.partySize,
+      step: 'schedule_choice',
+      editMode: true,
+      editingField: 'schedule',
+      existingReservationId: reservationId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    await this.saveDraft(draft);
+    logger.info('Edit schedule draft started', {
+      conversationId,
+      reservationId,
+      step: 'schedule_choice',
     });
     return draft;
   }

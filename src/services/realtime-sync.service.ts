@@ -261,6 +261,14 @@ export class RealtimeSyncService {
 
       const customer = customerData as CustomersRow;
 
+      if (!customer.phone) {
+        logger.error('❌ [REALTIME] Customer has no phone, skipping INSERT notification', {
+          customerId: customer.id,
+          entryId: entry.id,
+        });
+        return;
+      }
+
       let notificationMessage: string;
       if (entry.status === 'SEATED') {
         notificationMessage =
@@ -475,7 +483,7 @@ export class RealtimeSyncService {
         eventType,
         businessId,
         tableId: table?.id,
-        tableNumber: table?.table_number,
+        tableName: table?.name,
       });
 
       if (!businessId) {
@@ -600,7 +608,15 @@ export class RealtimeSyncService {
       }
 
       const customer = customerData as CustomersRow;
-      
+
+      if (!customer.phone) {
+        logger.error('❌ [REALTIME] Customer has no phone, skipping waitlist notification', {
+          customerId: customer.id,
+          entryId: newEntry.id,
+        });
+        return;
+      }
+
       logger.info('✅ [REALTIME] Customer data retrieved', {
         customerId: customer.id,
         customerName: customer.name,
