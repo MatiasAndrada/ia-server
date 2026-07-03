@@ -34,6 +34,7 @@ import {
   findNextSlotOnDay,
   addBaDays,
   formatDayLabel,
+  findWeekdayDayNumberMismatch,
   type ParsedDay,
 } from '../utils/reservation-datetime';
 
@@ -688,6 +689,16 @@ export class WhatsAppHandler {
         );
       }
 
+      if (draft.pendingWeekdayDayMismatch) {
+        return await this.resolvePendingWeekdayDayMismatch(
+          draft,
+          messageText,
+          conversationId,
+          businessId,
+          jid
+        );
+      }
+
       switch (draft.step) {
         case 'name': {
           // Guard: user responded with an affirmative ("Si", "Dale", "Ok") instead of their name.
@@ -901,11 +912,12 @@ export class WhatsAppHandler {
 
             if (weeklyHoursNow && Object.keys(weeklyHoursNow).length > 0) {
               const nowBA = nowInBuenosAires();
-              const nowCheck = checkBusinessHours(nowBA, nowBA.getUTCHours(), nowBA.getUTCMinutes(), weeklyHoursNow);
+              const closingMarginNow = businessNow?.reservation_closing_margin_minutes ?? 15;
+              const nowCheck = checkBusinessHours(nowBA, nowBA.getUTCHours(), nowBA.getUTCMinutes(), weeklyHoursNow, closingMarginNow);
 
               if (!nowCheck.allowed) {
                 const margin = businessNow?.reservation_opening_margin_minutes ?? 15;
-                const nextSlot = findNextOpenSlot(nowBA, weeklyHoursNow, margin);
+                const nextSlot = findNextOpenSlot(nowBA, weeklyHoursNow, margin, closingMarginNow);
 
                 if (!nextSlot) {
                   await this.sendWhatsAppMessage(
@@ -953,6 +965,19 @@ export class WhatsAppHandler {
             // The customer may have already given the time in the same message too
             // (e.g. "el viernes a las 21") — skip the redundant "¿A qué hora?" ask.
             const parsedTimeSameMsg = parseTimeOfDay(messageText);
+
+            if (
+              await this.raiseWeekdayDayNumberMismatchIfNeeded(
+                draft,
+                messageText,
+                parsedDay,
+                businessId,
+                jid,
+                parsedTimeSameMsg ?? undefined
+              )
+            ) {
+              return true;
+            }
 
             if (
               await this.raiseWeekdayAmbiguityIfNeeded(
@@ -1078,6 +1103,19 @@ export class WhatsAppHandler {
           const parsedTimeSameMsg = parseTimeOfDay(messageText);
 
           if (
+            await this.raiseWeekdayDayNumberMismatchIfNeeded(
+              draft,
+              messageText,
+              parsedDay,
+              businessId,
+              jid,
+              parsedTimeSameMsg ?? undefined
+            )
+          ) {
+            return true;
+          }
+
+          if (
             await this.raiseWeekdayAmbiguityIfNeeded(
               draft,
               parsedDay,
@@ -1135,6 +1173,19 @@ export class WhatsAppHandler {
                 await this.sendWhatsAppMessage(businessId, jid, `❌ ${dayCheck.reason} ¿Para qué otro día querés reservar?`);
                 return true;
               }
+            }
+
+            if (
+              await this.raiseWeekdayDayNumberMismatchIfNeeded(
+                draft,
+                messageText,
+                dayOverride,
+                businessId,
+                jid,
+                parsedTime ?? undefined
+              )
+            ) {
+              return true;
             }
 
             if (
@@ -1221,8 +1272,9 @@ export class WhatsAppHandler {
 
                 const businessForConfirm = await SupabaseService.getBusinessById(businessId);
                 const weeklyHoursForConfirm = businessForConfirm?.weekly_hours as WeeklyHours | null | undefined;
+                const closingMarginForConfirm = businessForConfirm?.reservation_closing_margin_minutes ?? 15;
                 const hoursCheck = weeklyHoursForConfirm && Object.keys(weeklyHoursForConfirm).length > 0
-                  ? checkBusinessHours(targetBaDate, targetHour, targetMinute, weeklyHoursForConfirm)
+                  ? checkBusinessHours(targetBaDate, targetHour, targetMinute, weeklyHoursForConfirm, closingMarginForConfirm)
                   : { allowed: true as const };
 
                 if (!hoursCheck.allowed) {
@@ -1466,6 +1518,129 @@ export class WhatsAppHandler {
   }
 
   /**
+   * When the customer names a weekday together with an explicit day-of-month
+   * number that doesn't match the nearest in-window occurrence of that
+   * weekday (e.g. "jueves 17" when the closest bookable Thursday is the 9th),
+   * the requested date is beyond the 7-day booking window. Instead of
+   * silently booking the nearest Thursday (ignoring the "17"), stash the
+   * nearest in-window alternative (plus any time already given in the same
+   * message) and ask the customer whether to take it instead. Returns true
+   * once handled — the caller should stop processing and let the next
+   * inbound message resolve it (see the top of {@link processDraftStep}).
+   * Returns false when there's no such mismatch.
+   */
+  private async raiseWeekdayDayNumberMismatchIfNeeded(
+    draft: ReservationDraft,
+    messageText: string,
+    parsedDay: ParsedDay,
+    businessId: string,
+    jid: string,
+    pendingTime?: { hour: number; minute: number }
+  ): Promise<boolean> {
+    const mismatch = findWeekdayDayNumberMismatch(messageText, parsedDay);
+    if (!mismatch) return false;
+
+    const nearestDateKey = formatBaDateKey(parsedDay.baDate);
+    const nearestLabel = parsedDay.label;
+
+    draft.pendingWeekdayDayMismatch = {
+      weekdayLabel: mismatch.weekdayLabel,
+      requestedDayNumber: mismatch.requestedDayNumber,
+      nearestDateKey,
+      nearestLabel,
+      nearestIsToday: parsedDay.isToday,
+      pendingHour: pendingTime?.hour,
+      pendingMinute: pendingTime?.minute,
+    };
+    await ReservationService.saveDraft(draft);
+
+    await this.sendWhatsAppMessage(
+      businessId,
+      jid,
+      `Por ahora solo puedo tomar reservas para *esta semana y la que viene*, así que no puedo agendar para el *${mismatch.weekdayLabel} ${mismatch.requestedDayNumber}*.\n\n¿Querés que sea para el *${nearestLabel}* (el próximo ${mismatch.weekdayLabel}) en su lugar?\n\nRespondé *sí* o *no*.`
+    );
+    return true;
+  }
+
+  /**
+   * Resolves a pending weekday/day-number mismatch question (see
+   * {@link raiseWeekdayDayNumberMismatchIfNeeded}) from the customer's reply.
+   * Returns true once handled (either resolved and continued, or re-asked
+   * because the reply wasn't recognized).
+   */
+  private async resolvePendingWeekdayDayMismatch(
+    draft: ReservationDraft,
+    messageText: string,
+    conversationId: string,
+    businessId: string,
+    jid: string
+  ): Promise<boolean> {
+    const pending = draft.pendingWeekdayDayMismatch;
+    if (!pending) return false;
+
+    const trimmed = messageText.trim();
+    const normalized = normalizeReservationScopeText(messageText);
+    const wantsYes = trimmed === '1' || /^(si|dale|ok|okay|okey|oka|claro|va|de una)\b/.test(normalized);
+    const wantsNo = trimmed === '2' || /^no\b/.test(normalized);
+
+    if (!wantsYes && !wantsNo) {
+      draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
+      if (draft.invalidAttempts >= 2) {
+        await ReservationService.deleteDraft(conversationId);
+        await this.sendWhatsAppMessage(
+          businessId,
+          jid,
+          '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+        );
+      } else {
+        await ReservationService.saveDraft(draft);
+        await this.sendWhatsAppMessage(
+          businessId,
+          jid,
+          `No te entendí. Respondé *sí* para el ${pending.nearestLabel} o *no* para elegir otro día.`
+        );
+      }
+      return true;
+    }
+
+    draft.pendingWeekdayDayMismatch = undefined;
+
+    if (wantsNo) {
+      await ReservationService.saveDraft(draft);
+      await this.sendWhatsAppMessage(
+        businessId,
+        jid,
+        '¿Para qué día de la semana lo querés? Podés decir "mañana", "el viernes", etc.'
+      );
+      return true;
+    }
+
+    if (pending.pendingHour !== undefined && pending.pendingMinute !== undefined) {
+      await ReservationService.saveDraft(draft);
+      await this.finalizeScheduledTime(
+        draft,
+        conversationId,
+        businessId,
+        jid,
+        pending.nearestDateKey,
+        pending.pendingHour,
+        pending.pendingMinute
+      );
+      return true;
+    }
+
+    const nearestBaDate = parseBaDateKey(pending.nearestDateKey);
+    await ReservationService.setScheduledDate(conversationId, {
+      baDate: nearestBaDate,
+      label: pending.nearestLabel,
+      isToday: pending.nearestIsToday,
+      matchedWeekdayName: true,
+    });
+    await this.sendWhatsAppMessage(businessId, jid, `¿A qué hora el ${pending.nearestLabel}?`);
+    return true;
+  }
+
+  /**
    * Validates a day+hour pair and either finishes the reservation (create or,
    * in edit mode, update) or offers the next same-day slot on a business-hours
    * conflict. Shared by the `time` step and by `date`/`schedule_choice` when the
@@ -1508,11 +1683,12 @@ export class WhatsAppHandler {
     const business = await SupabaseService.getBusinessById(businessId);
     const weeklyHours = business?.weekly_hours as WeeklyHours | null | undefined;
     if (weeklyHours && Object.keys(weeklyHours).length > 0) {
-      const hoursCheck = checkBusinessHours(baDate, hour, minute, weeklyHours);
+      const closingMargin = business?.reservation_closing_margin_minutes ?? 15;
+      const hoursCheck = checkBusinessHours(baDate, hour, minute, weeklyHours, closingMargin);
       if (!hoursCheck.allowed) {
         const margin = business?.reservation_opening_margin_minutes ?? 15;
         const afterMinutes = hour * 60 + minute;
-        const nextSlot = findNextSlotOnDay(baDate, afterMinutes, weeklyHours, margin);
+        const nextSlot = findNextSlotOnDay(baDate, afterMinutes, weeklyHours, margin, closingMargin);
 
         if (nextSlot) {
           // Offer the next available opening on the same day
@@ -2117,7 +2293,10 @@ export class WhatsAppHandler {
 
   private isGreetingMessage(text: string): boolean {
     const normalized = this.normalizeCourtesyText(text);
-    return /^(hola|holis|hello|hi|hey|buenas|buenos dias|buenas tardes|buenas noches|buen dia|buen dia!|holaa|holaa!|que tal|quetal)$/.test(normalized);
+    // Allows one or more greeting units strung together (e.g. "hola buenos
+    // dias", "hola que tal") — a compound greeting is still just a greeting.
+    const unit = '(?:hola{1,6}|holis|hello|hi|hey|buenas|buenos dias|buenas tardes|buenas noches|buen dia|que tal|quetal)';
+    return new RegExp(`^${unit}(?: ${unit})*$`).test(normalized);
   }
 
   /**
