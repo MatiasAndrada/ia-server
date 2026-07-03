@@ -914,9 +914,20 @@ describe('WhatsAppHandler single-active-reservation policy', () => {
   describe('schedule_choice / date / time steps', () => {
     // Thursday 2026-07-02, 12:00 BA wall-clock time.
     const NOW_BA = new Date('2026-07-02T12:00:00.000Z');
+    let dateNowSpy: jest.SpyInstance<number, []>;
 
     beforeEach(() => {
       jest.spyOn(ReservationDatetime, 'nowInBuenosAires').mockReturnValue(NOW_BA);
+      // isInPast() reads the real Date.now() directly, so it must be frozen too —
+      // otherwise these hardcoded 2026-07-xx fixtures silently become "in the past"
+      // once the real clock catches up to them.
+      dateNowSpy = jest
+        .spyOn(Date, 'now')
+        .mockReturnValue(NOW_BA.getTime() + ReservationDatetime.BA_OFFSET_MS);
+    });
+
+    afterEach(() => {
+      dateNowSpy.mockRestore();
     });
 
     const scheduleChoiceDraft = (overrides: Partial<Record<string, unknown>> = {}) => ({
@@ -1304,10 +1315,18 @@ describe('WhatsAppHandler single-active-reservation policy', () => {
   describe('confirm_slot step', () => {
     // Thursday 2026-07-02, 12:00 BA wall-clock time.
     const NOW_BA = new Date('2026-07-02T12:00:00.000Z');
+    let dateNowSpy: jest.SpyInstance<number, []>;
 
     beforeEach(() => {
       jest.spyOn(ReservationDatetime, 'nowInBuenosAires').mockReturnValue(NOW_BA);
       jest.spyOn(SupabaseService, 'getBusinessById').mockResolvedValue(null as any);
+      dateNowSpy = jest
+        .spyOn(Date, 'now')
+        .mockReturnValue(NOW_BA.getTime() + ReservationDatetime.BA_OFFSET_MS);
+    });
+
+    afterEach(() => {
+      dateNowSpy.mockRestore();
     });
 
     const confirmSlotDraft = (overrides: Partial<Record<string, unknown>> = {}) => ({

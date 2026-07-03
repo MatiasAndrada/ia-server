@@ -31,7 +31,7 @@ describe('Prompts Utils', () => {
     it('should build prompt without context', () => {
       const prompt = buildSystemPrompt();
 
-      expect(prompt).toContain('restaurante');
+      expect(prompt).toContain('local');
       expect(prompt).toContain('lista de espera');
       expect(prompt).toContain('WhatsApp');
     });
@@ -110,7 +110,7 @@ describe('Prompts Utils', () => {
       const response = buildFallbackResponse();
 
       expect(response).toContain('problemas técnicos');
-      expect(response).toContain('restaurante');
+      expect(response).toContain('local');
     });
   });
 });

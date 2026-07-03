@@ -114,10 +114,9 @@ describe('OllamaService', () => {
   describe('healthCheck', () => {
     it('should return healthy status when Ollama is available', async () => {
       (OllamaConfig.healthCheck as jest.Mock).mockResolvedValue(true);
-      mockAxiosInstance.post.mockResolvedValue({
+      mockAxiosInstance.get.mockResolvedValue({
         data: {
-          message: { role: 'assistant', content: 'Hi' },
-          done: true,
+          models: [{ name: 'llama3.2' }],
         },
       });
 

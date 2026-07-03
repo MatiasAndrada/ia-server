@@ -132,7 +132,12 @@ describe('Reservation Flow Integration Tests', () => {
     });
 
     it('saves the chosen day and advances to the time step', async () => {
-      const parsedDay = { baDate: new Date('2026-07-03T00:00:00.000Z'), label: 'viernes 03/07', isToday: false };
+      const parsedDay = {
+        baDate: new Date('2026-07-03T00:00:00.000Z'),
+        label: 'viernes 03/07',
+        isToday: false,
+        matchedWeekdayName: false,
+      };
       const result = await ReservationService.setScheduledDate(scheduleConvId, parsedDay);
 
       expect(result?.step).toBe('time');
@@ -174,6 +179,7 @@ describe('Reservation Flow Integration Tests', () => {
           baDate: new Date(),
           label: 'hoy',
           isToday: true,
+          matchedWeekdayName: false,
         })
       ).resolves.toBeNull();
       await expect(
