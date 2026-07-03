@@ -500,9 +500,16 @@ export function normalizeReservationScopeText(text: string): string {
     .trim();
 }
 
+// Covers Argentine informal variants (holaa, ola typo, ey, yoo), standard Spanish and English.
+const GREETING_UNIT =
+  '(?:hola{1,6}|holis|holiwis|ola|hello|hi|hey|ey+|buenas|buenos\\s+dias|buenas\\s+tardes|buenas\\s+noches|buen\\s+dia|que\\s+tal|saludos|yoo+)';
+// Allows one or more greeting units strung together (e.g. "hola buenos dias",
+// "hola que tal") — a compound greeting is still just a greeting, not an
+// off-topic message.
+const GREETING_MESSAGE_RE = new RegExp(`^${GREETING_UNIT}(?:\\s+${GREETING_UNIT})*$`);
+
 function isGreetingMessage(normalizedMessage: string): boolean {
-  // Covers Argentine informal variants (holaa, ola typo, ey, yoo), standard Spanish and English.
-  return /^(hola{1,6}|holis|holiwis|ola|hello|hi|hey|ey+|buenas|buenos\s+dias|buenas\s+tardes|buenas\s+noches|buen\s+dia|que\s+tal|saludos|yoo+)$/.test(normalizedMessage);
+  return GREETING_MESSAGE_RE.test(normalizedMessage);
 }
 
 function isReservationOptInMessage(normalizedMessage: string): boolean {

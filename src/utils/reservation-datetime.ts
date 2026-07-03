@@ -111,6 +111,55 @@ export function parseRelativeDay(text: string, nowBA: Date): ParsedDay | null {
   return null;
 }
 
+export interface WeekdayDayNumberMismatch {
+  /** The day-of-month number the customer explicitly typed (e.g. 17 in "jueves 17"). */
+  requestedDayNumber: number;
+  /** Lowercase weekday label, e.g. "jueves". */
+  weekdayLabel: string;
+}
+
+/**
+ * Detects when the customer named a weekday together with an explicit
+ * day-of-month number that does NOT match the nearest in-window occurrence of
+ * that weekday (e.g. "jueves 17" when the closest bookable Thursday is the
+ * 9th) — the customer almost certainly means a date further out than the
+ * 7-day booking window, and `parseRelativeDay` would otherwise silently
+ * resolve to the nearest Thursday instead, ignoring the "17".
+ *
+ * Only matches a number immediately adjacent to the weekday token (in either
+ * order) so that time-of-day mentions in the same message ("jueves a las 17",
+ * "jueves 17hs") are not mistaken for a day-of-month reference.
+ */
+export function findWeekdayDayNumberMismatch(
+  text: string,
+  parsedDay: ParsedDay
+): WeekdayDayNumberMismatch | null {
+  if (!parsedDay.matchedWeekdayName) return null;
+
+  const normalized = normalizeReservationScopeText(text);
+  const weekdayAlternation = WEEKDAY_KEYS.join('|');
+  const timeSuffixGuard = '(?!\\s*(?::|hs\\b|horas\\b|am\\b|pm\\b))';
+
+  const dayAfterWeekday = new RegExp(
+    `\\b(?:${weekdayAlternation})\\s+(\\d{1,2})\\b${timeSuffixGuard}`
+  );
+  const dayBeforeWeekday = new RegExp(
+    `\\b(\\d{1,2})\\s+(?:${weekdayAlternation})\\b`
+  );
+
+  const match = normalized.match(dayAfterWeekday) ?? normalized.match(dayBeforeWeekday);
+  if (!match) return null;
+
+  const requestedDayNumber = parseInt(match[1], 10);
+  if (requestedDayNumber < 1 || requestedDayNumber > 31) return null;
+  if (requestedDayNumber === parsedDay.baDate.getUTCDate()) return null;
+
+  return {
+    requestedDayNumber,
+    weekdayLabel: WEEKDAY_LABELS[parsedDay.baDate.getUTCDay()],
+  };
+}
+
 /** True when `baDate` falls within [today, today + 6 days] in Buenos Aires time. */
 export function isWithinNextWeek(baDate: Date, nowBA: Date): boolean {
   const start = startOfBaDay(nowBA);
@@ -230,10 +279,10 @@ function minutesOfDay(hhmm: string): number {
   return h * 60 + m;
 }
 
-function isMinuteInShift(t: number, shift: WeeklyHoursShift): boolean {
+function isMinuteInShift(t: number, shift: WeeklyHoursShift, closingMarginMinutes = 0): boolean {
   const open = minutesOfDay(shift.open);
   // "00:00" as close = end of day (midnight = 1440 min, no cross-midnight)
-  const close = shift.close === '00:00' ? 24 * 60 : minutesOfDay(shift.close);
+  const close = (shift.close === '00:00' ? 24 * 60 : minutesOfDay(shift.close)) - closingMarginMinutes;
   if (close > open) {
     return t >= open && t < close;
   }
@@ -256,7 +305,8 @@ export function formatDayHours(dayKey: WeeklyHoursDayKey, weeklyHours: WeeklyHou
 export function findNextOpenSlot(
   nowBA: Date,
   weeklyHours: WeeklyHours,
-  marginMinutes: number
+  marginMinutes: number,
+  closingMarginMinutes = 0
 ): { baDate: Date; hour: number; minute: number; label: string; isToday: boolean } | null {
   const nowMin = nowBA.getUTCHours() * 60 + nowBA.getUTCMinutes();
   const todayStart = startOfBaDay(nowBA);
@@ -270,6 +320,10 @@ export function findNextOpenSlot(
     for (const shift of entry.shifts) {
       const openMin = minutesOfDay(shift.open);
       const slotMin = openMin + marginMinutes;
+      const closeMin = (shift.close === '00:00' ? 24 * 60 : minutesOfDay(shift.close)) - closingMarginMinutes;
+
+      // The opening-margin slot must still leave room before the closing margin cutoff
+      if (closeMin > openMin && slotMin >= closeMin) continue;
 
       // On the same day we must look strictly ahead of the current time
       if (daysAhead === 0 && slotMin <= nowMin) continue;
@@ -302,7 +356,8 @@ export function findNextSlotOnDay(
   baDate: Date,
   afterMinutes: number,
   weeklyHours: WeeklyHours,
-  marginMinutes: number
+  marginMinutes: number,
+  closingMarginMinutes = 0
 ): { hour: number; minute: number } | null {
   const dayKey = DOW_TO_KEY[baDate.getUTCDay()];
   const entry = weeklyHours[dayKey];
@@ -311,7 +366,9 @@ export function findNextSlotOnDay(
   for (const shift of entry.shifts) {
     const openMin = minutesOfDay(shift.open);
     const slotMin = openMin + marginMinutes;
-    if (slotMin > afterMinutes && slotMin < 24 * 60) {
+    const closeMin = (shift.close === '00:00' ? 24 * 60 : minutesOfDay(shift.close)) - closingMarginMinutes;
+    const effectiveClose = closeMin > openMin ? Math.min(closeMin, 24 * 60) : 24 * 60;
+    if (slotMin > afterMinutes && slotMin < effectiveClose) {
       return { hour: Math.floor(slotMin / 60), minute: slotMin % 60 };
     }
   }
@@ -346,7 +403,8 @@ export function checkBusinessHours(
   baDate: Date,
   hour: number,
   minute: number,
-  weeklyHours: WeeklyHours
+  weeklyHours: WeeklyHours,
+  closingMarginMinutes = 0
 ): { allowed: boolean; reason?: string } {
   const dow = baDate.getUTCDay();
   const dayKey = DOW_TO_KEY[dow];
@@ -357,7 +415,7 @@ export function checkBusinessHours(
   const prevDayEntry = weeklyHours[prevDayKey];
 
   // Check current day's shifts
-  if (dayEntry && !dayEntry.closed && dayEntry.shifts.some(s => isMinuteInShift(t, s))) {
+  if (dayEntry && !dayEntry.closed && dayEntry.shifts.some(s => isMinuteInShift(t, s, closingMarginMinutes))) {
     return { allowed: true };
   }
 
@@ -368,7 +426,7 @@ export function checkBusinessHours(
       const o = minutesOfDay(s.open);
       return s.close !== '00:00' && c < o;
     });
-    if (crossMidnight.some(s => t < minutesOfDay(s.close))) {
+    if (crossMidnight.some(s => t < minutesOfDay(s.close) - closingMarginMinutes)) {
       return { allowed: true };
     }
   }
