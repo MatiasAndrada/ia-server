@@ -71,6 +71,7 @@ export type Database = {
           public_join_enabled: boolean
           public_screen_enabled: boolean
           requires_party_size: boolean
+          reservation_closing_margin_minutes: number
           reservation_opening_margin_minutes: number
           supports_tables: boolean
           type: string
@@ -102,6 +103,7 @@ export type Database = {
           public_join_enabled?: boolean
           public_screen_enabled?: boolean
           requires_party_size?: boolean
+          reservation_closing_margin_minutes?: number
           reservation_opening_margin_minutes?: number
           supports_tables?: boolean
           type?: string
@@ -133,6 +135,7 @@ export type Database = {
           public_join_enabled?: boolean
           public_screen_enabled?: boolean
           requires_party_size?: boolean
+          reservation_closing_margin_minutes?: number
           reservation_opening_margin_minutes?: number
           supports_tables?: boolean
           type?: string

@@ -324,6 +324,21 @@ export interface ReservationDraft {
     pendingHour?: number;
     pendingMinute?: number;
   };
+  // Set when the customer names a weekday together with an explicit
+  // day-of-month number that doesn't match the nearest in-window occurrence
+  // of that weekday (e.g. "jueves 17" when the closest bookable Thursday is
+  // the 9th) — the requested date is beyond the 7-day booking window. Holds
+  // the nearest in-window alternative (and any time already given in the
+  // same message) until the customer confirms whether to take it instead.
+  pendingWeekdayDayMismatch?: {
+    weekdayLabel: string; // e.g. "jueves"
+    requestedDayNumber: number; // e.g. 17
+    nearestDateKey: string; // YYYY-MM-DD, nearest in-window occurrence
+    nearestLabel: string; // e.g. "jueves 09/07"
+    nearestIsToday: boolean;
+    pendingHour?: number;
+    pendingMinute?: number;
+  };
   // Edit mode fields
   editMode?: boolean;
   editingField?: 'party_size' | 'schedule';
