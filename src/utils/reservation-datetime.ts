@@ -182,15 +182,16 @@ function applyTimeOfDayQualifier(normalized: string, hour: number): number {
 }
 
 /**
- * Parses a time-of-day reference: "20:30", "8pm", "a las 21", "9 y media",
- * "21 hs", or a bare number ("21", "9") answering "¿a qué hora?".
+ * Parses a time-of-day reference: "20:30", "20:30hs"/"20:30 hs", "8pm",
+ * "a las 21", "9 y media", "21 hs", or a bare number ("21", "9") answering
+ * "¿a qué hora?".
  */
 export function parseTimeOfDay(text: string): ParsedTime | null {
   const trimmed = text.trim();
   const lower = trimmed.toLowerCase();
   const normalized = normalizeReservationScopeText(trimmed);
 
-  let match = lower.match(/\b([01]?\d|2[0-3])[:.](\d{2})\b/);
+  let match = lower.match(/\b([01]?\d|2[0-3])[:.](\d{2})\s?(?:hs\.?|horas)?\b/);
   if (match) {
     return clampTime(parseInt(match[1], 10), parseInt(match[2], 10));
   }
@@ -212,7 +213,7 @@ export function parseTimeOfDay(text: string): ParsedTime | null {
   match = normalized.match(/\b(\d{1,2})\s*menos\s*(?:cuarto|quince)\b/);
   if (match) return clampTime(parseInt(match[1], 10) - 1, 45);
 
-  match = normalized.match(/\b([01]?\d|2[0-3])\s?(?:hs|horas)\b/);
+  match = normalized.match(/(?<![:.])\b([01]?\d|2[0-3])\s?(?:hs|horas)\b/);
   if (match) return clampTime(parseInt(match[1], 10), 0);
 
   match = normalized.match(
@@ -222,6 +223,15 @@ export function parseTimeOfDay(text: string): ParsedTime | null {
     const hour = applyTimeOfDayQualifier(normalized, parseInt(match[1], 10));
     const minute = match[2] ? parseInt(match[2], 10) : 0;
     return clampTime(hour, minute);
+  }
+
+  // "23 30" — space-separated hour and minute (no colon). Must be the entire
+  // message (anchored) to avoid misfiring inside longer sentences. Matched
+  // before the bare-number fallback so "23 30" beats a bare-"23" read.
+  match = normalized.match(/^(\d{1,2})\s(\d{2})$/);
+  if (match) {
+    const hour = applyTimeOfDayQualifier(normalized, parseInt(match[1], 10));
+    return clampTime(hour, parseInt(match[2], 10));
   }
 
   match = normalized.match(/^(\d{1,2})(?::(\d{2}))?$/);
@@ -258,6 +268,17 @@ export function describeScheduledDateTime(dateKey: string, hour: number, minute:
   const baDate = parseBaDateKey(dateKey);
   const isToday = formatBaDateKey(startOfBaDay(nowBA)) === dateKey;
   return formatScheduledLabel(baDate, hour, minute, isToday);
+}
+
+/** Decomposes a stored `scheduled_at` UTC ISO instant into Buenos Aires local parts. */
+export function utcIsoToBaParts(utcISO: string): { dateKey: string; hour: number; minute: number } {
+  const instant = new Date(utcISO);
+  const baInstant = new Date(instant.getTime() - BA_OFFSET_MS);
+  return {
+    dateKey: formatBaDateKey(startOfBaDay(baInstant)),
+    hour: baInstant.getUTCHours(),
+    minute: baInstant.getUTCMinutes(),
+  };
 }
 
 /** Same as {@link formatScheduledLabel} but starting from a stored `scheduled_at` UTC ISO instant. */
@@ -340,6 +361,57 @@ export function findNextOpenSlot(
       const m = slotMin % 60;
       const isToday = daysAhead === 0;
       return { baDate: checkDate, hour: h, minute: m, label: formatScheduledLabel(checkDate, h, m, isToday), isToday };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Given a moment already known to fall within business hours (i.e.
+ * `checkBusinessHours` returned `allowed: true`), finds the effective closing
+ * time (already reduced by `closingMarginMinutes`) of the shift currently in
+ * progress. Used to tell the customer how much time is left when offering to
+ * pick today's own reservation hour instead of an instant/current-turn one.
+ * Mirrors `checkBusinessHours`'s own shift lookup so the result always
+ * matches what made the moment "allowed" in the first place.
+ */
+export function findCurrentShiftClose(
+  baDate: Date,
+  hour: number,
+  minute: number,
+  weeklyHours: WeeklyHours,
+  closingMarginMinutes = 0
+): { hour: number; minute: number } | null {
+  const dow = baDate.getUTCDay();
+  const dayKey = DOW_TO_KEY[dow];
+  const prevDayKey = DOW_TO_KEY[(dow + 6) % 7];
+  const t = hour * 60 + minute;
+
+  const dayEntry = weeklyHours[dayKey];
+  const prevDayEntry = weeklyHours[prevDayKey];
+
+  const activeShift = dayEntry && !dayEntry.closed
+    ? dayEntry.shifts.find(s => isMinuteInShift(t, s, closingMarginMinutes))
+    : undefined;
+
+  if (activeShift) {
+    const closeMin = Math.max(
+      0,
+      (activeShift.close === '00:00' ? 24 * 60 : minutesOfDay(activeShift.close)) - closingMarginMinutes
+    ) % (24 * 60);
+    return { hour: Math.floor(closeMin / 60), minute: closeMin % 60 };
+  }
+
+  if (hour <= 6 && prevDayEntry && !prevDayEntry.closed) {
+    const crossMidnightShift = prevDayEntry.shifts.find(s => {
+      const c = minutesOfDay(s.close);
+      const o = minutesOfDay(s.open);
+      return s.close !== '00:00' && c < o && t < c - closingMarginMinutes;
+    });
+    if (crossMidnightShift) {
+      const closeMin = Math.max(0, minutesOfDay(crossMidnightShift.close) - closingMarginMinutes) % (24 * 60);
+      return { hour: Math.floor(closeMin / 60), minute: closeMin % 60 };
     }
   }
 

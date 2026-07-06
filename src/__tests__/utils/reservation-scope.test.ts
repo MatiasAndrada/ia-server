@@ -155,6 +155,27 @@ describe('reservation-scope', () => {
         expect(evaluateReservationScope('14.', { currentStep: 'time' }).decision).toBe('allow');
         expect(evaluateReservationScope('9,', { currentStep: 'date' }).decision).toBe('allow');
       });
+
+      it('allows a slash-formatted date echoed at the "time" step instead of an hour', () => {
+        // Regression: the bot asked "¿A qué hora te gustaría reservar para el
+        // jueves 09/07?" and the customer replied "09/07" — a date, not a time.
+        // This got bounced as off-topic, which never advanced draft.step past
+        // 'time'. Letting it through here defers to the step handler, which
+        // replies with a targeted "no entendí el horario" instead.
+        expect(evaluateReservationScope('09/07', { currentStep: 'time' }).decision).toBe('allow');
+      });
+
+      it('allows a greeting/opt-in reply to break out of an off-topic loop', () => {
+        // Regression: once one reply at 'date'/'time' got scope-blocked, the
+        // draft's step never advanced, so a plain "Hola" or "Si" on the next
+        // turn kept hitting this same restrictive branch — forever, since
+        // neither is a date/time signal or reservation keyword. The step
+        // handler needs the chance to re-ask instead of repeating the generic
+        // off-topic message on every single reply.
+        expect(evaluateReservationScope('Hola', { currentStep: 'time' }).decision).toBe('allow');
+        expect(evaluateReservationScope('Si', { currentStep: 'time' }).decision).toBe('allow');
+        expect(evaluateReservationScope('Hola', { currentStep: 'date' }).decision).toBe('allow');
+      });
     });
 
     it('at "confirm_slot" step, always allows (yes/no expected)', () => {

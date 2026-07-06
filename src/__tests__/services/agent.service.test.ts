@@ -101,4 +101,21 @@ describe('AgentService reservation scope guard', () => {
     expect(response.response).toContain('nombre');
     expect(response.action).toBe('CREATE_RESERVATION');
   });
+
+  it('handles the bare "RESERVAR" keyword as deterministic opt-in without calling Ollama', async () => {
+    // This is the exact keyword the bot tells customers to send to start a
+    // new reservation (see message-templates.ts's "escribí: RESERVAR").
+    // Before this fix it fell through every fast path into the agent/Ollama,
+    // causing high load and slow replies for the most common re-engagement message.
+    const response = await agentService.generateResponse(
+      'RESERVAR',
+      waitlistAgent,
+      undefined,
+      { businessName: 'Bodegón Central' }
+    );
+
+    expect(ollamaService.chat).not.toHaveBeenCalled();
+    expect(response.response).toContain('nombre');
+    expect(response.action).toBe('CREATE_RESERVATION');
+  });
 });

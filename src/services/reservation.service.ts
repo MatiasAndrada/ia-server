@@ -607,18 +607,21 @@ export class ReservationService {
 
   /**
    * Start an edit-menu draft so the user can pick what to edit.
+   * `existingData.scheduledAt` (the reservation's current UTC instant, if any)
+   * is stashed on the draft so date-only / time-only edits can keep the other half.
    */
   static async startEditMenu(
     conversationId: string,
     businessId: string,
     reservationId: string,
-    existingData: { customerName?: string; partySize?: number }
+    existingData: { customerName?: string; partySize?: number; scheduledAt?: string | null }
   ): Promise<ReservationDraft> {
     const draft: ReservationDraft = {
       conversationId,
       businessId,
       customerName: existingData.customerName,
       partySize: existingData.partySize,
+      scheduledAt: existingData.scheduledAt ?? undefined,
       step: 'edit_menu',
       editMode: true,
       existingReservationId: reservationId,
@@ -628,6 +631,111 @@ export class ReservationService {
 
     await this.saveDraft(draft);
     logger.info('Edit menu draft started', { conversationId, reservationId });
+    return draft;
+  }
+
+  /**
+   * Start an edit-mode draft to change ONLY the day of an existing scheduled
+   * reservation, keeping its current time (pre-loaded from `scheduledAt`).
+   */
+  static async startEditDate(
+    conversationId: string,
+    businessId: string,
+    reservationId: string,
+    existingData: { customerName?: string; partySize?: number },
+    existingTime: { dateKey: string; hour: number; minute: number }
+  ): Promise<ReservationDraft> {
+    const draft: ReservationDraft = {
+      conversationId,
+      businessId,
+      customerName: existingData.customerName,
+      partySize: existingData.partySize,
+      scheduledTime: `${String(existingTime.hour).padStart(2, '0')}:${String(existingTime.minute).padStart(2, '0')}`,
+      step: 'date',
+      editMode: true,
+      editingField: 'date',
+      existingReservationId: reservationId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    await this.saveDraft(draft);
+    logger.info('Edit date draft started', { conversationId, reservationId });
+    return draft;
+  }
+
+  /**
+   * Start an edit-mode draft to change ONLY the time of an existing
+   * reservation, keeping its current day (pre-loaded; today for instant ones).
+   */
+  static async startEditTime(
+    conversationId: string,
+    businessId: string,
+    reservationId: string,
+    existingData: { customerName?: string; partySize?: number },
+    existingDateKey: string
+  ): Promise<ReservationDraft> {
+    const draft: ReservationDraft = {
+      conversationId,
+      businessId,
+      customerName: existingData.customerName,
+      partySize: existingData.partySize,
+      scheduledDate: existingDateKey,
+      step: 'time',
+      editMode: true,
+      editingField: 'time',
+      existingReservationId: reservationId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    await this.saveDraft(draft);
+    logger.info('Edit time draft started', { conversationId, reservationId });
+    return draft;
+  }
+
+  /**
+   * Start the M3 cancellation menu (reprogramar / cancelar definitivamente)
+   * for an existing active reservation.
+   */
+  static async startCancelMenu(
+    conversationId: string,
+    businessId: string,
+    reservationId: string,
+    existingData: { customerName?: string; partySize?: number; scheduledAt?: string | null }
+  ): Promise<ReservationDraft> {
+    const draft: ReservationDraft = {
+      conversationId,
+      businessId,
+      customerName: existingData.customerName,
+      partySize: existingData.partySize,
+      scheduledAt: existingData.scheduledAt ?? undefined,
+      step: 'cancel_menu',
+      editMode: true,
+      existingReservationId: reservationId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    await this.saveDraft(draft);
+    logger.info('Cancel menu draft started', { conversationId, reservationId });
+    return draft;
+  }
+
+  /**
+   * Move a normal-mode draft to the pre-creation summary step (M1 "Resumen y confirmación").
+   */
+  static async moveToConfirmSummary(conversationId: string): Promise<ReservationDraft | null> {
+    const draft = await this.getDraft(conversationId);
+    if (!draft) {
+      logger.warn('Draft not found for moveToConfirmSummary', { conversationId });
+      return null;
+    }
+
+    draft.step = 'confirm_summary';
+    draft.returnToSummary = false;
+    draft.invalidAttempts = 0;
+    await this.saveDraft(draft);
     return draft;
   }
 

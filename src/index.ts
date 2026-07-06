@@ -12,6 +12,7 @@ import { SupabaseConfig } from './config/supabase';
 import { BaileysService } from './services/baileys.service';
 import { RealtimeSyncService } from './services/realtime-sync.service';
 import { ReservationService } from './services/reservation.service';
+import { PostVisitService } from './services/post-visit.service';
 import { EnvConfig } from './types';
 import { logger, logRequest } from './utils/logger';
 import { authMiddleware } from './middleware/auth.middleware';
@@ -124,6 +125,9 @@ async function initializeApp() {
       // Initialize realtime synchronization
       logger.info('🔄 Initializing realtime data synchronization...');
       await RealtimeSyncService.initializeRealtimeSync();
+
+      // Start the post-visit (M12) scanner
+      PostVisitService.start();
     } else {
       logger.warn('Supabase credentials not provided, skipping initialization');
     }
@@ -295,6 +299,9 @@ async function initializeApp() {
         logger.info('HTTP server closed');
 
         try {
+          // Stop the post-visit scanner
+          PostVisitService.stop();
+
           // Clean up realtime sync
           await RealtimeSyncService.cleanup();
           logger.info('Realtime sync cleaned up');

@@ -303,7 +303,19 @@ export interface ReservationDraft {
   businessId: string;
   customerName?: string;
   partySize?: number;
-  step: 'name' | 'party_size' | 'schedule_choice' | 'date' | 'time' | 'confirm_slot' | 'completed' | 'edit_menu';
+  step:
+    | 'name'
+    | 'party_size'
+    | 'schedule_choice'
+    | 'date'
+    | 'time'
+    | 'confirm_slot'
+    | 'confirm_summary'
+    | 'summary_edit_menu'
+    | 'cancel_menu'
+    | 'cancel_confirm'
+    | 'completed'
+    | 'edit_menu';
   // Scheduling fields (day/time chosen within the next 7 days; absent = instant/turno actual)
   scheduledDate?: string; // YYYY-MM-DD, Buenos Aires local day
   scheduledTime?: string; // HH:mm, 24h
@@ -339,10 +351,22 @@ export interface ReservationDraft {
     pendingHour?: number;
     pendingMinute?: number;
   };
+  // Set right after the customer chooses "hoy (turno actual)" while the
+  // business is currently open — asks for the specific hour instead of
+  // jumping straight to an instant reservation. Holds today's date key and
+  // the current shift's closing time (for display) until the customer
+  // answers with an hour, or "ahora" to keep the instant behavior.
+  pendingTodayTimeChoice?: {
+    dateKey: string; // YYYY-MM-DD, today
+    closeLabel: string | null; // e.g. "23:00" — current shift's effective closing time
+  };
   // Edit mode fields
   editMode?: boolean;
-  editingField?: 'party_size' | 'schedule';
+  editingField?: 'party_size' | 'schedule' | 'date' | 'time';
   existingReservationId?: string;
+  // confirm_summary: after editing a field from the summary menu, return to the
+  // summary instead of continuing the normal step progression.
+  returnToSummary?: boolean;
   // Invalid attempt tracking (for exit-on-repeat)
   invalidAttempts?: number;
   createdAt: number;

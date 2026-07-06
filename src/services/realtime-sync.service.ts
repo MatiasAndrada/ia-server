@@ -2,6 +2,8 @@ import { SupabaseConfig } from '../config/supabase';
 import { RedisConfig } from '../config/redis';
 import { logger } from '../utils/logger';
 import type { Database } from '../types/supabase';
+import * as templates from '../utils/message-templates';
+import { PostVisitService } from './post-visit.service';
 
 // Helper types for strict type safety
 type CustomersRow = Database['public']['Tables']['customers']['Row'];
@@ -271,10 +273,9 @@ export class RealtimeSyncService {
 
       let notificationMessage: string;
       if (entry.status === 'SEATED') {
-        notificationMessage =
-          `✅ ¡Bienvenido/a, ${customer.name}!\n\n` +
-          `Tu mesa ha sido asignada. ¡Que disfrutes tu visita! 🍽️\n` +
-          `📁 Código de reserva: *${entry.display_code}*`;
+        // M11 — bienvenida al restaurante, y programa M12 (mensaje post-visita)
+        notificationMessage = templates.welcomeAtRestaurant();
+        await PostVisitService.schedulePostVisit(entry.id, entry.business_id);
       } else if (entry.status === 'CONFIRMED' || entry.status === 'NOTIFIED') {
         notificationMessage =
           `✅ ¡Tu reserva está CONFIRMADA!\n\n` +
@@ -345,17 +346,17 @@ export class RealtimeSyncService {
       const supabaseClient = SupabaseConfig.getClient();
       const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
 
-      // Recover missed status UPDATEs (CONFIRMED / NOTIFIED)
+      // Recover missed status UPDATEs (CONFIRMED / NOTIFIED / SEATED)
       const { data: statusEntries, error: statusError } = await supabaseClient
         .from('waitlist_entries')
         .select('*')
-        .in('status', ['CONFIRMED', 'NOTIFIED'])
+        .in('status', ['CONFIRMED', 'NOTIFIED', 'SEATED'])
         .gte('updated_at', twoHoursAgo);
 
       if (statusError) {
         logger.error('❌ [RECOVERY] Failed to query status entries', { error: statusError });
       } else if (statusEntries && statusEntries.length > 0) {
-        logger.info(`🔍 [RECOVERY] Found ${statusEntries.length} recent CONFIRMED/NOTIFIED entries to check`);
+        logger.info(`🔍 [RECOVERY] Found ${statusEntries.length} recent CONFIRMED/NOTIFIED/SEATED entries to check`);
         for (const entry of statusEntries) {
           const dedupKey = `wa:status:sent:${entry.id}:${entry.status}`;
           let alreadySent = false;
@@ -543,6 +544,8 @@ export class RealtimeSyncService {
       const isConfirmed = statusChanged && newEntry?.status === 'CONFIRMED';
       // Keep backward compat: NOTIFIED still sends the confirmation message
       const isNotified = statusChanged && newEntry?.status === 'NOTIFIED';
+      // M11 — welcome message when the customer is seated at the restaurant
+      const isSeated = statusChanged && newEntry?.status === 'SEATED';
 
       logger.info('🔍 [REALTIME] Status validation', {
         oldStatus: oldEntry?.status,
@@ -550,10 +553,11 @@ export class RealtimeSyncService {
         statusChanged,
         isConfirmed,
         isNotified,
+        isSeated,
       });
 
-      if (!isConfirmed && !isNotified) {
-        logger.info('⏭️ [REALTIME] Skipping - status is not CONFIRMED or NOTIFIED', {
+      if (!isConfirmed && !isNotified && !isSeated) {
+        logger.info('⏭️ [REALTIME] Skipping - status is not CONFIRMED, NOTIFIED or SEATED', {
           newStatus: newEntry?.status,
           statusChanged,
         });
@@ -637,7 +641,11 @@ export class RealtimeSyncService {
       // Build message based on new status
       let notificationMessage: string;
 
-      if (isNotified) {
+      if (isSeated) {
+        // M11 — bienvenida al restaurante + programa el mensaje post-visita (M12)
+        notificationMessage = templates.welcomeAtRestaurant();
+        await PostVisitService.schedulePostVisit(newEntry.id, newEntry.business_id);
+      } else if (isNotified) {
         // Paso 6: Mesa disponible (NOTIFIED)
         notificationMessage =
           `🚀 ¡Es tu momento!\n` +

@@ -81,6 +81,16 @@ export function evaluateReservationScope(
     };
   }
 
+  // A bare greeting or opt-in reply ("Hola", "Si", "Dale") never satisfies any
+  // of the step-specific allow-lists below (it's not a name, party size, menu
+  // number, or date/time signal). Without this escape hatch, one accidental
+  // off-topic classification permanently traps the customer: the draft step
+  // never advances, so every following message — including a plain "Hola" —
+  // gets bounced by the same restrictive branch, forever. Letting it through
+  // here defers to the step handler, which re-asks its own question instead
+  // of repeating the generic scope-guard message on every reply.
+  const isGreetingOrOptIn = isGreetingMessage(normalizedMessage) || reservationOptIn;
+
   if (currentStep === 'party_size') {
     // We just asked "¿Cuál es tu nombre correcto?" — any reply is expected to
     // be that name, so (like confirm_slot's yes/no) always let it through and
@@ -92,7 +102,8 @@ export function evaluateReservationScope(
     if (
       containsPartySizeSignal(trimmedMessage, normalizedMessage) ||
       isNameCorrectionLikeMessage(normalizedMessage) ||
-      reservationRelated
+      reservationRelated ||
+      isGreetingOrOptIn
     ) {
       return { decision: 'allow' };
     }
@@ -103,8 +114,8 @@ export function evaluateReservationScope(
     };
   }
 
-  if (currentStep === 'edit_menu') {
-    if (/^[123]$/.test(trimmedMessage) || reservationRelated) {
+  if (currentStep === 'edit_menu' || currentStep === 'summary_edit_menu') {
+    if (/^[123]$/.test(trimmedMessage) || reservationRelated || isGreetingOrOptIn) {
       return { decision: 'allow' };
     }
 
@@ -114,12 +125,24 @@ export function evaluateReservationScope(
     };
   }
 
+  // M1 summary confirmation and M3 cancel menus accept short numeric / yes-no
+  // answers whose words ("cancelar", "modificar", "reprogramar") would otherwise
+  // trip the off-topic guard — always let their own step handlers resolve them.
+  if (
+    currentStep === 'confirm_summary' ||
+    currentStep === 'cancel_menu' ||
+    currentStep === 'cancel_confirm'
+  ) {
+    return { decision: 'allow' };
+  }
+
   if (currentStep === 'schedule_choice') {
     if (
       /^[12]$/.test(trimmedMessage) ||
       isInstantChoiceMessage(normalizedMessage) ||
       hasDateOrTimeSignal(trimmedMessage, normalizedMessage) ||
-      reservationRelated
+      reservationRelated ||
+      isGreetingOrOptIn
     ) {
       return { decision: 'allow' };
     }
@@ -131,7 +154,11 @@ export function evaluateReservationScope(
   }
 
   if (currentStep === 'date' || currentStep === 'time') {
-    if (hasDateOrTimeSignal(trimmedMessage, normalizedMessage) || reservationRelated) {
+    if (
+      hasDateOrTimeSignal(trimmedMessage, normalizedMessage) ||
+      reservationRelated ||
+      isGreetingOrOptIn
+    ) {
       return { decision: 'allow' };
     }
 
@@ -521,6 +548,10 @@ function isReservationOptInMessage(normalizedMessage: string): boolean {
     new RegExp(`^si${politeSuffix}$`),
     new RegExp(`^yes${politeSuffix}$`),
     new RegExp(`^quiero${politeSuffix}$`),
+    // Bare keyword the bot itself tells customers to send to start a new
+    // reservation (see message-templates.ts's "escribí: RESERVAR"). Without
+    // this, "reservar" alone fell through every fast path into the AI agent.
+    new RegExp(`^reservar${politeSuffix}$`),
     new RegExp(`^dale${politeSuffix}$`),
     new RegExp(`^(ok|okay|okey|oka)${politeSuffix}$`),
     new RegExp(`^claro${politeSuffix}$`),
@@ -691,6 +722,20 @@ export function hasDateOrTimeSignal(message: string, normalizedMessage: string):
   // A bare 1-2 digit number alone (e.g. answering "21" or "9" to "¿A qué hora?").
   // Uses the normalized text so trailing punctuation ("14?", "14.") still counts.
   const hasBareNumber = /^\d{1,2}$/.test(normalizedMessage);
+  // "23 30" — hour and minute separated by a space instead of a colon/dot.
+  // Anchored so it only fires when the entire message is just two numbers
+  // (e.g. a customer answering "¿A qué hora?" with "23 30" or "9 30").
+  const hasSpacedTime = /^(\d{1,2})\s([0-5]\d)$/.test(normalizedMessage);
+  // A slash-separated date (e.g. "09/07"). Neither parseRelativeDay nor
+  // parseTimeOfDay understand this format, so it won't resolve into an actual
+  // date/time — but it's clearly the customer naming a day, not off-topic
+  // chatter. Treating it as on-topic here routes it to the step handler,
+  // which replies with a targeted "no entendí, decime de nuevo" instead of
+  // the generic scope-guard message. Regression: a customer echoed the
+  // already-confirmed date ("09/07") when asked for the time, got bounced as
+  // off-topic, and — because that reply never advanced draft.step — every
+  // later message (including plain "Hola"/"Si") kept hitting the same wall.
+  const hasSlashDate = /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/.test(message);
 
   return (
     hasClockPattern ||
@@ -699,7 +744,9 @@ export function hasDateOrTimeSignal(message: string, normalizedMessage: string):
     hasHourAbbreviation ||
     hasDateReference ||
     hasHalfHour ||
-    hasBareNumber
+    hasBareNumber ||
+    hasSpacedTime ||
+    hasSlashDate
   );
 }
 

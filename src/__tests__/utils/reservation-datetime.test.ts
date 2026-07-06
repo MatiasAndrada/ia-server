@@ -8,6 +8,8 @@ import {
   parseTimeOfDay,
   combineToUtcISO,
   isInPast,
+  nowInBuenosAires,
+  BA_OFFSET_MS,
   formatScheduledLabel,
   describeScheduledDateTime,
   describeScheduledAtUtc,
@@ -119,6 +121,41 @@ describe('reservation-datetime', () => {
       expect(parseTimeOfDay('21 hs')).toEqual({ hour: 21, minute: 0 });
     });
 
+    // Regression: "HH:MMhs"/"HH:MMhoras" pegados (sin espacio antes del
+    // sufijo) hacían fallar el \b final de la regex HH:MM (dígito→letra no
+    // es un word-boundary), y el parseo caía al patrón abreviado "H hs" de
+    // más abajo, que confundía los MINUTOS con la HORA (p. ej. "13:00hs" ->
+    // {hour: 0, minute: 0} en vez de {hour: 13, minute: 0}).
+    describe('"HH:MM" pegado a "hs"/"horas" sin espacio (regresión)', () => {
+      it('parses "13:00hs"', () => {
+        expect(parseTimeOfDay('13:00hs')).toEqual({ hour: 13, minute: 0 });
+      });
+
+      it('parses "13:00horas"', () => {
+        expect(parseTimeOfDay('13:00horas')).toEqual({ hour: 13, minute: 0 });
+      });
+
+      it('parses "9:00hs" (hora de un solo dígito)', () => {
+        expect(parseTimeOfDay('9:00hs')).toEqual({ hour: 9, minute: 0 });
+      });
+
+      it('parses "20:15hs" (minuto distinto de cero)', () => {
+        expect(parseTimeOfDay('20:15hs')).toEqual({ hour: 20, minute: 15 });
+      });
+
+      it('parses "13:45hs" (antes fallaba "seguro" con null — minuto leído como hora fuera de rango)', () => {
+        expect(parseTimeOfDay('13:45hs')).toEqual({ hour: 13, minute: 45 });
+      });
+
+      it('parses "20:30hs" (antes fallaba "seguro" con null — minuto leído como hora fuera de rango)', () => {
+        expect(parseTimeOfDay('20:30hs')).toEqual({ hour: 20, minute: 30 });
+      });
+
+      it('sigue parseando "13:00 hs" con espacio antes del sufijo (control, ya funcionaba)', () => {
+        expect(parseTimeOfDay('13:00 hs')).toEqual({ hour: 13, minute: 0 });
+      });
+    });
+
     it('parses "a las HH"', () => {
       expect(parseTimeOfDay('a las 21')).toEqual({ hour: 21, minute: 0 });
     });
@@ -151,6 +188,35 @@ describe('reservation-datetime', () => {
     it('detects past and future instants', () => {
       expect(isInPast('2000-01-01T00:00:00.000Z')).toBe(true);
       expect(isInPast('2099-01-01T00:00:00.000Z')).toBe(false);
+    });
+
+    // Regresión del bug reportado: "no me deja hacer reservas para las 13hs
+    // siendo las 12:13". parseTimeOfDay malparseaba "13:00hs" como
+    // {hour: 0, minute: 0}; combineToUtcISO lo convertía en "hoy a las
+    // 00:00"; isInPast entonces (correctamente, pero de forma engañosa)
+    // marcaba eso como pasado.
+    describe('escenario real: "13:00hs" parseado a las 12:13 BA', () => {
+      let dateNowSpy: jest.SpyInstance<number, []>;
+
+      afterEach(() => {
+        dateNowSpy.mockRestore();
+      });
+
+      it('NO está en el pasado cuando "ahora" son las 12:13 BA del mismo día', () => {
+        // Jueves 2026-07-02, 12:13 hora de pared BA.
+        const nowBaWallClock = new Date('2026-07-02T12:13:00.000Z');
+        dateNowSpy = jest
+          .spyOn(Date, 'now')
+          .mockReturnValue(nowBaWallClock.getTime() + BA_OFFSET_MS);
+
+        const parsed = parseTimeOfDay('13:00hs');
+        expect(parsed).toEqual({ hour: 13, minute: 0 });
+
+        const todayBaDate = startOfBaDay(nowInBuenosAires());
+        const scheduledAt = combineToUtcISO(todayBaDate, 13, 0);
+
+        expect(isInPast(scheduledAt)).toBe(false);
+      });
     });
   });
 
