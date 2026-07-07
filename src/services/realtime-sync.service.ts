@@ -458,6 +458,8 @@ export class RealtimeSyncService {
         } else {
           logger.info('⏭️ Skipping cache refresh for technical business update', { businessId });
         }
+
+        await this.closeSessionIfWeeklyHoursMissing(businessId, newBusiness);
       } else if (eventType === 'DELETE') {
         // Remove from cache
         const businessKey = `business:${businessId}`;
@@ -468,6 +470,32 @@ export class RealtimeSyncService {
       }
     } catch (error) {
       logger.error('Error handling business change', { error, payload });
+    }
+  }
+
+  /**
+   * Without weekly_hours configured the bot has no way to know when the
+   * business is open, so an active WhatsApp session would keep answering
+   * with no schedule to enforce. Closing it forces the business to
+   * reconnect (scanning the QR again) once hours are set back up.
+   */
+  private static async closeSessionIfWeeklyHoursMissing(businessId: string, business: any): Promise<void> {
+    if (!businessId || business?.weekly_hours != null) {
+      return;
+    }
+
+    try {
+      const { BaileysService } = await import('./baileys.service');
+      const baileys = BaileysService.getInstance();
+
+      if (!baileys.hasSession(businessId)) {
+        return;
+      }
+
+      logger.warn('⏹️ weekly_hours is null — closing WhatsApp session', { businessId });
+      await baileys.stopSession(businessId);
+    } catch (error) {
+      logger.error('Error closing WhatsApp session for missing weekly_hours', { error, businessId });
     }
   }
 

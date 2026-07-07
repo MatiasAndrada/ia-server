@@ -146,3 +146,75 @@ describe('RealtimeSyncService.handleWaitlistStatusChange', () => {
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 });
+
+describe('RealtimeSyncService.handleBusinessChange', () => {
+  let redisGetMock: jest.Mock;
+  let redisSetExMock: jest.Mock;
+  let redisDelMock: jest.Mock;
+  let hasSessionMock: jest.Mock;
+  let stopSessionMock: jest.Mock;
+
+  beforeEach(() => {
+    jest.restoreAllMocks();
+
+    redisGetMock = jest.fn().mockResolvedValue(null);
+    redisSetExMock = jest.fn().mockResolvedValue('OK');
+    redisDelMock = jest.fn().mockResolvedValue(1);
+    jest.spyOn(RedisConfig, 'getClient').mockReturnValue({
+      get: redisGetMock,
+      setEx: redisSetExMock,
+      del: redisDelMock,
+    } as any);
+
+    hasSessionMock = jest.fn().mockReturnValue(true);
+    stopSessionMock = jest.fn().mockResolvedValue(undefined);
+    jest.spyOn(BaileysService, 'getInstance').mockReturnValue({
+      hasSession: hasSessionMock,
+      stopSession: stopSessionMock,
+    } as any);
+  });
+
+  it('closes the WhatsApp session when weekly_hours transitions to null', async () => {
+    await (RealtimeSyncService as any).handleBusinessChange({
+      eventType: 'UPDATE',
+      old: { id: 'business-1', weekly_hours: { mon: [] } },
+      new: { id: 'business-1', weekly_hours: null },
+    });
+
+    expect(hasSessionMock).toHaveBeenCalledWith('business-1');
+    expect(stopSessionMock).toHaveBeenCalledWith('business-1');
+  });
+
+  it('leaves the session running when weekly_hours is configured', async () => {
+    await (RealtimeSyncService as any).handleBusinessChange({
+      eventType: 'UPDATE',
+      old: { id: 'business-1', weekly_hours: null },
+      new: { id: 'business-1', weekly_hours: { mon: [] } },
+    });
+
+    expect(stopSessionMock).not.toHaveBeenCalled();
+  });
+
+  it('does not call stopSession when there is no active session to close', async () => {
+    hasSessionMock.mockReturnValue(false);
+
+    await (RealtimeSyncService as any).handleBusinessChange({
+      eventType: 'UPDATE',
+      old: { id: 'business-1', weekly_hours: { mon: [] } },
+      new: { id: 'business-1', weekly_hours: null },
+    });
+
+    expect(stopSessionMock).not.toHaveBeenCalled();
+  });
+
+  it('closes the session on INSERT when the business already has weekly_hours null', async () => {
+    await (RealtimeSyncService as any).handleBusinessChange({
+      eventType: 'INSERT',
+      old: null,
+      new: { id: 'business-2', weekly_hours: null },
+    });
+
+    expect(hasSessionMock).toHaveBeenCalledWith('business-2');
+    expect(stopSessionMock).toHaveBeenCalledWith('business-2');
+  });
+});
