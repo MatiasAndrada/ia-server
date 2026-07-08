@@ -390,4 +390,10 @@ export interface CreateReservationResponse {
   error?: string;
   /** True when a valid reservation already exists for this customer today */
   alreadyExists?: boolean;
+  /**
+   * Present when creation was rejected by a business-configured date block
+   * (business_blocked_dates or future_reservations_blocked_for_date) — a
+   * ready-to-send Spanish message for the customer, relayed as-is.
+   */
+  blockedMessage?: string;
 }

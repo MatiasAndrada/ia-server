@@ -47,6 +47,38 @@ export type Database = {
         }
         Relationships: []
       }
+      business_blocked_dates: {
+        Row: {
+          business_id: string
+          created_at: string
+          date: string
+          id: string
+          reason: string | null
+        }
+        Insert: {
+          business_id: string
+          created_at?: string
+          date: string
+          id?: string
+          reason?: string | null
+        }
+        Update: {
+          business_id?: string
+          created_at?: string
+          date?: string
+          id?: string
+          reason?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "business_blocked_dates_business_id_fkey"
+            columns: ["business_id"]
+            isOneToOne: false
+            referencedRelation: "businesses"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       businesses: {
         Row: {
           address: string | null
@@ -61,6 +93,7 @@ export type Database = {
           created_at: string
           description: string | null
           food_type: string | null
+          future_reservations_blocked_for_date: string | null
           id: string
           language: string
           last_jornada_closed_at: string | null
@@ -93,6 +126,7 @@ export type Database = {
           created_at?: string
           description?: string | null
           food_type?: string | null
+          future_reservations_blocked_for_date?: string | null
           id?: string
           language?: string
           last_jornada_closed_at?: string | null
@@ -125,6 +159,7 @@ export type Database = {
           created_at?: string
           description?: string | null
           food_type?: string | null
+          future_reservations_blocked_for_date?: string | null
           id?: string
           language?: string
           last_jornada_closed_at?: string | null
