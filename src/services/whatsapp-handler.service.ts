@@ -38,6 +38,8 @@ import {
   startOfBaDay,
   findWeekdayDayNumberMismatch,
   utcIsoToBaParts,
+  isDateBlocked,
+  isFutureReservationBlockedToday,
   type ParsedDay,
 } from '../utils/reservation-datetime';
 import * as templates from '../utils/message-templates';
@@ -964,6 +966,29 @@ export class WhatsAppHandler {
                 const slotAt = combineToUtcISO(nextSlot.baDate, nextSlot.hour, nextSlot.minute);
                 const slotDate = formatBaDateKey(nextSlot.baDate);
 
+                const blockedDatesNow = await SupabaseService.getBlockedDates(businessId);
+                const slotIsBlocked =
+                  isDateBlocked(slotDate, blockedDatesNow) ||
+                  isFutureReservationBlockedToday(
+                    slotDate,
+                    nextSlot.hour,
+                    nextSlot.minute,
+                    nowBA,
+                    businessNow?.future_reservations_blocked_for_date,
+                    weeklyHoursNow,
+                    closingMarginNow
+                  );
+
+                if (slotIsBlocked) {
+                  await this.sendWhatsAppMessage(
+                    businessId,
+                    jid,
+                    '❌ El local está cerrado en este momento y no encontré disponibilidad en los próximos 7 días.'
+                  );
+                  await ReservationService.deleteDraft(conversationId);
+                  return true;
+                }
+
                 await ReservationService.moveToConfirmSlot(conversationId, slotDate, slotTime, slotAt, 'schedule_choice');
                 await this.sendWhatsAppMessage(
                   businessId,
@@ -1348,9 +1373,32 @@ export class WhatsAppHandler {
                   return true;
                 }
 
+                const newDateKey = formatBaDateKey(targetBaDate);
                 const businessForConfirm = await SupabaseService.getBusinessById(businessId);
                 const weeklyHoursForConfirm = businessForConfirm?.weekly_hours as WeeklyHours | null | undefined;
                 const closingMarginForConfirm = businessForConfirm?.reservation_closing_margin_minutes ?? 15;
+
+                const blockedDatesForConfirm = await SupabaseService.getBlockedDates(businessId);
+                if (isDateBlocked(newDateKey, blockedDatesForConfirm)) {
+                  await this.sendWhatsAppMessage(businessId, jid, templates.dateBlocked(describeBaDateKey(newDateKey, nowBA)));
+                  return true;
+                }
+
+                if (
+                  isFutureReservationBlockedToday(
+                    newDateKey,
+                    targetHour,
+                    targetMinute,
+                    nowBA,
+                    businessForConfirm?.future_reservations_blocked_for_date,
+                    weeklyHoursForConfirm ?? {},
+                    closingMarginForConfirm
+                  )
+                ) {
+                  await this.sendWhatsAppMessage(businessId, jid, templates.futureReservationsBlockedToday());
+                  return true;
+                }
+
                 const hoursCheck = weeklyHoursForConfirm && Object.keys(weeklyHoursForConfirm).length > 0
                   ? checkBusinessHours(targetBaDate, targetHour, targetMinute, weeklyHoursForConfirm, closingMarginForConfirm)
                   : { allowed: true as const };
@@ -1364,7 +1412,6 @@ export class WhatsAppHandler {
                   return true;
                 }
 
-                const newDateKey = formatBaDateKey(targetBaDate);
                 const newTimeLabel = `${String(targetHour).padStart(2, '0')}:${String(targetMinute).padStart(2, '0')}`;
                 await ReservationService.moveToConfirmSlot(conversationId, newDateKey, newTimeLabel, newAt, origin ?? 'schedule_choice');
                 const label = describeScheduledAtUtc(newAt, nowBA);
@@ -2062,11 +2109,58 @@ export class WhatsAppHandler {
       return true;
     }
 
-    // Check business hours if weekly_hours is configured
     const business = await SupabaseService.getBusinessById(businessId);
     const weeklyHours = business?.weekly_hours as WeeklyHours | null | undefined;
+    const closingMargin = business?.reservation_closing_margin_minutes ?? 15;
+
+    // Blocked dates / future-reservation closures take priority over the
+    // regular hours check — a day can be within business hours and still be
+    // unavailable for a business-configured reason (holiday closure, etc.).
+    const blockedDates = await SupabaseService.getBlockedDates(businessId);
+    if (isDateBlocked(scheduledDate, blockedDates)) {
+      draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
+      await ReservationService.saveDraft(draft);
+      if (draft.invalidAttempts >= 2) {
+        await ReservationService.deleteDraft(conversationId);
+        await this.sendWhatsAppMessage(
+          businessId,
+          jid,
+          '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+        );
+        return false;
+      }
+      await this.sendWhatsAppMessage(businessId, jid, templates.dateBlocked(describeBaDateKey(scheduledDate, nowBA)));
+      return true;
+    }
+
+    if (
+      isFutureReservationBlockedToday(
+        scheduledDate,
+        hour,
+        minute,
+        nowBA,
+        business?.future_reservations_blocked_for_date,
+        weeklyHours ?? {},
+        closingMargin
+      )
+    ) {
+      draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
+      await ReservationService.saveDraft(draft);
+      if (draft.invalidAttempts >= 2) {
+        await ReservationService.deleteDraft(conversationId);
+        await this.sendWhatsAppMessage(
+          businessId,
+          jid,
+          '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+        );
+        return false;
+      }
+      await this.sendWhatsAppMessage(businessId, jid, templates.futureReservationsBlockedToday());
+      return true;
+    }
+
+    // Check business hours if weekly_hours is configured
     if (weeklyHours && Object.keys(weeklyHours).length > 0) {
-      const closingMargin = business?.reservation_closing_margin_minutes ?? 15;
       const hoursCheck = checkBusinessHours(baDate, hour, minute, weeklyHours, closingMargin);
       if (!hoursCheck.allowed) {
         const margin = business?.reservation_opening_margin_minutes ?? 15;
@@ -2329,7 +2423,9 @@ export class WhatsAppHandler {
         // Failed to create reservation - send error message to user
         logger.error('Failed to create reservation', { conversationId, error: result.error });
 
-        const errorMessage = '❌ Lo siento, hubo un problema al crear tu reserva. Por favor intenta de nuevo o contacta con el local.';
+        const errorMessage =
+          result.blockedMessage ??
+          '❌ Lo siento, hubo un problema al crear tu reserva. Por favor intenta de nuevo o contacta con el local.';
         await this.sendWhatsAppMessage(businessId, jid, errorMessage);
       }
     } catch (error) {

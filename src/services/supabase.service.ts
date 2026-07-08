@@ -623,6 +623,30 @@ export class SupabaseService {
   }
 
   /**
+   * Get the set of dates ("YYYY-MM-DD") a business has explicitly blocked for
+   * new reservations (business_blocked_dates). Returned as-is from Postgres —
+   * no timezone conversion — to be compared directly against other BA date keys.
+   */
+  static async getBlockedDates(businessId: string): Promise<Set<string>> {
+    try {
+      const client = this.getClient();
+      const { data, error } = await client
+        .from('business_blocked_dates')
+        .select('date')
+        .eq('business_id', businessId);
+
+      if (error) {
+        throw error;
+      }
+
+      return new Set((data ?? []).map((row) => row.date));
+    } catch (error) {
+      logger.error('Supabase: getBlockedDates failed', { error, businessId });
+      return new Set();
+    }
+  }
+
+  /**
    * Check if business has active WhatsApp session
    */
   static async isBusinessWhatsAppActive(businessId: string): Promise<boolean> {

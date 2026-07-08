@@ -3,11 +3,21 @@ import { SupabaseService } from './supabase.service';
 import {
   ReservationDraft,
   CreateReservationRequest,
-  CreateReservationResponse
+  CreateReservationResponse,
+  WeeklyHours
 } from '../types';
 import { logger } from '../utils/logger';
 import { formatName } from '../utils/formatters';
-import { ParsedDay, formatBaDateKey } from '../utils/reservation-datetime';
+import * as templates from '../utils/message-templates';
+import {
+  ParsedDay,
+  formatBaDateKey,
+  nowInBuenosAires,
+  utcIsoToBaParts,
+  describeBaDateKey,
+  isDateBlocked,
+  isFutureReservationBlockedToday,
+} from '../utils/reservation-datetime';
 
 export class ReservationService {
   private static readonly DRAFT_TTL = 3600; // 1 hour
@@ -354,6 +364,57 @@ export class ReservationService {
         partySize: draft.partySize,
         scheduledAt: draft.scheduledAt ?? null,
       };
+
+      // Safety net: re-validate business-configured date blocks right before
+      // creating, in case something slipped past the earlier conversational
+      // checks (e.g. a date got blocked mid-conversation, or a future code
+      // path sets scheduledAt without going through those checks).
+      if (request.scheduledAt) {
+        const { dateKey, hour, minute } = utcIsoToBaParts(request.scheduledAt);
+        const [business, blockedDates] = await Promise.all([
+          SupabaseService.getBusinessById(request.businessId),
+          SupabaseService.getBlockedDates(request.businessId),
+        ]);
+        const weeklyHours = (business?.weekly_hours as WeeklyHours | null | undefined) ?? {};
+        const closingMargin = business?.reservation_closing_margin_minutes ?? 15;
+        const nowBA = nowInBuenosAires();
+
+        if (isDateBlocked(dateKey, blockedDates)) {
+          logger.warn('Reservation creation rejected by safety net — date is blocked', {
+            conversationId,
+            businessId: request.businessId,
+            dateKey,
+          });
+          return {
+            success: false,
+            error: 'Requested date is blocked',
+            blockedMessage: templates.dateBlocked(describeBaDateKey(dateKey, nowBA)),
+          };
+        }
+
+        if (
+          isFutureReservationBlockedToday(
+            dateKey,
+            hour,
+            minute,
+            nowBA,
+            business?.future_reservations_blocked_for_date,
+            weeklyHours,
+            closingMargin
+          )
+        ) {
+          logger.warn('Reservation creation rejected by safety net — future reservations blocked today', {
+            conversationId,
+            businessId: request.businessId,
+            dateKey,
+          });
+          return {
+            success: false,
+            error: 'Future reservations blocked for today',
+            blockedMessage: templates.futureReservationsBlockedToday(),
+          };
+        }
+      }
 
       logger.info('📤 Sending reservation to Supabase', {
         conversationId,
