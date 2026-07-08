@@ -368,6 +368,43 @@ export function findNextOpenSlot(
 }
 
 /**
+ * Finds the shift (if any) that is active at the given BA day/time, checking
+ * the previous day's cross-midnight shifts for early-morning hours (00:00–06:00).
+ * Shared by `findCurrentShiftClose` and `isWithinCurrentShift` so both agree on
+ * what "the shift active right now" means.
+ */
+function findActiveShift(
+  baDate: Date,
+  hour: number,
+  minute: number,
+  weeklyHours: WeeklyHours,
+  closingMarginMinutes = 0
+): WeeklyHoursShift | null {
+  const dow = baDate.getUTCDay();
+  const dayKey = DOW_TO_KEY[dow];
+  const t = hour * 60 + minute;
+
+  const dayEntry = weeklyHours[dayKey];
+  const activeShift = dayEntry && !dayEntry.closed
+    ? dayEntry.shifts.find(s => isMinuteInShift(t, s, closingMarginMinutes))
+    : undefined;
+  if (activeShift) return activeShift;
+
+  const prevDayKey = DOW_TO_KEY[(dow + 6) % 7];
+  const prevDayEntry = weeklyHours[prevDayKey];
+  if (hour <= 6 && prevDayEntry && !prevDayEntry.closed) {
+    const crossMidnightShift = prevDayEntry.shifts.find(s => {
+      const c = minutesOfDay(s.close);
+      const o = minutesOfDay(s.open);
+      return s.close !== '00:00' && c < o && t < c - closingMarginMinutes;
+    });
+    if (crossMidnightShift) return crossMidnightShift;
+  }
+
+  return null;
+}
+
+/**
  * Given a moment already known to fall within business hours (i.e.
  * `checkBusinessHours` returned `allowed: true`), finds the effective closing
  * time (already reduced by `closingMarginMinutes`) of the shift currently in
@@ -383,39 +420,34 @@ export function findCurrentShiftClose(
   weeklyHours: WeeklyHours,
   closingMarginMinutes = 0
 ): { hour: number; minute: number } | null {
-  const dow = baDate.getUTCDay();
-  const dayKey = DOW_TO_KEY[dow];
-  const prevDayKey = DOW_TO_KEY[(dow + 6) % 7];
-  const t = hour * 60 + minute;
+  const activeShift = findActiveShift(baDate, hour, minute, weeklyHours, closingMarginMinutes);
+  if (!activeShift) return null;
 
-  const dayEntry = weeklyHours[dayKey];
-  const prevDayEntry = weeklyHours[prevDayKey];
+  const closeMin = Math.max(
+    0,
+    (activeShift.close === '00:00' ? 24 * 60 : minutesOfDay(activeShift.close)) - closingMarginMinutes
+  ) % (24 * 60);
+  return { hour: Math.floor(closeMin / 60), minute: closeMin % 60 };
+}
 
-  const activeShift = dayEntry && !dayEntry.closed
-    ? dayEntry.shifts.find(s => isMinuteInShift(t, s, closingMarginMinutes))
-    : undefined;
-
-  if (activeShift) {
-    const closeMin = Math.max(
-      0,
-      (activeShift.close === '00:00' ? 24 * 60 : minutesOfDay(activeShift.close)) - closingMarginMinutes
-    ) % (24 * 60);
-    return { hour: Math.floor(closeMin / 60), minute: closeMin % 60 };
-  }
-
-  if (hour <= 6 && prevDayEntry && !prevDayEntry.closed) {
-    const crossMidnightShift = prevDayEntry.shifts.find(s => {
-      const c = minutesOfDay(s.close);
-      const o = minutesOfDay(s.open);
-      return s.close !== '00:00' && c < o && t < c - closingMarginMinutes;
-    });
-    if (crossMidnightShift) {
-      const closeMin = Math.max(0, minutesOfDay(crossMidnightShift.close) - closingMarginMinutes) % (24 * 60);
-      return { hour: Math.floor(closeMin / 60), minute: closeMin % 60 };
-    }
-  }
-
-  return null;
+/**
+ * True when `hour:minute` (assumed to be on the same BA calendar day as
+ * `nowBA`) falls within the SAME shift that is active right now. Used to
+ * allow reservations for "the current turno" while blocking later shifts
+ * today (see {@link isFutureReservationBlockedToday}). Returns false when no
+ * shift is active right now — there is no current turno to match, so any
+ * reservation for today counts as a later one.
+ */
+export function isWithinCurrentShift(
+  hour: number,
+  minute: number,
+  nowBA: Date,
+  weeklyHours: WeeklyHours,
+  closingMarginMinutes = 0
+): boolean {
+  const activeShift = findActiveShift(nowBA, nowBA.getUTCHours(), nowBA.getUTCMinutes(), weeklyHours, closingMarginMinutes);
+  if (!activeShift) return false;
+  return isMinuteInShift(hour * 60 + minute, activeShift, closingMarginMinutes);
 }
 
 /**
@@ -512,4 +544,47 @@ export function checkBusinessHours(
     allowed: false,
     reason: `El ${DOW_LABELS_ES[dow]} el local abre de ${hoursDesc}. Por favor elegí un horario dentro de ese rango.`,
   };
+}
+
+// ─── Blocked dates / future-reservation closures ─────────────────────────────
+
+/**
+ * True when `dateKey` ("YYYY-MM-DD") is one of the business's specifically
+ * blocked dates (business_blocked_dates). `blockedDates` holds the raw date
+ * strings as returned by Postgres — compare directly, no timezone conversion.
+ */
+export function isDateBlocked(dateKey: string, blockedDates: ReadonlySet<string>): boolean {
+  return blockedDates.has(dateKey);
+}
+
+/**
+ * True when the business has closed further today-reservations
+ * (businesses.future_reservations_blocked_for_date matches today) and the
+ * requested slot is today but outside the shift currently in progress. The
+ * turno in progress right now, and any day from tomorrow on, are unaffected.
+ *
+ * `futureReservationsBlockedForDate` is the raw "YYYY-MM-DD" string from
+ * Postgres — compared directly against today's BA date key, no timezone
+ * conversion.
+ */
+export function isFutureReservationBlockedToday(
+  scheduledDateKey: string,
+  hour: number,
+  minute: number,
+  nowBA: Date,
+  futureReservationsBlockedForDate: string | null | undefined,
+  weeklyHours: WeeklyHours,
+  closingMarginMinutes = 0
+): boolean {
+  if (!futureReservationsBlockedForDate) return false;
+
+  const todayKey = formatBaDateKey(startOfBaDay(nowBA));
+  if (futureReservationsBlockedForDate !== todayKey) return false;
+  if (scheduledDateKey !== todayKey) return false;
+
+  // No weekly_hours configured — no way to know which turno is "current", so
+  // don't block (same permissive fallback used elsewhere in this file).
+  if (!weeklyHours || Object.keys(weeklyHours).length === 0) return false;
+
+  return !isWithinCurrentShift(hour, minute, nowBA, weeklyHours, closingMarginMinutes);
 }

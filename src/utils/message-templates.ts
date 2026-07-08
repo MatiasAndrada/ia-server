@@ -227,6 +227,24 @@ export function noMoreSlotsToday(reason: string): string {
 }
 
 // ============================
+// M8b — Bloqueos de fechas configurados por el negocio
+// ============================
+
+export function dateBlocked(dayLabel: string): string {
+  return (
+    `❌ Lo siento, el *${dayLabel}* el local no está tomando reservas.\n\n` +
+    `¿Querés elegir otra fecha?`
+  );
+}
+
+export function futureReservationsBlockedToday(): string {
+  return (
+    `❌ Por hoy no estamos tomando reservas para turnos más tarde — solo para el turno que está en curso ahora.\n\n` +
+    `¿Querés unirte a la fila para el turno actual, o reservar para otro día?`
+  );
+}
+
+// ============================
 // M9 — Validación de datos
 // ============================
 
