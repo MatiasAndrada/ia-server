@@ -1180,6 +1180,10 @@ describe('WhatsAppHandler single-active-reservation policy', () => {
     });
 
     it('accepts a day named directly in the schedule_choice answer (within the 7-day window)', async () => {
+      // Isolate from the previous test's getBusinessById mock (jest.clearAllMocks()
+      // clears call history but not a spy's mockResolvedValue implementation).
+      jest.spyOn(SupabaseService, 'getBusinessById').mockResolvedValue(null as any);
+
       const setScheduledDateSpy = jest
         .spyOn(ReservationService, 'setScheduledDate')
         .mockResolvedValue(scheduleChoiceDraft({ step: 'time' }) as any);
@@ -1201,6 +1205,35 @@ describe('WhatsAppHandler single-active-reservation policy', () => {
         'business-1',
         '5491234567890@s.whatsapp.net',
         '🕐 ¿A qué hora te gustaría reservar para el viernes 03/07?'
+      );
+    });
+
+    it('includes the business opening hours for that day in the "¿A qué hora?" prompt', async () => {
+      jest.spyOn(SupabaseService, 'getBusinessById').mockResolvedValue({
+        id: 'business-1',
+        name: 'Restaurante Test',
+        weekly_hours: {
+          fri: { closed: false, shifts: [{ open: '08:00', close: '14:00' }, { open: '17:00', close: '02:00' }] },
+        },
+      } as any);
+
+      jest
+        .spyOn(ReservationService, 'setScheduledDate')
+        .mockResolvedValue(scheduleChoiceDraft({ step: 'time' }) as any);
+
+      const handled = await (handler as any).processDraftStep(
+        scheduleChoiceDraft(),
+        'el viernes',
+        'conv-sched',
+        'business-1',
+        '5491234567890@s.whatsapp.net'
+      );
+
+      expect(handled).toBe(true);
+      expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+        'business-1',
+        '5491234567890@s.whatsapp.net',
+        '🕐 ¿A qué hora te gustaría reservar para el viernes 03/07 (horario: *08:00–14:00 y 17:00–02:00*)?'
       );
     });
 
