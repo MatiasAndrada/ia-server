@@ -1,11 +1,12 @@
 import { BaileysService } from './baileys.service';
 import { agentService } from './agent.service';
+import { ollamaService } from './ollama.service';
 import { ReservationService } from './reservation.service';
 import { SupabaseService } from './supabase.service';
 import { SupabaseConfig } from '../config/supabase';
 import { RedisConfig } from '../config/redis';
 import { agentRegistry } from '../agents';
-import { BaileysMessage, ReservationDraft, WeeklyHours } from '../types';
+import { BaileysMessage, BlockedDateEntry, ReservationDraft, WeeklyHours } from '../types';
 import { logger } from '../utils/logger';
 import {
   evaluateReservationScope,
@@ -33,6 +34,7 @@ import {
   findNextOpenSlot,
   findNextSlotOnDay,
   findCurrentShiftClose,
+  formatDayHoursForDate,
   addBaDays,
   formatDayLabel,
   startOfBaDay,
@@ -1038,6 +1040,23 @@ export class WhatsAppHandler {
               return true;
             }
 
+            // Reject dates the business has explicitly blocked (business_blocked_dates)
+            // right away — before asking for the time — so the customer isn't asked
+            // "¿a qué hora?" for a day the local isn't taking reservations at all.
+            const dateKeyForScheduleBlock = formatBaDateKey(parsedDay.baDate);
+            const blockedDatesForSchedule = await SupabaseService.getBlockedDates(businessId);
+            if (isDateBlocked(dateKeyForScheduleBlock, blockedDatesForSchedule)) {
+              await this.sendWhatsAppMessage(
+                businessId,
+                jid,
+                templates.dateBlocked(
+                  parsedDay.label,
+                  await this.resolveBlockedDateMessage(businessId, dateKeyForScheduleBlock, blockedDatesForSchedule)
+                )
+              );
+              return true;
+            }
+
             // The customer may have already given the time in the same message too
             // (e.g. "el viernes a las 21") — skip the redundant "¿A qué hora?" ask.
             const parsedTimeSameMsg = parseTimeOfDay(messageText);
@@ -1082,7 +1101,11 @@ export class WhatsAppHandler {
               return true;
             }
 
-            await this.sendWhatsAppMessage(businessId, jid, templates.askTime(parsedDay.label));
+            await this.sendWhatsAppMessage(
+              businessId,
+              jid,
+              await this.buildAskTimeMessage(businessId, dateKeyForScheduleBlock, parsedDay.label)
+            );
             return true;
           }
 
@@ -1181,6 +1204,23 @@ export class WhatsAppHandler {
             }
           }
 
+          // Reject dates the business has explicitly blocked (business_blocked_dates)
+          // right away — before asking for the time — so the customer isn't asked
+          // "¿a qué hora?" for a day the local isn't taking reservations at all.
+          const dateKeyForDateStepBlock = formatBaDateKey(parsedDay.baDate);
+          const blockedDatesForDateStep = await SupabaseService.getBlockedDates(businessId);
+          if (isDateBlocked(dateKeyForDateStepBlock, blockedDatesForDateStep)) {
+            await this.sendWhatsAppMessage(
+              businessId,
+              jid,
+              templates.dateBlocked(
+                parsedDay.label,
+                await this.resolveBlockedDateMessage(businessId, dateKeyForDateStepBlock, blockedDatesForDateStep)
+              )
+            );
+            return true;
+          }
+
           // The customer may have already given the time in the same message too
           // (e.g. "el miércoles a las 19") — skip the redundant "¿A qué hora?" ask.
           const parsedTimeSameMsg = parseTimeOfDay(messageText);
@@ -1235,7 +1275,11 @@ export class WhatsAppHandler {
             return true;
           }
 
-          await this.sendWhatsAppMessage(businessId, jid, templates.askTime(parsedDay.label));
+          await this.sendWhatsAppMessage(
+            businessId,
+            jid,
+            await this.buildAskTimeMessage(businessId, dateKeyForDateStepBlock, parsedDay.label, weeklyHoursForDate)
+          );
           return true;
         }
 
@@ -1380,7 +1424,14 @@ export class WhatsAppHandler {
 
                 const blockedDatesForConfirm = await SupabaseService.getBlockedDates(businessId);
                 if (isDateBlocked(newDateKey, blockedDatesForConfirm)) {
-                  await this.sendWhatsAppMessage(businessId, jid, templates.dateBlocked(describeBaDateKey(newDateKey, nowBA)));
+                  await this.sendWhatsAppMessage(
+                    businessId,
+                    jid,
+                    templates.dateBlocked(
+                      describeBaDateKey(newDateKey, nowBA),
+                      await this.resolveBlockedDateMessage(businessId, newDateKey, blockedDatesForConfirm)
+                    )
+                  );
                   return true;
                 }
 
@@ -1530,7 +1581,7 @@ export class WhatsAppHandler {
               dateKey
             );
             const dayLabel = describeBaDateKey(dateKey, nowInBuenosAires());
-            await this.sendWhatsAppMessage(businessId, jid, templates.askTime(dayLabel));
+            await this.sendWhatsAppMessage(businessId, jid, await this.buildAskTimeMessage(businessId, dateKey, dayLabel));
             return true;
           } else {
             await this.sendWhatsAppMessage(businessId, jid, templates.editMenuInvalidChoice());
@@ -1610,7 +1661,11 @@ export class WhatsAppHandler {
             draft.invalidAttempts = 0;
             await ReservationService.saveDraft(draft);
             const dayLabel = describeBaDateKey(draft.scheduledDate, nowInBuenosAires());
-            await this.sendWhatsAppMessage(businessId, jid, templates.askTime(dayLabel));
+            await this.sendWhatsAppMessage(
+              businessId,
+              jid,
+              await this.buildAskTimeMessage(businessId, draft.scheduledDate, dayLabel)
+            );
             return true;
           }
 
@@ -1838,13 +1893,29 @@ export class WhatsAppHandler {
 
     const chosenBaDate = parseBaDateKey(chosenDateKey);
     const chosenLabel = describeBaDateKey(chosenDateKey, nowInBuenosAires());
+
+    // Reject dates the business has explicitly blocked (business_blocked_dates)
+    // right away — before asking for the time.
+    const blockedDatesForDisambiguation = await SupabaseService.getBlockedDates(businessId);
+    if (isDateBlocked(chosenDateKey, blockedDatesForDisambiguation)) {
+      await this.sendWhatsAppMessage(
+        businessId,
+        jid,
+        templates.dateBlocked(
+          chosenLabel,
+          await this.resolveBlockedDateMessage(businessId, chosenDateKey, blockedDatesForDisambiguation)
+        )
+      );
+      return true;
+    }
+
     await ReservationService.setScheduledDate(conversationId, {
       baDate: chosenBaDate,
       label: chosenLabel,
       isToday: chosenDateKey === pending.todayDateKey,
       matchedWeekdayName: true,
     });
-    await this.sendWhatsAppMessage(businessId, jid, templates.askTime(chosenLabel));
+    await this.sendWhatsAppMessage(businessId, jid, await this.buildAskTimeMessage(businessId, chosenDateKey, chosenLabel));
     return true;
   }
 
@@ -1960,6 +2031,21 @@ export class WhatsAppHandler {
       return true;
     }
 
+    // Reject dates the business has explicitly blocked (business_blocked_dates)
+    // right away — before asking for the time.
+    const blockedDatesForMismatch = await SupabaseService.getBlockedDates(businessId);
+    if (isDateBlocked(pending.nearestDateKey, blockedDatesForMismatch)) {
+      await this.sendWhatsAppMessage(
+        businessId,
+        jid,
+        templates.dateBlocked(
+          pending.nearestLabel,
+          await this.resolveBlockedDateMessage(businessId, pending.nearestDateKey, blockedDatesForMismatch)
+        )
+      );
+      return true;
+    }
+
     const nearestBaDate = parseBaDateKey(pending.nearestDateKey);
     await ReservationService.setScheduledDate(conversationId, {
       baDate: nearestBaDate,
@@ -1967,7 +2053,11 @@ export class WhatsAppHandler {
       isToday: pending.nearestIsToday,
       matchedWeekdayName: true,
     });
-    await this.sendWhatsAppMessage(businessId, jid, templates.askTime(pending.nearestLabel));
+    await this.sendWhatsAppMessage(
+      businessId,
+      jid,
+      await this.buildAskTimeMessage(businessId, pending.nearestDateKey, pending.nearestLabel)
+    );
     return true;
   }
 
@@ -2041,6 +2131,30 @@ export class WhatsAppHandler {
       await ReservationService.saveDraft(draft);
     }
     return true;
+  }
+
+  /**
+   * Builds the "¿A qué hora...?" prompt including the business's opening hours
+   * for that specific day (e.g. "08:00–14:00 y 17:00–02:00"), so the customer
+   * doesn't have to ask separately what the schedule is. Pass `knownWeeklyHours`
+   * to reuse a `weekly_hours` value the caller already fetched; omit it to fetch
+   * fresh. Falls back to the plain prompt when hours aren't configured.
+   */
+  private async buildAskTimeMessage(
+    businessId: string,
+    dateKey: string,
+    dayLabel: string,
+    knownWeeklyHours?: WeeklyHours | null
+  ): Promise<string> {
+    const weeklyHours =
+      knownWeeklyHours !== undefined
+        ? knownWeeklyHours
+        : ((await SupabaseService.getBusinessById(businessId))?.weekly_hours as WeeklyHours | null | undefined);
+    const hoursRange =
+      weeklyHours && Object.keys(weeklyHours).length > 0
+        ? formatDayHoursForDate(parseBaDateKey(dateKey), weeklyHours)
+        : null;
+    return templates.askTime(dayLabel, hoursRange);
   }
 
   /**
@@ -2129,7 +2243,14 @@ export class WhatsAppHandler {
         );
         return false;
       }
-      await this.sendWhatsAppMessage(businessId, jid, templates.dateBlocked(describeBaDateKey(scheduledDate, nowBA)));
+      await this.sendWhatsAppMessage(
+        businessId,
+        jid,
+        templates.dateBlocked(
+          describeBaDateKey(scheduledDate, nowBA),
+          await this.resolveBlockedDateMessage(businessId, scheduledDate, blockedDates)
+        )
+      );
       return true;
     }
 
@@ -2430,6 +2551,52 @@ export class WhatsAppHandler {
       }
     } catch (error) {
       logger.error('Error creating and notifying reservation', { error, conversationId });
+    }
+  }
+
+  /**
+   * Returns the best available client-facing message for a blocked date.
+   * Uses the pre-stored `reasonMessage` when present; otherwise generates one
+   * via Ollama from the raw `reason` and caches it in the DB so future calls
+   * are instant. Returns null when neither field is available (generic template
+   * fallback is handled by `templates.dateBlocked`).
+   */
+  private async resolveBlockedDateMessage(
+    businessId: string,
+    dateKey: string,
+    blockedDates: ReadonlyMap<string, BlockedDateEntry>
+  ): Promise<string | null> {
+    const entry = blockedDates.get(dateKey);
+    logger.info('DIAG resolveBlockedDateMessage', {
+      businessId,
+      dateKey,
+      hasEntry: !!entry,
+      reason: entry?.reason ?? null,
+      reasonMessage: entry?.reasonMessage ?? null,
+    });
+    if (!entry) return null;
+
+    if (entry.reasonMessage) return entry.reasonMessage;
+
+    if (!entry.reason) return null;
+
+    // reason is set but reason_message was never generated (e.g. date created
+    // directly in the DB without going through the API). Generate it now and
+    // cache it so the next customer gets the fast path.
+    try {
+      logger.info('DIAG: calling Ollama for blocked date', { businessId, dateKey, reason: entry.reason });
+      const generated = await ollamaService.generateBlockedDateReasonMessage(entry.reason);
+      logger.info('DIAG: Ollama returned', { businessId, dateKey, generatedLength: generated?.length, generated });
+      await SupabaseService.updateBlockedDateReasonMessage(businessId, dateKey, generated);
+      logger.info('Blocked date reason_message generated on-the-fly', { businessId, dateKey });
+      return generated;
+    } catch (error) {
+      logger.warn('Failed to generate blocked date reason_message on-the-fly', {
+        error,
+        businessId,
+        dateKey,
+      });
+      return null;
     }
   }
 

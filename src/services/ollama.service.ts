@@ -1,7 +1,7 @@
 import { OllamaConfig } from '../config/ollama';
 import { OllamaGenerationOptions, OllamaMessage, OllamaRequest, OllamaResponse } from '../types';
 import { logger } from '../utils/logger';
-import { buildFallbackResponse } from '../utils/prompts';
+import { buildBlockedDateReasonPrompt, buildFallbackResponse } from '../utils/prompts';
 import { AxiosError } from 'axios';
 
 const DEFAULT_OLLAMA_OPTIONS: OllamaGenerationOptions = {
@@ -64,6 +64,40 @@ export class OllamaService {
 
     // Return fallback response
     return buildFallbackResponse();
+  }
+
+  /**
+   * Turn a short, informal closure reason (e.g. "duelo", "vacaciones") into a
+   * professional, client-facing message explaining why the business isn't
+   * taking reservations on a blocked date. Falls back to a generic-but-honest
+   * message if Ollama is unavailable, so blocked-date creation never fails
+   * because of the AI call.
+   */
+  async generateBlockedDateReasonMessage(reason: string): Promise<string> {
+    const trimmedReason = reason.trim();
+
+    try {
+      const response = await this.chat(
+        [{ role: 'user', content: `Motivo indicado por el dueño del negocio: "${trimmedReason}"` }],
+        buildBlockedDateReasonPrompt(),
+        { temperature: 0.4, num_predict: 200 }
+      );
+
+      const message = response.trim().replace(/^"|"$/g, '');
+      console.log('Ollama generated blocked-date reason message:', message);
+      if (!message || message.includes('problemas técnicos')) {
+        throw new Error('Ollama returned an unusable response');
+      }
+
+      return message;
+    } catch (error) {
+      logger.warn('Failed to generate blocked-date reason message, using fallback', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        reason: trimmedReason,
+      });
+
+      return `El local no estará tomando reservas en esta fecha debido a: ${trimmedReason}. Disculpá las molestias.`;
+    }
   }
 
   /**

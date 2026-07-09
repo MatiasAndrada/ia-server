@@ -16,6 +16,7 @@ import {
   utcIsoToBaParts,
   describeBaDateKey,
   isDateBlocked,
+  getBlockedDateReasonMessage,
   isFutureReservationBlockedToday,
 } from '../utils/reservation-datetime';
 
@@ -388,7 +389,7 @@ export class ReservationService {
           return {
             success: false,
             error: 'Requested date is blocked',
-            blockedMessage: templates.dateBlocked(describeBaDateKey(dateKey, nowBA)),
+            blockedMessage: templates.dateBlocked(describeBaDateKey(dateKey, nowBA), getBlockedDateReasonMessage(dateKey, blockedDates)),
           };
         }
 

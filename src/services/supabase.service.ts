@@ -9,8 +9,10 @@ import {
   Customer,
   Table,
   WaitlistEntry,
+  BlockedDateEntry,
 } from '../types';
 import { logger } from '../utils/logger';
+import { ollamaService } from './ollama.service';
 
 // Helper types for strict type safety without explicit imports
 type WaitlistEntriesRow = Database['public']['Tables']['waitlist_entries']['Row'];
@@ -19,6 +21,7 @@ type CustomersInsert = Database['public']['Tables']['customers']['Insert'];
 type WaitlistEntriesInsert = Database['public']['Tables']['waitlist_entries']['Insert'];
 type WaitlistEntriesUpdate = Database['public']['Tables']['waitlist_entries']['Update'];
 type BusinessesUpdate = Database['public']['Tables']['businesses']['Update'];
+type BusinessBlockedDatesRow = Database['public']['Tables']['business_blocked_dates']['Row'];
 
 export class SupabaseService {
   private static getClient() {
@@ -623,26 +626,111 @@ export class SupabaseService {
   }
 
   /**
-   * Get the set of dates ("YYYY-MM-DD") a business has explicitly blocked for
-   * new reservations (business_blocked_dates). Returned as-is from Postgres —
-   * no timezone conversion — to be compared directly against other BA date keys.
+   * Get the dates ("YYYY-MM-DD") a business has explicitly blocked for new
+   * reservations (business_blocked_dates). Each entry carries both the raw
+   * owner-supplied `reason` and the AI-generated `reasonMessage`. Dates are
+   * returned as-is from Postgres — no timezone conversion — to be compared
+   * directly against other BA date keys.
    */
-  static async getBlockedDates(businessId: string): Promise<Set<string>> {
+  static async getBlockedDates(businessId: string): Promise<Map<string, BlockedDateEntry>> {
     try {
       const client = this.getClient();
       const { data, error } = await client
         .from('business_blocked_dates')
-        .select('date')
+        .select('date, reason, reason_message')
         .eq('business_id', businessId);
+      console.log('🔍 [DEBUG] getBlockedDates query result:', {
+        data, error
+      });
+      if (error) {
+        throw error;
+      }
+
+      return new Map(
+        (data ?? []).map((row) => [
+          row.date,
+          { reason: row.reason ?? null, reasonMessage: row.reason_message ?? null },
+        ])
+      );
+    } catch (error) {
+      logger.error('Supabase: getBlockedDates failed', { error, businessId });
+      return new Map();
+    }
+  }
+
+  /**
+   * Persist a newly-generated AI client-facing message for a blocked date so
+   * subsequent lookups can skip the Ollama call.
+   */
+  static async updateBlockedDateReasonMessage(
+    businessId: string,
+    date: string,
+    reasonMessage: string
+  ): Promise<void> {
+    try {
+      const client = this.getClient();
+      const { error } = await client
+        .from('business_blocked_dates')
+        .update({ reason_message: reasonMessage })
+        .eq('business_id', businessId)
+        .eq('date', date);
+
+      if (error) throw error;
+
+      logger.info('Supabase: blocked date reason_message updated', { businessId, date });
+    } catch (error) {
+      logger.warn('Supabase: updateBlockedDateReasonMessage failed (non-critical)', {
+        error,
+        businessId,
+        date,
+      });
+    }
+  }
+
+  /**
+   * Create a business_blocked_dates row. When a `reason` is given, an AI
+   * (Ollama) generated, client-facing `reason_message` is produced and
+   * stored alongside it, so customers get a professional explanation
+   * instead of just the owner's short/informal reason.
+   */
+  static async createBlockedDate(
+    businessId: string,
+    date: string,
+    reason?: string | null
+  ): Promise<BusinessBlockedDatesRow | null> {
+    try {
+      const trimmedReason = reason?.trim() || null;
+
+      const reasonMessage = trimmedReason
+        ? await ollamaService.generateBlockedDateReasonMessage(trimmedReason)
+        : null;
+
+      const client = this.getClient();
+      const { data, error } = await client
+        .from('business_blocked_dates')
+        .insert({
+          business_id: businessId,
+          date,
+          reason: trimmedReason,
+          reason_message: reasonMessage,
+        })
+        .select()
+        .single();
 
       if (error) {
         throw error;
       }
 
-      return new Set((data ?? []).map((row) => row.date));
+      logger.info('Supabase: blocked date created', {
+        businessId,
+        date,
+        hasReasonMessage: !!reasonMessage,
+      });
+
+      return data as BusinessBlockedDatesRow;
     } catch (error) {
-      logger.error('Supabase: getBlockedDates failed', { error, businessId });
-      return new Set();
+      logger.error('Supabase: createBlockedDate failed', { error, businessId, date });
+      return null;
     }
   }
 
