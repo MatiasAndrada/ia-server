@@ -297,6 +297,14 @@ export interface ReservationCreatedEvent {
   message: string;
 }
 
+// Represents a row from business_blocked_dates as seen by the conversation flow.
+// Both fields can be null: `reason` when no internal note was given; `reasonMessage`
+// when the AI-generated client-facing message hasn't been produced yet.
+export type BlockedDateEntry = {
+  reason: string | null;
+  reasonMessage: string | null;
+};
+
 // Reservation Flow Types
 export interface ReservationDraft {
   conversationId: string;
