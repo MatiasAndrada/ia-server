@@ -47,6 +47,7 @@ import {
   updateReservationStatusHandler,
   deleteDraftHandler,
 } from './controllers/reservation.controller';
+import { createBlockedDateHandler } from './controllers/blocked-date.controller';
 
 // Import new HTTP-only routes
 import sessionsRoutes from './routes/sessions.routes';
@@ -248,6 +249,9 @@ async function initializeApp() {
     app.patch('/api/reservations/:reservationId/status', updateReservationStatusHandler);
     
     app.delete('/api/reservations/draft/:conversationId', deleteDraftHandler);
+
+    // API Routes - Fechas bloqueadas
+    app.post('/api/blocked-dates', createBlockedDateHandler);
 
     // API Routes - WhatsApp Sessions (replaces WebSocket functionality)
     app.use('/api/sessions', sessionsRoutes);
