@@ -111,6 +111,50 @@ describe('OllamaService', () => {
     });
   });
 
+  describe('generateBlockedDateReasonMessage', () => {
+    it('should return the AI-generated professional message', async () => {
+      mockAxiosInstance.post.mockResolvedValue({
+        data: {
+          message: {
+            role: 'assistant',
+            content: 'Lamentamos informar que el local permanecerá cerrado por duelo familiar.',
+          },
+          done: true,
+        },
+      });
+
+      const result = await service.generateBlockedDateReasonMessage('duelo');
+
+      expect(result).toBe('Lamentamos informar que el local permanecerá cerrado por duelo familiar.');
+      expect(mockAxiosInstance.post).toHaveBeenCalledTimes(1);
+
+      const callArgs = mockAxiosInstance.post.mock.calls[0][1];
+      expect(callArgs.messages[1].content).toContain('duelo');
+    });
+
+    it('should strip wrapping quotes from the AI response', async () => {
+      mockAxiosInstance.post.mockResolvedValue({
+        data: {
+          message: { role: 'assistant', content: '"El local estará cerrado por vacaciones."' },
+          done: true,
+        },
+      });
+
+      const result = await service.generateBlockedDateReasonMessage('vacaciones');
+
+      expect(result).toBe('El local estará cerrado por vacaciones.');
+    });
+
+    it('should fall back to a generic honest message when Ollama fails', async () => {
+      mockAxiosInstance.post.mockRejectedValue(new Error('Connection failed'));
+
+      const result = await service.generateBlockedDateReasonMessage('mudanza');
+
+      expect(result).toContain('mudanza');
+      expect(result).not.toContain('problemas técnicos');
+    });
+  });
+
   describe('healthCheck', () => {
     it('should return healthy status when Ollama is available', async () => {
       (OllamaConfig.healthCheck as jest.Mock).mockResolvedValue(true);
