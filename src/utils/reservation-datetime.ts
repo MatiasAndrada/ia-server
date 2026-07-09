@@ -318,6 +318,11 @@ export function formatDayHours(dayKey: WeeklyHoursDayKey, weeklyHours: WeeklyHou
   return entry.shifts.map(s => `${s.open}–${s.close}`).join(' y ');
 }
 
+/** Same as {@link formatDayHours} but keyed off a BA calendar Date instead of a weekday key. */
+export function formatDayHoursForDate(baDate: Date, weeklyHours: WeeklyHours): string {
+  return formatDayHours(DOW_TO_KEY[baDate.getUTCDay()], weeklyHours);
+}
+
 /**
  * Finds the next business opening slot starting from `nowBA`, adding `marginMinutes`
  * to the raw opening time (e.g. open=08:00 + margin=15 → slot=08:15).
@@ -550,11 +555,24 @@ export function checkBusinessHours(
 
 /**
  * True when `dateKey` ("YYYY-MM-DD") is one of the business's specifically
- * blocked dates (business_blocked_dates). `blockedDates` holds the raw date
- * strings as returned by Postgres — compare directly, no timezone conversion.
+ * blocked dates (business_blocked_dates). `blockedDates` maps each blocked
+ * date key (as returned by Postgres, no timezone conversion) to its optional
+ * client-facing `reason_message`.
  */
-export function isDateBlocked(dateKey: string, blockedDates: ReadonlySet<string>): boolean {
+export function isDateBlocked(dateKey: string, blockedDates: ReadonlyMap<string, unknown>): boolean {
   return blockedDates.has(dateKey);
+}
+
+/**
+ * Returns the pre-stored client-facing message for a blocked date, or null
+ * when none exists yet. Callers that need on-the-fly Ollama generation should
+ * use `WhatsAppHandler.resolveBlockedDateMessage` instead.
+ */
+export function getBlockedDateReasonMessage(
+  dateKey: string,
+  blockedDates: ReadonlyMap<string, { reasonMessage: string | null } | null>
+): string | null {
+  return blockedDates.get(dateKey)?.reasonMessage ?? null;
 }
 
 /**

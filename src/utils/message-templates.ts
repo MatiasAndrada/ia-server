@@ -39,8 +39,9 @@ export function askDay(): string {
   return `📅 ¿Qué día preferís? Podés decir "mañana", "el viernes", etc.`;
 }
 
-export function askTime(dayLabel: string): string {
-  return `🕐 ¿A qué hora te gustaría reservar para el ${dayLabel}?`;
+export function askTime(dayLabel: string, hoursRange?: string | null): string {
+  const hoursNote = hoursRange ? ` (horario: *${hoursRange}*)` : '';
+  return `🕐 ¿A qué hora te gustaría reservar para el ${dayLabel}${hoursNote}?`;
 }
 
 /** Asked when the customer chooses "hoy" and the business is open right now — before jumping to an instant reservation. */
@@ -230,7 +231,11 @@ export function noMoreSlotsToday(reason: string): string {
 // M8b — Bloqueos de fechas configurados por el negocio
 // ============================
 
-export function dateBlocked(dayLabel: string): string {
+export function dateBlocked(dayLabel: string, reasonMessage?: string | null): string {
+  if (reasonMessage) {
+    return `❌ ${reasonMessage}\n\n¿Querés elegir otra fecha?`;
+  }
+
   return (
     `❌ Lo siento, el *${dayLabel}* el local no está tomando reservas.\n\n` +
     `¿Querés elegir otra fecha?`

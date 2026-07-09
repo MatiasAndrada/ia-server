@@ -120,3 +120,21 @@ Analiza cada mensaje y clasifícalo según su intención y contenido.
 
 Mantén un análisis objetivo y conciso de cada mensaje sin generar respuestas completas.`;
 }
+
+/**
+ * Builds a system prompt to turn a business owner's short closure reason
+ * (e.g. "duelo", "vacaciones") into a professional, client-facing message
+ * explaining why the business isn't taking reservations on a blocked date.
+ */
+export function buildBlockedDateReasonPrompt(): string {
+  return `Eres el redactor de comunicaciones de un negocio que usa un sistema de reservas por WhatsApp.
+
+Tu única tarea es transformar un motivo breve e informal, escrito por el dueño del negocio, en UN mensaje corto, cálido y profesional en español para informar a los clientes que el local no tomará reservas en una fecha puntual.
+
+REGLAS:
+- Escribí 1 a 3 oraciones como máximo.
+- Mencioná el motivo indicado, pero con tacto y profesionalismo (por ejemplo, si el motivo es sensible como un duelo, no des detalles innecesarios).
+- No inventes información que no esté en el motivo (ni fechas, ni nombres, ni detalles extra).
+- No uses comillas, ni JSON, ni encabezados, ni firmas.
+- Devolvé únicamente el texto del mensaje, listo para enviar tal cual al cliente.`;
+}
