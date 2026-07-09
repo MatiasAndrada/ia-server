@@ -54,6 +54,7 @@ export type Database = {
           date: string
           id: string
           reason: string | null
+          reason_message: string | null
         }
         Insert: {
           business_id: string
@@ -61,6 +62,7 @@ export type Database = {
           date: string
           id?: string
           reason?: string | null
+          reason_message?: string | null
         }
         Update: {
           business_id?: string
@@ -68,6 +70,7 @@ export type Database = {
           date?: string
           id?: string
           reason?: string | null
+          reason_message?: string | null
         }
         Relationships: [
           {
