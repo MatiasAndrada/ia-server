@@ -244,7 +244,7 @@ export class ReservationService {
     scheduledDate: string,
     scheduledTime: string,
     scheduledAt: string,
-    origin: 'schedule_choice' | 'time'
+    origin: 'schedule_choice' | 'time' | 'date'
   ): Promise<ReservationDraft | null> {
     const draft = await this.getDraft(conversationId);
     if (!draft) {

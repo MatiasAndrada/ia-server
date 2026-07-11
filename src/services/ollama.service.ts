@@ -73,13 +73,18 @@ export class OllamaService {
    * message if Ollama is unavailable, so blocked-date creation never fails
    * because of the AI call.
    */
-  async generateBlockedDateReasonMessage(reason: string): Promise<string> {
+  async generateBlockedDateReasonMessage(
+    reason: string,
+    businessName?: string | null,
+    businessType?: string | null
+  ): Promise<string> {
     const trimmedReason = reason.trim();
+    const name = businessName?.trim() || 'el local';
 
     try {
       const response = await this.chat(
         [{ role: 'user', content: `Motivo indicado por el dueño del negocio: "${trimmedReason}"` }],
-        buildBlockedDateReasonPrompt(),
+        buildBlockedDateReasonPrompt(name, businessType),
         { temperature: 0.4, num_predict: 200 }
       );
 
@@ -96,7 +101,7 @@ export class OllamaService {
         reason: trimmedReason,
       });
 
-      return `El local no estará tomando reservas en esta fecha debido a: ${trimmedReason}. Disculpá las molestias.`;
+      return `${name} no estará tomando reservas en esta fecha debido a: ${trimmedReason}. Disculpá las molestias.`;
     }
   }
 

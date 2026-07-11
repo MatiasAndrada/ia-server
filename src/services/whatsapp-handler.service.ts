@@ -42,6 +42,7 @@ import {
   utcIsoToBaParts,
   isDateBlocked,
   isFutureReservationBlockedToday,
+  formatOpenDays,
   type ParsedDay,
 } from '../utils/reservation-datetime';
 import * as templates from '../utils/message-templates';
@@ -1111,11 +1112,7 @@ export class WhatsAppHandler {
 
           if (wantsToPickDay) {
             await ReservationService.moveToDateStep(conversationId);
-            await this.sendWhatsAppMessage(
-              businessId,
-              jid,
-              '¿Para qué día de la semana lo quiere? Podés decir "mañana", "el viernes", etc.'
-            );
+            await this.sendWhatsAppMessage(businessId, jid, await this.buildAskDayMessage(businessId));
             return true;
           }
 
@@ -1154,6 +1151,10 @@ export class WhatsAppHandler {
           const nowBA = nowInBuenosAires();
           const parsedDay = parseRelativeDay(messageText, nowBA);
 
+          // Fetch business once — needed for both invalid-date fallback and hours validation below.
+          const businessForDate = await SupabaseService.getBusinessById(businessId);
+          const weeklyHoursForDate = businessForDate?.weekly_hours as WeeklyHours | null | undefined;
+
           if (!parsedDay || !isWithinNextWeek(parsedDay.baDate, nowBA)) {
             draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
             await ReservationService.saveDraft(draft);
@@ -1165,22 +1166,45 @@ export class WhatsAppHandler {
                 jid,
                 '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
               );
-            } else if (parsedDay) {
-              // Parsed but outside the 7-day window
-              await this.sendWhatsAppMessage(
-                businessId,
-                jid,
-                'Por ahora solo puedo tomar reservas dentro de los próximos 7 días. ¿Para qué día de esa semana la querés?'
-              );
             } else {
-              await this.sendWhatsAppMessage(businessId, jid, templates.invalidDate());
+              // Try to suggest the next available slot so the customer can confirm with "sí".
+              const margin = businessForDate?.reservation_opening_margin_minutes ?? 15;
+              const closingMargin = businessForDate?.reservation_closing_margin_minutes ?? 15;
+              const nextSlot =
+                weeklyHoursForDate && Object.keys(weeklyHoursForDate).length > 0
+                  ? findNextOpenSlot(nowBA, weeklyHoursForDate, margin, closingMargin)
+                  : null;
+
+              if (nextSlot) {
+                const slotDateKey = formatBaDateKey(nextSlot.baDate);
+                const blockedDatesForSuggestion = await SupabaseService.getBlockedDates(businessId);
+                if (!isDateBlocked(slotDateKey, blockedDatesForSuggestion)) {
+                  const slotTime = `${String(nextSlot.hour).padStart(2, '0')}:${String(nextSlot.minute).padStart(2, '0')}`;
+                  const slotAt = combineToUtcISO(nextSlot.baDate, nextSlot.hour, nextSlot.minute);
+                  await ReservationService.moveToConfirmSlot(conversationId, slotDateKey, slotTime, slotAt, 'date');
+                  await this.sendWhatsAppMessage(
+                    businessId,
+                    jid,
+                    `No pude interpretar la fecha. El próximo turno disponible es el *${nextSlot.label}*.\n\n¿Reservamos para esa hora? Respondé *sí* o *no*.`
+                  );
+                  return true;
+                }
+              }
+
+              // No suitable default slot — re-ask showing open days.
+              if (parsedDay) {
+                await this.sendWhatsAppMessage(
+                  businessId,
+                  jid,
+                  'Por ahora solo puedo tomar reservas dentro de los próximos 7 días. ' +
+                  await this.buildAskDayMessage(businessId, weeklyHoursForDate)
+                );
+              } else {
+                await this.sendWhatsAppMessage(businessId, jid, await this.buildAskDayMessage(businessId, weeklyHoursForDate));
+              }
             }
             return true;
           }
-
-          // Reject days the business is closed (if weekly_hours is configured)
-          const businessForDate = await SupabaseService.getBusinessById(businessId);
-          const weeklyHoursForDate = businessForDate?.weekly_hours as WeeklyHours | null | undefined;
           if (weeklyHoursForDate && Object.keys(weeklyHoursForDate).length > 0) {
             const dayCheck = isDayOpen(parsedDay.baDate, weeklyHoursForDate);
             if (!dayCheck.open) {
@@ -1197,7 +1221,7 @@ export class WhatsAppHandler {
                 await this.sendWhatsAppMessage(
                   businessId,
                   jid,
-                  `❌ ${dayCheck.reason} ¿Para qué otro día querés reservar?`
+                  `❌ ${dayCheck.reason}\n\n` + await this.buildAskDayMessage(businessId, weeklyHoursForDate)
                 );
               }
               return true;
@@ -1375,6 +1399,38 @@ export class WhatsAppHandler {
                 jid,
                 '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
               );
+            } else if (scheduledDate) {
+              // Suggest the first available slot on the chosen day so the customer can confirm with "sí".
+              const businessForTime = await SupabaseService.getBusinessById(businessId);
+              const weeklyHoursForTime = businessForTime?.weekly_hours as WeeklyHours | null | undefined;
+              const openingMarginForTime = businessForTime?.reservation_opening_margin_minutes ?? 15;
+              const closingMarginForTime = businessForTime?.reservation_closing_margin_minutes ?? 15;
+
+              if (weeklyHoursForTime && Object.keys(weeklyHoursForTime).length > 0) {
+                const baDateForTime = parseBaDateKey(scheduledDate);
+                const todayKey = formatBaDateKey(startOfBaDay(nowBAForTime));
+                const afterMinutes = scheduledDate === todayKey
+                  ? nowBAForTime.getUTCHours() * 60 + nowBAForTime.getUTCMinutes()
+                  : 0;
+                const nextSlotOnDay = findNextSlotOnDay(
+                  baDateForTime, afterMinutes, weeklyHoursForTime, openingMarginForTime, closingMarginForTime
+                );
+                if (nextSlotOnDay) {
+                  const slotTime = `${String(nextSlotOnDay.hour).padStart(2, '0')}:${String(nextSlotOnDay.minute).padStart(2, '0')}`;
+                  const slotAt = combineToUtcISO(baDateForTime, nextSlotOnDay.hour, nextSlotOnDay.minute);
+                  await ReservationService.moveToConfirmSlot(conversationId, scheduledDate, slotTime, slotAt, 'time');
+                  await this.sendWhatsAppMessage(
+                    businessId,
+                    jid,
+                    `No entendí el horario. El primer turno disponible ese día es a las *${slotTime}*.\n\n¿Reservamos para esa hora? Respondé *sí* o *no*.`
+                  );
+                  return true;
+                }
+              }
+
+              // No suitable slot on that day — re-ask with hours range.
+              const dayLabel = describeBaDateKey(scheduledDate, nowBAForTime);
+              await this.sendWhatsAppMessage(businessId, jid, await this.buildAskTimeMessage(businessId, scheduledDate, dayLabel, weeklyHoursForTime));
             } else {
               await this.sendWhatsAppMessage(businessId, jid, templates.invalidTime());
             }
@@ -1499,6 +1555,18 @@ export class WhatsAppHandler {
               // Let the user choose again: instant or future day
               await ReservationService.moveToScheduleChoice(conversationId);
               await this.promptScheduleChoice(conversationId, businessId, jid);
+            } else if (origin === 'date') {
+              // Come back from date step: clear proposed slot, ask for a different day
+              const dateDraftForDate = await ReservationService.getDraft(conversationId);
+              if (dateDraftForDate) {
+                dateDraftForDate.step = 'date';
+                dateDraftForDate.scheduledAt = undefined;
+                dateDraftForDate.scheduledTime = undefined;
+                dateDraftForDate.scheduledDate = undefined;
+                dateDraftForDate.confirmSlotOrigin = undefined;
+                await ReservationService.saveDraft(dateDraftForDate);
+              }
+              await this.sendWhatsAppMessage(businessId, jid, await this.buildAskDayMessage(businessId));
             } else {
               // Come back from time step: ask for a different time on the same day
               const dateDraft = await ReservationService.getDraft(conversationId);
@@ -1558,7 +1626,7 @@ export class WhatsAppHandler {
                 { customerName: draft.customerName, partySize: draft.partySize },
                 parts
               );
-              await this.sendWhatsAppMessage(businessId, jid, templates.askDay());
+              await this.sendWhatsAppMessage(businessId, jid, await this.buildAskDayMessage(businessId));
             } else {
               // Instant reservation: there is no time to keep — full schedule flow
               await ReservationService.startEditSchedule(conversationId, businessId, reservationId, {
@@ -1647,7 +1715,7 @@ export class WhatsAppHandler {
             draft.returnToSummary = true;
             draft.invalidAttempts = 0;
             await ReservationService.saveDraft(draft);
-            await this.sendWhatsAppMessage(businessId, jid, templates.askDay());
+            await this.sendWhatsAppMessage(businessId, jid, await this.buildAskDayMessage(businessId));
             return true;
           }
 
@@ -2009,11 +2077,7 @@ export class WhatsAppHandler {
 
     if (wantsNo) {
       await ReservationService.saveDraft(draft);
-      await this.sendWhatsAppMessage(
-        businessId,
-        jid,
-        '¿Para qué día de la semana lo querés? Podés decir "mañana", "el viernes", etc.'
-      );
+      await this.sendWhatsAppMessage(businessId, jid, await this.buildAskDayMessage(businessId));
       return true;
     }
 
@@ -2110,7 +2174,8 @@ export class WhatsAppHandler {
           '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
         );
       } else {
-        await this.sendWhatsAppMessage(businessId, jid, templates.invalidTime());
+        // Re-ask including the closing time context already known from pending.
+        await this.sendWhatsAppMessage(businessId, jid, templates.askTodayTimeOpen(pending.closeLabel));
       }
       return true;
     }
@@ -2155,6 +2220,26 @@ export class WhatsAppHandler {
         ? formatDayHoursForDate(parseBaDateKey(dateKey), weeklyHours)
         : null;
     return templates.askTime(dayLabel, hoursRange);
+  }
+
+  /**
+   * Builds the "¿Qué día preferís?" prompt including the open days of the week
+   * so the customer knows upfront which days are available.
+   * Pass `knownWeeklyHours` to reuse an already-fetched value; omit to fetch fresh.
+   */
+  private async buildAskDayMessage(
+    businessId: string,
+    knownWeeklyHours?: WeeklyHours | null
+  ): Promise<string> {
+    const weeklyHours =
+      knownWeeklyHours !== undefined
+        ? knownWeeklyHours
+        : ((await SupabaseService.getBusinessById(businessId))?.weekly_hours as WeeklyHours | null | undefined);
+    const openDays =
+      weeklyHours && Object.keys(weeklyHours).length > 0
+        ? formatOpenDays(weeklyHours)
+        : null;
+    return templates.askDay(openDays || null);
   }
 
   /**
@@ -2584,8 +2669,13 @@ export class WhatsAppHandler {
     // directly in the DB without going through the API). Generate it now and
     // cache it so the next customer gets the fast path.
     try {
+      const business = await SupabaseService.getBusinessById(businessId);
       logger.info('DIAG: calling Ollama for blocked date', { businessId, dateKey, reason: entry.reason });
-      const generated = await ollamaService.generateBlockedDateReasonMessage(entry.reason);
+      const generated = await ollamaService.generateBlockedDateReasonMessage(
+        entry.reason,
+        business?.name,
+        business?.type
+      );
       logger.info('DIAG: Ollama returned', { businessId, dateKey, generatedLength: generated?.length, generated });
       await SupabaseService.updateBlockedDateReasonMessage(businessId, dateKey, generated);
       logger.info('Blocked date reason_message generated on-the-fly', { businessId, dateKey });

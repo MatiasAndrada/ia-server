@@ -701,9 +701,15 @@ export class SupabaseService {
     try {
       const trimmedReason = reason?.trim() || null;
 
-      const reasonMessage = trimmedReason
-        ? await ollamaService.generateBlockedDateReasonMessage(trimmedReason)
-        : null;
+      let reasonMessage: string | null = null;
+      if (trimmedReason) {
+        const business = await this.getBusinessById(businessId);
+        reasonMessage = await ollamaService.generateBlockedDateReasonMessage(
+          trimmedReason,
+          business?.name,
+          business?.type
+        );
+      }
 
       const client = this.getClient();
       const { data, error } = await client
