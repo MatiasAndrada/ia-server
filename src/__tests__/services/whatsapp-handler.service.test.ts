@@ -1175,7 +1175,7 @@ describe('WhatsAppHandler single-active-reservation policy', () => {
       expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
         'business-1',
         '5491234567890@s.whatsapp.net',
-        expect.stringContaining('¿Para qué día de la semana lo quiere?')
+        expect.stringContaining('¿Qué día preferís?')
       );
     });
 
@@ -1463,7 +1463,7 @@ describe('WhatsAppHandler single-active-reservation policy', () => {
       expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
         'business-1',
         '5491234567890@s.whatsapp.net',
-        expect.stringContaining('horario')
+        expect.stringContaining('¿A qué hora')
       );
     });
 
