@@ -35,7 +35,14 @@ export function askScheduleChoice(): string {
   );
 }
 
-export function askDay(): string {
+export function askDay(openDays?: string | null): string {
+  if (openDays) {
+    return (
+      `📅 ¿Qué día preferís?\n` +
+      `Estamos abiertos los: *${openDays}*.\n\n` +
+      `Podés decir "mañana", "el viernes", etc.`
+    );
+  }
   return `📅 ¿Qué día preferís? Podés decir "mañana", "el viernes", etc.`;
 }
 

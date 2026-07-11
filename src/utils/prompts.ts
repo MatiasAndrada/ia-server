@@ -126,13 +126,17 @@ Mantén un análisis objetivo y conciso de cada mensaje sin generar respuestas c
  * (e.g. "duelo", "vacaciones") into a professional, client-facing message
  * explaining why the business isn't taking reservations on a blocked date.
  */
-export function buildBlockedDateReasonPrompt(): string {
+export function buildBlockedDateReasonPrompt(businessName: string, businessType?: string | null): string {
+  const businessContext = `Nombre del negocio: "${businessName}". Tipo de negocio: "${businessType ?? 'local'}".`;
   return `Eres el redactor de comunicaciones de un negocio que usa un sistema de reservas por WhatsApp.
+
+${businessContext}
 
 Tu única tarea es transformar un motivo breve e informal, escrito por el dueño del negocio, en UN mensaje corto, cálido y profesional en español para informar a los clientes que el local no tomará reservas en una fecha puntual.
 
 REGLAS:
 - Escribí 1 a 3 oraciones como máximo.
+- Referite al negocio usando su nombre o tipo (por ejemplo: "el restaurante", "la peluquería", el nombre del negocio), nunca uses "oficina" ni términos genéricos que no correspondan.
 - Mencioná el motivo indicado, pero con tacto y profesionalismo (por ejemplo, si el motivo es sensible como un duelo, no des detalles innecesarios).
 - No inventes información que no esté en el motivo (ni fechas, ni nombres, ni detalles extra).
 - No uses comillas, ni JSON, ni encabezados, ni firmas.

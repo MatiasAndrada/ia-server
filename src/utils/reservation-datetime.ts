@@ -311,6 +311,22 @@ function isMinuteInShift(t: number, shift: WeeklyHoursShift, closingMarginMinute
   return t >= open || t < close;
 }
 
+/**
+ * Returns a comma-separated list of the days the business is open,
+ * in Spanish and in week order (Monday first). E.g. "lunes, martes, viernes, sábado".
+ */
+export function formatOpenDays(weeklyHours: WeeklyHours): string {
+  // Iterate Mon→Sun (business-friendly order): indices 1-6 then 0
+  const orderedIndices = [1, 2, 3, 4, 5, 6, 0];
+  const openDays = orderedIndices
+    .filter(i => {
+      const entry = weeklyHours[DOW_TO_KEY[i]];
+      return entry && !entry.closed && entry.shifts.length > 0;
+    })
+    .map(i => DOW_LABELS_ES[i]);
+  return openDays.join(', ');
+}
+
 /** Human-readable shift ranges for a day, e.g. "08:00–14:00 y 17:00–02:00". */
 export function formatDayHours(dayKey: WeeklyHoursDayKey, weeklyHours: WeeklyHours): string {
   const entry = weeklyHours[dayKey];
