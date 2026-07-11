@@ -329,7 +329,7 @@ export interface ReservationDraft {
   scheduledTime?: string; // HH:mm, 24h
   scheduledAt?: string; // ISO UTC instant combining scheduledDate + scheduledTime
   // confirm_slot step: which step triggered the suggestion (to know where to go back on "no")
-  confirmSlotOrigin?: 'schedule_choice' | 'time';
+  confirmSlotOrigin?: 'schedule_choice' | 'time' | 'date';
   // party_size step: true right after asking "¿Cuál es tu nombre correcto?" — the
   // next reply should be treated as the name itself, not as a party size answer.
   awaitingNameCorrection?: boolean;
