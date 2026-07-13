@@ -1263,6 +1263,99 @@ describe('WhatsAppHandler single-active-reservation policy', () => {
       );
     });
 
+    it('offers the soonest open slot (never today) when the chosen day is closed', async () => {
+      // Friday closed, Saturday open. From Thursday, the suggestion must skip
+      // today (Thu) and Friday, landing on Saturday.
+      jest.spyOn(SupabaseService, 'getBusinessById').mockResolvedValue({
+        id: 'business-1',
+        name: 'Restaurante Test',
+        weekly_hours: {
+          fri: { closed: true, shifts: [] },
+          sat: { closed: false, shifts: [{ open: '08:00', close: '23:00' }] },
+        },
+      } as any);
+      jest.spyOn(SupabaseService, 'getBlockedDates').mockResolvedValue(new Map());
+      jest.spyOn(ReservationService, 'saveDraft').mockResolvedValue(undefined as any);
+      const moveToConfirmSlotSpy = jest
+        .spyOn(ReservationService, 'moveToConfirmSlot')
+        .mockResolvedValue(scheduleChoiceDraft({ step: 'confirm_slot' }) as any);
+
+      const handled = await (handler as any).processDraftStep(
+        scheduleChoiceDraft({ step: 'date' }),
+        'el viernes',
+        'conv-sched',
+        'business-1',
+        '5491234567890@s.whatsapp.net'
+      );
+
+      expect(handled).toBe(true);
+      expect(moveToConfirmSlotSpy).toHaveBeenCalledWith(
+        'conv-sched',
+        '2026-07-04', // Saturday — today (Thu) and closed Friday skipped
+        '08:15',
+        expect.any(String),
+        'date'
+      );
+      expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+        'business-1',
+        '5491234567890@s.whatsapp.net',
+        expect.stringContaining('sábado 04/07 a las 08:15')
+      );
+      expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+        'business-1',
+        '5491234567890@s.whatsapp.net',
+        expect.stringContaining('cerrado los viernes')
+      );
+    });
+
+    it('suggests the soonest slot skipping today when the date cannot be interpreted', async () => {
+      // Today (Thursday) is open, but since the customer is picking "otra fecha"
+      // the suggestion must skip today and propose Friday.
+      jest.spyOn(SupabaseService, 'getBusinessById').mockResolvedValue({
+        id: 'business-1',
+        name: 'Restaurante Test',
+        weekly_hours: {
+          thu: { closed: false, shifts: [{ open: '08:00', close: '23:00' }] },
+          fri: { closed: false, shifts: [{ open: '08:00', close: '23:00' }] },
+        },
+      } as any);
+      jest.spyOn(SupabaseService, 'getBlockedDates').mockResolvedValue(new Map());
+      jest.spyOn(ReservationService, 'saveDraft').mockResolvedValue(undefined as any);
+      const moveToConfirmSlotSpy = jest
+        .spyOn(ReservationService, 'moveToConfirmSlot')
+        .mockResolvedValue(scheduleChoiceDraft({ step: 'confirm_slot' }) as any);
+
+      const handled = await (handler as any).processDraftStep(
+        scheduleChoiceDraft({ step: 'date' }),
+        'asdkfj',
+        'conv-sched',
+        'business-1',
+        '5491234567890@s.whatsapp.net'
+      );
+
+      expect(handled).toBe(true);
+      expect(moveToConfirmSlotSpy).toHaveBeenCalledWith(
+        'conv-sched',
+        '2026-07-03', // Friday — today (Thu) skipped even though it is open
+        '08:15',
+        expect.any(String),
+        'date'
+      );
+      // Never proposes today's date.
+      expect(moveToConfirmSlotSpy).not.toHaveBeenCalledWith(
+        'conv-sched',
+        '2026-07-02',
+        expect.any(String),
+        expect.any(String),
+        expect.any(String)
+      );
+      expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+        'business-1',
+        '5491234567890@s.whatsapp.net',
+        expect.stringContaining('viernes 03/07 a las 08:15')
+      );
+    });
+
     it('finishes the reservation when a valid time inside business hours is given', async () => {
       jest.spyOn(SupabaseService, 'getBusinessById').mockResolvedValue({
         id: 'business-1',
@@ -1375,6 +1468,46 @@ describe('WhatsAppHandler single-active-reservation policy', () => {
         'business-1',
         '5491234567890@s.whatsapp.net',
         expect.stringContaining('a las *17:15*')
+      );
+    });
+
+    it('offers the soonest slot on another day (never today) when the chosen day has no opening left after the requested time', async () => {
+      // Chosen day is today (Thu), open only 08:00–14:00; the customer asks for
+      // 20:00 — valid but after the last shift, with nothing left today. The
+      // fallback must skip today and propose Friday's first slot.
+      jest.spyOn(SupabaseService, 'getBusinessById').mockResolvedValue({
+        id: 'business-1',
+        name: 'Restaurante Test',
+        weekly_hours: {
+          thu: { closed: false, shifts: [{ open: '08:00', close: '14:00' }] },
+          fri: { closed: false, shifts: [{ open: '08:00', close: '23:00' }] },
+        },
+      } as any);
+      jest.spyOn(SupabaseService, 'getBlockedDates').mockResolvedValue(new Map());
+      const moveToConfirmSlotSpy = jest
+        .spyOn(ReservationService, 'moveToConfirmSlot')
+        .mockResolvedValue(scheduleChoiceDraft({ step: 'confirm_slot' }) as any);
+
+      const handled = await (handler as any).processDraftStep(
+        scheduleChoiceDraft({ step: 'time', scheduledDate: '2026-07-02' }),
+        '20:00',
+        'conv-sched',
+        'business-1',
+        '5491234567890@s.whatsapp.net'
+      );
+
+      expect(handled).toBe(true);
+      expect(moveToConfirmSlotSpy).toHaveBeenCalledWith(
+        'conv-sched',
+        '2026-07-03', // Friday — today (Thu) skipped, no later opening today
+        '08:15',
+        expect.any(String),
+        'time'
+      );
+      expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+        'business-1',
+        '5491234567890@s.whatsapp.net',
+        expect.stringContaining('viernes 03/07 a las 08:15')
       );
     });
 

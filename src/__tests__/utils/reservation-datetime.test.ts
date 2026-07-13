@@ -16,6 +16,7 @@ import {
   formatDayHours,
   findNextOpenSlot,
   findNextSlotOnDay,
+  findSoonestBookableSlot,
   isDayOpen,
   checkBusinessHours,
 } from '../../utils/reservation-datetime';
@@ -338,6 +339,53 @@ describe('reservation-datetime', () => {
 
       it('returns null when no more shifts open that day', () => {
         expect(findNextSlotOnDay(parseBaDateKey('2026-07-02'), 1200, weeklyHours, 15)).toBeNull();
+      });
+    });
+
+    describe('findSoonestBookableSlot', () => {
+      it('skips today and proposes the next open day\'s first slot when skipToday is set', () => {
+        // NOW_BA = Thu 02/07 12:00. Thursday is open, but skipToday must jump to Friday.
+        const slot = findSoonestBookableSlot(NOW_BA, weeklyHours, 15, 0, { skipToday: true });
+        expect(slot).toEqual(
+          expect.objectContaining({ hour: 8, minute: 15, isToday: false, label: 'viernes 03/07 a las 08:15' })
+        );
+      });
+
+      it('proposes a slot on today when skipToday is not set', () => {
+        const slot = findSoonestBookableSlot(NOW_BA, weeklyHours, 15, 0);
+        expect(slot).toEqual(
+          expect.objectContaining({ hour: 17, minute: 15, isToday: true, label: 'hoy 02/07 a las 17:15' })
+        );
+      });
+
+      it('starts scanning from preferDate before rolling forward', () => {
+        // Prefer Friday: even though Thursday (today) is open, the first slot returned is Friday's.
+        const slot = findSoonestBookableSlot(NOW_BA, weeklyHours, 15, 0, {
+          preferDate: parseBaDateKey('2026-07-03'),
+        });
+        expect(slot).toEqual(
+          expect.objectContaining({ isToday: false, label: 'viernes 03/07 a las 08:15' })
+        );
+      });
+
+      it('skips blocked dates like closed days', () => {
+        // Fri 03/07 and Sat 04/07 both open; blocking Friday rolls to Saturday.
+        const hoursFriSat: WeeklyHours = {
+          fri: { closed: false, shifts: [{ open: '08:00', close: '23:00' }] },
+          sat: { closed: false, shifts: [{ open: '09:00', close: '23:00' }] },
+        };
+        const slot = findSoonestBookableSlot(NOW_BA, hoursFriSat, 15, 0, {
+          skipToday: true,
+          isDateBlocked: (key) => key === '2026-07-03',
+        });
+        expect(slot).toEqual(
+          expect.objectContaining({ isToday: false, label: 'sábado 04/07 a las 09:15' })
+        );
+      });
+
+      it('returns null when no day is open within the window', () => {
+        const allClosed: WeeklyHours = { sun: { closed: true, shifts: [] } };
+        expect(findSoonestBookableSlot(NOW_BA, allClosed, 15, 0, { skipToday: true })).toBeNull();
       });
     });
   });
