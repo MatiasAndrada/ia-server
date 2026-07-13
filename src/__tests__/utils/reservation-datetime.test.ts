@@ -17,6 +17,7 @@ import {
   findNextOpenSlot,
   findNextSlotOnDay,
   findSoonestBookableSlot,
+  formatBookableDays,
   isDayOpen,
   checkBusinessHours,
 } from '../../utils/reservation-datetime';
@@ -386,6 +387,17 @@ describe('reservation-datetime', () => {
       it('returns null when no day is open within the window', () => {
         const allClosed: WeeklyHours = { sun: { closed: true, shifts: [] } };
         expect(findSoonestBookableSlot(NOW_BA, allClosed, 15, 0, { skipToday: true })).toBeNull();
+      });
+    });
+
+    describe('formatBookableDays', () => {
+      it('lists the open weekdays present in the next-7-days window', () => {
+        // NOW_BA = Thu 02/07; window covers Thu (thu) and Fri (fri) as open days.
+        expect(formatBookableDays(weeklyHours, NOW_BA)).toBe('jueves, viernes');
+      });
+
+      it('excludes a weekday whose window occurrence is a blocked date', () => {
+        expect(formatBookableDays(weeklyHours, NOW_BA, (key) => key === '2026-07-03')).toBe('jueves');
       });
     });
   });

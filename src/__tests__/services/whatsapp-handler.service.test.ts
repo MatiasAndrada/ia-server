@@ -17,6 +17,11 @@ describe('WhatsAppHandler single-active-reservation policy', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
+    // clearAllMocks() clears call history but NOT mockResolvedValue implementations,
+    // so a getBlockedDates mock set in one test would otherwise leak into later ones.
+    // Default every test to "no blocked dates"; tests that need blocks override this.
+    jest.spyOn(SupabaseService, 'getBlockedDates').mockResolvedValue(new Map());
+
     mockBaileysService = {
       sendMessage: jest.fn().mockResolvedValue(true),
       getSelfJid: jest.fn().mockReturnValue(''),
@@ -1354,6 +1359,120 @@ describe('WhatsAppHandler single-active-reservation policy', () => {
         '5491234567890@s.whatsapp.net',
         expect.stringContaining('viernes 03/07 a las 08:15')
       );
+    });
+
+    it('offers the soonest bookable day when the chosen date is business-blocked', async () => {
+      jest.spyOn(SupabaseService, 'getBusinessById').mockResolvedValue({
+        id: 'business-1',
+        name: 'Restaurante Test',
+        weekly_hours: {
+          thu: { closed: false, shifts: [{ open: '08:00', close: '23:00' }] },
+          fri: { closed: false, shifts: [{ open: '08:00', close: '23:00' }] },
+          sat: { closed: false, shifts: [{ open: '09:00', close: '23:00' }] },
+        },
+      } as any);
+      // Friday 03/07 is open in weekly_hours but explicitly blocked.
+      jest.spyOn(SupabaseService, 'getBlockedDates').mockResolvedValue(
+        new Map([
+          ['2026-07-03', { reason: 'feriado', reasonMessage: 'El viernes permanecemos cerrados por feriado.' }],
+        ]) as any
+      );
+      const moveToConfirmSlotSpy = jest
+        .spyOn(ReservationService, 'moveToConfirmSlot')
+        .mockResolvedValue(scheduleChoiceDraft({ step: 'confirm_slot' }) as any);
+
+      const handled = await (handler as any).processDraftStep(
+        scheduleChoiceDraft({ step: 'date' }),
+        'el viernes',
+        'conv-sched',
+        'business-1',
+        '5491234567890@s.whatsapp.net'
+      );
+
+      expect(handled).toBe(true);
+      expect(moveToConfirmSlotSpy).toHaveBeenCalledWith(
+        'conv-sched',
+        '2026-07-04', // Saturday — blocked Friday and today (Thu) skipped
+        '09:15',
+        expect.any(String),
+        'date'
+      );
+      expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+        'business-1',
+        '5491234567890@s.whatsapp.net',
+        expect.stringContaining('sábado 04/07 a las 09:15')
+      );
+      expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+        'business-1',
+        '5491234567890@s.whatsapp.net',
+        expect.stringContaining('cerrados por feriado')
+      );
+    });
+
+    it('offers the soonest bookable day when a closed weekday is named at the schedule_choice step', async () => {
+      jest.spyOn(SupabaseService, 'getBusinessById').mockResolvedValue({
+        id: 'business-1',
+        name: 'Restaurante Test',
+        weekly_hours: {
+          thu: { closed: false, shifts: [{ open: '08:00', close: '23:00' }] },
+          fri: { closed: false, shifts: [{ open: '08:00', close: '23:00' }] },
+          sun: { closed: true, shifts: [] },
+        },
+      } as any);
+      jest.spyOn(SupabaseService, 'getBlockedDates').mockResolvedValue(new Map());
+      const moveToConfirmSlotSpy = jest
+        .spyOn(ReservationService, 'moveToConfirmSlot')
+        .mockResolvedValue(scheduleChoiceDraft({ step: 'confirm_slot' }) as any);
+
+      const handled = await (handler as any).processDraftStep(
+        scheduleChoiceDraft(), // schedule_choice step
+        'el domingo',
+        'conv-sched',
+        'business-1',
+        '5491234567890@s.whatsapp.net'
+      );
+
+      expect(handled).toBe(true);
+      expect(moveToConfirmSlotSpy).toHaveBeenCalledWith(
+        'conv-sched',
+        '2026-07-03', // Friday — soonest, today (Thu) skipped
+        '08:15',
+        expect.any(String),
+        'date'
+      );
+      expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+        'business-1',
+        '5491234567890@s.whatsapp.net',
+        expect.stringContaining('viernes 03/07 a las 08:15')
+      );
+      expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+        'business-1',
+        '5491234567890@s.whatsapp.net',
+        expect.stringContaining('cerrado los domingo')
+      );
+    });
+
+    it('omits a blocked weekday from the day-selection prompt', async () => {
+      jest.spyOn(SupabaseService, 'getBusinessById').mockResolvedValue({
+        id: 'business-1',
+        name: 'Restaurante Test',
+        weekly_hours: {
+          thu: { closed: false, shifts: [{ open: '08:00', close: '23:00' }] },
+          fri: { closed: false, shifts: [{ open: '08:00', close: '23:00' }] },
+        },
+      } as any);
+      // Friday 03/07 blocked → "viernes" must not appear in the prompt.
+      jest.spyOn(SupabaseService, 'getBlockedDates').mockResolvedValue(
+        new Map([['2026-07-03', { reason: null, reasonMessage: null }]]) as any
+      );
+
+      const msg = await (handler as any).buildAskDayMessage('business-1');
+
+      // The open-days line must list only Thursday (Friday's occurrence is blocked).
+      // Note: askDay's template also contains the literal example "el viernes", so we
+      // assert on the exact open-days line rather than the whole message.
+      expect(msg).toContain('abiertos los: *jueves*.');
+      expect(msg).not.toContain('jueves, viernes');
     });
 
     it('finishes the reservation when a valid time inside business hours is given', async () => {
