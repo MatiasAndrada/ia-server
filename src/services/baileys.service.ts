@@ -131,6 +131,26 @@ export class BaileysService {
   }
 
   /**
+   * Resolve the real phone-number JID from a Baileys message key.
+   * With LID addressing, `remoteJid` is an @lid identity and the actual phone
+   * JID (…@s.whatsapp.net) lives in `remoteJidAlt`. Prefer the phone JID so the
+   * stored customer phone is the real number, not the LID.
+   * Example: { remoteJid: '189489813160117@lid',
+   *            remoteJidAlt: '5493532401540@s.whatsapp.net' } -> the alt JID.
+   */
+  private resolvePhoneJid(key: any): string {
+    const remoteJid: string | undefined = key?.remoteJid;
+    const remoteJidAlt: string | undefined = key?.remoteJidAlt;
+
+    // If the primary JID is a LID identity, use the phone-number alt JID.
+    if (remoteJid?.endsWith('@lid') && remoteJidAlt) {
+      return remoteJidAlt;
+    }
+
+    return remoteJid!;
+  }
+
+  /**
    * Check if session exists for a business
    */
   hasSession(businessId: string): boolean {
@@ -646,7 +666,12 @@ export class BaileysService {
 
         if (!messageContent) continue;
 
-        const from = msg.key.remoteJid!;
+        // In the LID addressing era, `remoteJid` can be an @lid identity
+        // (e.g. 189489813160117@lid) instead of the real phone number.
+        // In that case Baileys exposes the underlying phone JID in
+        // `remoteJidAlt` (e.g. 5493532401540@s.whatsapp.net). Prefer the phone
+        // JID so we store/reply with the real number, not the LID.
+        const from = this.resolvePhoneJid(msg.key);
         const messageId = msg.key.id as string | undefined;
         const fromMe = !!msg.key.fromMe;
         const timestamp = msg.messageTimestamp as number;

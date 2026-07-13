@@ -33,6 +33,7 @@ import {
   checkBusinessHours,
   findNextOpenSlot,
   findNextSlotOnDay,
+  findSoonestBookableSlot,
   findCurrentShiftClose,
   formatDayHoursForDate,
   addBaDays,
@@ -42,7 +43,7 @@ import {
   utcIsoToBaParts,
   isDateBlocked,
   isFutureReservationBlockedToday,
-  formatOpenDays,
+  formatBookableDays,
   type ParsedDay,
 } from '../utils/reservation-datetime';
 import * as templates from '../utils/message-templates';
@@ -1047,15 +1048,45 @@ export class WhatsAppHandler {
             const dateKeyForScheduleBlock = formatBaDateKey(parsedDay.baDate);
             const blockedDatesForSchedule = await SupabaseService.getBlockedDates(businessId);
             if (isDateBlocked(dateKeyForScheduleBlock, blockedDatesForSchedule)) {
+              const blockedReason = await this.resolveBlockedDateMessage(
+                businessId,
+                dateKeyForScheduleBlock,
+                blockedDatesForSchedule
+              );
+              if (await this.proposeSoonestSlot(conversationId, businessId, jid, 'date', blockedReason ?? null)) {
+                return true;
+              }
               await this.sendWhatsAppMessage(
                 businessId,
                 jid,
-                templates.dateBlocked(
-                  parsedDay.label,
-                  await this.resolveBlockedDateMessage(businessId, dateKeyForScheduleBlock, blockedDatesForSchedule)
-                )
+                templates.dateBlocked(parsedDay.label, blockedReason)
               );
               return true;
+            }
+
+            // Reject closed weekdays right away too (before asking for the time),
+            // offering the soonest bookable day so the customer can accept with "sí".
+            const businessForScheduleDay = await SupabaseService.getBusinessById(businessId);
+            const weeklyHoursForScheduleDay = businessForScheduleDay?.weekly_hours as
+              | WeeklyHours
+              | null
+              | undefined;
+            if (weeklyHoursForScheduleDay && Object.keys(weeklyHoursForScheduleDay).length > 0) {
+              const scheduleDayCheck = isDayOpen(parsedDay.baDate, weeklyHoursForScheduleDay);
+              if (!scheduleDayCheck.open) {
+                if (
+                  await this.proposeSoonestSlot(conversationId, businessId, jid, 'date', scheduleDayCheck.reason ?? null)
+                ) {
+                  return true;
+                }
+                await this.sendWhatsAppMessage(
+                  businessId,
+                  jid,
+                  `❌ ${scheduleDayCheck.reason}\n\n` +
+                    (await this.buildAskDayMessage(businessId, weeklyHoursForScheduleDay))
+                );
+                return true;
+              }
             }
 
             // The customer may have already given the time in the same message too
@@ -1167,28 +1198,11 @@ export class WhatsAppHandler {
                 '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
               );
             } else {
-              // Try to suggest the next available slot so the customer can confirm with "sí".
-              const margin = businessForDate?.reservation_opening_margin_minutes ?? 15;
-              const closingMargin = businessForDate?.reservation_closing_margin_minutes ?? 15;
-              const nextSlot =
-                weeklyHoursForDate && Object.keys(weeklyHoursForDate).length > 0
-                  ? findNextOpenSlot(nowBA, weeklyHoursForDate, margin, closingMargin)
-                  : null;
-
-              if (nextSlot) {
-                const slotDateKey = formatBaDateKey(nextSlot.baDate);
-                const blockedDatesForSuggestion = await SupabaseService.getBlockedDates(businessId);
-                if (!isDateBlocked(slotDateKey, blockedDatesForSuggestion)) {
-                  const slotTime = `${String(nextSlot.hour).padStart(2, '0')}:${String(nextSlot.minute).padStart(2, '0')}`;
-                  const slotAt = combineToUtcISO(nextSlot.baDate, nextSlot.hour, nextSlot.minute);
-                  await ReservationService.moveToConfirmSlot(conversationId, slotDateKey, slotTime, slotAt, 'date');
-                  await this.sendWhatsAppMessage(
-                    businessId,
-                    jid,
-                    `No pude interpretar la fecha. El próximo turno disponible es el *${nextSlot.label}*.\n\n¿Reservamos para esa hora? Respondé *sí* o *no*.`
-                  );
-                  return true;
-                }
+              // Proactively suggest the soonest available slot so the customer can
+              // confirm with "sí". They already opted for "otra fecha", so never
+              // propose today (spec: "no del día actual si se seleccionó otro día").
+              if (await this.proposeSoonestSlot(conversationId, businessId, jid, 'date', null)) {
+                return true;
               }
 
               // No suitable default slot — re-ask showing open days.
@@ -1217,13 +1231,20 @@ export class WhatsAppHandler {
                   jid,
                   '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
                 );
-              } else {
-                await this.sendWhatsAppMessage(
-                  businessId,
-                  jid,
-                  `❌ ${dayCheck.reason}\n\n` + await this.buildAskDayMessage(businessId, weeklyHoursForDate)
-                );
+                return true;
               }
+
+              // Offer the soonest available slot (never today — they picked a
+              // specific day) so the customer can confirm with "sí".
+              if (await this.proposeSoonestSlot(conversationId, businessId, jid, 'date', dayCheck.reason ?? null)) {
+                return true;
+              }
+
+              await this.sendWhatsAppMessage(
+                businessId,
+                jid,
+                `❌ ${dayCheck.reason}\n\n` + await this.buildAskDayMessage(businessId, weeklyHoursForDate)
+              );
               return true;
             }
           }
@@ -1234,13 +1255,20 @@ export class WhatsAppHandler {
           const dateKeyForDateStepBlock = formatBaDateKey(parsedDay.baDate);
           const blockedDatesForDateStep = await SupabaseService.getBlockedDates(businessId);
           if (isDateBlocked(dateKeyForDateStepBlock, blockedDatesForDateStep)) {
+            const blockedReason = await this.resolveBlockedDateMessage(
+              businessId,
+              dateKeyForDateStepBlock,
+              blockedDatesForDateStep
+            );
+            // Offer the soonest bookable day (never today) so the customer can
+            // accept with "sí"; fall back to the plain block notice otherwise.
+            if (await this.proposeSoonestSlot(conversationId, businessId, jid, 'date', blockedReason ?? null)) {
+              return true;
+            }
             await this.sendWhatsAppMessage(
               businessId,
               jid,
-              templates.dateBlocked(
-                parsedDay.label,
-                await this.resolveBlockedDateMessage(businessId, dateKeyForDateStepBlock, blockedDatesForDateStep)
-              )
+              templates.dateBlocked(parsedDay.label, blockedReason)
             );
             return true;
           }
@@ -2235,11 +2263,56 @@ export class WhatsAppHandler {
       knownWeeklyHours !== undefined
         ? knownWeeklyHours
         : ((await SupabaseService.getBusinessById(businessId))?.weekly_hours as WeeklyHours | null | undefined);
-    const openDays =
-      weeklyHours && Object.keys(weeklyHours).length > 0
-        ? formatOpenDays(weeklyHours)
-        : null;
-    return templates.askDay(openDays || null);
+    let openDays: string | null = null;
+    if (weeklyHours && Object.keys(weeklyHours).length > 0) {
+      // Omit weekdays whose upcoming occurrence is a blocked date so we never
+      // suggest a day the customer cannot actually book.
+      const blockedDates = await SupabaseService.getBlockedDates(businessId);
+      openDays =
+        formatBookableDays(weeklyHours, nowInBuenosAires(), (key) => isDateBlocked(key, blockedDates)) ||
+        null;
+    }
+    return templates.askDay(openDays);
+  }
+
+  /**
+   * Computes the soonest bookable slot (never today — the customer is picking a
+   * specific day) honoring business hours and blocked dates, and if one exists
+   * moves the draft to `confirm_slot` proposing it. The customer accepts with
+   * "sí" or names another day/time. Returns true when a suggestion was sent;
+   * false when nothing is available, so the caller can fall back to its own
+   * re-ask. `reason` (why the requested day/time didn't work) is prefixed to the
+   * message; `preferDate` biases the search toward a specific day first.
+   */
+  private async proposeSoonestSlot(
+    conversationId: string,
+    businessId: string,
+    jid: string,
+    origin: 'schedule_choice' | 'time' | 'date',
+    reason: string | null,
+    options: { preferDate?: Date } = {}
+  ): Promise<boolean> {
+    const business = await SupabaseService.getBusinessById(businessId);
+    const weeklyHours = business?.weekly_hours as WeeklyHours | null | undefined;
+    if (!weeklyHours || Object.keys(weeklyHours).length === 0) return false;
+
+    const margin = business?.reservation_opening_margin_minutes ?? 15;
+    const closingMargin = business?.reservation_closing_margin_minutes ?? 15;
+    const blockedDates = await SupabaseService.getBlockedDates(businessId);
+
+    const slot = findSoonestBookableSlot(nowInBuenosAires(), weeklyHours, margin, closingMargin, {
+      skipToday: true,
+      preferDate: options.preferDate,
+      isDateBlocked: (key) => isDateBlocked(key, blockedDates),
+    });
+    if (!slot) return false;
+
+    const slotDateKey = formatBaDateKey(slot.baDate);
+    const slotTime = `${String(slot.hour).padStart(2, '0')}:${String(slot.minute).padStart(2, '0')}`;
+    const slotAt = combineToUtcISO(slot.baDate, slot.hour, slot.minute);
+    await ReservationService.moveToConfirmSlot(conversationId, slotDateKey, slotTime, slotAt, origin);
+    await this.sendWhatsAppMessage(businessId, jid, templates.suggestNextSlot(slot.label, reason));
+    return true;
   }
 
   /**
@@ -2317,6 +2390,12 @@ export class WhatsAppHandler {
     // unavailable for a business-configured reason (holiday closure, etc.).
     const blockedDates = await SupabaseService.getBlockedDates(businessId);
     if (isDateBlocked(scheduledDate, blockedDates)) {
+      const blockedReason = await this.resolveBlockedDateMessage(businessId, scheduledDate, blockedDates);
+      // Offer the soonest bookable day (never today) so the customer can accept
+      // with "sí" instead of just being told the date is unavailable.
+      if (await this.proposeSoonestSlot(conversationId, businessId, jid, 'date', blockedReason ?? null)) {
+        return false;
+      }
       draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
       await ReservationService.saveDraft(draft);
       if (draft.invalidAttempts >= 2) {
@@ -2331,10 +2410,7 @@ export class WhatsAppHandler {
       await this.sendWhatsAppMessage(
         businessId,
         jid,
-        templates.dateBlocked(
-          describeBaDateKey(scheduledDate, nowBA),
-          await this.resolveBlockedDateMessage(businessId, scheduledDate, blockedDates)
-        )
+        templates.dateBlocked(describeBaDateKey(scheduledDate, nowBA), blockedReason)
       );
       return true;
     }
@@ -2386,7 +2462,18 @@ export class WhatsAppHandler {
           return false;
         }
 
-        // No more openings today — ask user to pick a different time or day
+        // No later opening on the chosen day — offer the soonest slot on another
+        // day (never today, since they picked a specific day) so they can still
+        // confirm with "sí" instead of being left to guess a new day/time.
+        if (
+          await this.proposeSoonestSlot(conversationId, businessId, jid, 'time', hoursCheck.reason ?? null, {
+            preferDate: baDate,
+          })
+        ) {
+          return false;
+        }
+
+        // No availability anywhere in the window — ask user to pick a different time or day
         draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
         await ReservationService.saveDraft(draft);
         if (draft.invalidAttempts >= 2) {
