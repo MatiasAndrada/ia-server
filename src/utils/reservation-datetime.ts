@@ -327,6 +327,36 @@ export function formatOpenDays(weeklyHours: WeeklyHours): string {
   return openDays.join(', ');
 }
 
+/**
+ * Like {@link formatOpenDays}, but scoped to the actual next-7-days window and
+ * excluding weekdays whose only occurrence in that window is a blocked date
+ * (business_blocked_dates). Used for the day-selection prompt so we never offer
+ * a day the customer cannot actually book. Each weekday appears at most once in
+ * a 7-day window, so a blocked occurrence removes that weekday from the list.
+ */
+export function formatBookableDays(
+  weeklyHours: WeeklyHours,
+  nowBA: Date,
+  isDateBlocked?: (dateKey: string) => boolean
+): string {
+  const todayStart = startOfBaDay(nowBA);
+  const bookableDow = new Set<number>();
+
+  for (let daysAhead = 0; daysAhead < REQUESTED_DAY_WINDOW; daysAhead++) {
+    const date = addBaDays(todayStart, daysAhead);
+    if (isDateBlocked && isDateBlocked(formatBaDateKey(date))) continue;
+    const entry = weeklyHours[DOW_TO_KEY[date.getUTCDay()]];
+    if (!entry || entry.closed || entry.shifts.length === 0) continue;
+    bookableDow.add(date.getUTCDay());
+  }
+
+  const orderedIndices = [1, 2, 3, 4, 5, 6, 0];
+  return orderedIndices
+    .filter(i => bookableDow.has(i))
+    .map(i => DOW_LABELS_ES[i])
+    .join(', ');
+}
+
 /** Human-readable shift ranges for a day, e.g. "08:00–14:00 y 17:00–02:00". */
 export function formatDayHours(dayKey: WeeklyHoursDayKey, weeklyHours: WeeklyHours): string {
   const entry = weeklyHours[dayKey];
@@ -495,6 +525,76 @@ export function findNextSlotOnDay(
     const effectiveClose = closeMin > openMin ? Math.min(closeMin, 24 * 60) : 24 * 60;
     if (slotMin > afterMinutes && slotMin < effectiveClose) {
       return { hour: Math.floor(slotMin / 60), minute: slotMin % 60 };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Finds the soonest bookable slot within the 7-day window, honoring business
+ * hours, an optional per-date "blocked" predicate, an optional preferred start
+ * day, and an optional "never today" constraint. Powers the proactive
+ * suggestion offered when the customer enters an unavailable day or time so
+ * they can accept it with "sí" (or type another day/time to override).
+ *
+ * - `skipToday`: never propose today's date — used once the customer has
+ *   committed to picking a specific (non-today) day, so the suggestion respects
+ *   that intent ("no del día actual si es que se seleccionó otro día").
+ * - `preferDate`: start scanning on this day before rolling forward (e.g. the
+ *   day the customer already chose). Earlier days — and, with `skipToday`,
+ *   today — are skipped. Still bounded by the same 7-day window.
+ * - `isDateBlocked`: returns true for business-blocked date keys, which are
+ *   skipped like closed days.
+ *
+ * On today, only slots strictly after the current time are considered; on any
+ * later day, the day's first opening (opening time + `marginMinutes`).
+ */
+export function findSoonestBookableSlot(
+  nowBA: Date,
+  weeklyHours: WeeklyHours,
+  marginMinutes: number,
+  closingMarginMinutes = 0,
+  options: {
+    skipToday?: boolean;
+    preferDate?: Date;
+    isDateBlocked?: (dateKey: string) => boolean;
+  } = {}
+): { baDate: Date; hour: number; minute: number; label: string; isToday: boolean } | null {
+  const todayStart = startOfBaDay(nowBA);
+  const nowMin = nowBA.getUTCHours() * 60 + nowBA.getUTCMinutes();
+  const { skipToday = false, preferDate, isDateBlocked: blocked } = options;
+
+  let startOffset = 0;
+  if (preferDate) {
+    const preferOffset = Math.round(
+      (startOfBaDay(preferDate).getTime() - todayStart.getTime()) / (24 * 60 * 60 * 1000)
+    );
+    startOffset = Math.max(startOffset, preferOffset);
+  }
+  if (skipToday) startOffset = Math.max(startOffset, 1);
+
+  for (let daysAhead = startOffset; daysAhead < REQUESTED_DAY_WINDOW; daysAhead++) {
+    const checkDate = addBaDays(todayStart, daysAhead);
+    const dateKey = formatBaDateKey(checkDate);
+    if (blocked && blocked(dateKey)) continue;
+
+    const dayKey = DOW_TO_KEY[checkDate.getUTCDay()];
+    const entry = weeklyHours[dayKey];
+    if (!entry || entry.closed || entry.shifts.length === 0) continue;
+
+    // Today: strictly after now. Later days: -1 lets a 00:00 opening through.
+    const afterMinutes = daysAhead === 0 ? nowMin : -1;
+    const slot = findNextSlotOnDay(checkDate, afterMinutes, weeklyHours, marginMinutes, closingMarginMinutes);
+    if (slot) {
+      const isToday = daysAhead === 0;
+      return {
+        baDate: checkDate,
+        hour: slot.hour,
+        minute: slot.minute,
+        label: formatScheduledLabel(checkDate, slot.hour, slot.minute, isToday),
+        isToday,
+      };
     }
   }
 

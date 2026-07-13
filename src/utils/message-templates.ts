@@ -234,6 +234,19 @@ export function noMoreSlotsToday(reason: string): string {
   return `Ese horario no se encuentra disponible. ${reason} No hay más turnos disponibles ese día. ¿Querés elegir otro horario o día?`;
 }
 
+/**
+ * Proactively suggests the soonest available slot after the customer entered an
+ * unavailable day or time. Optionally prefixes the reason it wasn't available.
+ * The customer can accept with "sí" or just name another day/time to override.
+ */
+export function suggestNextSlot(slotLabel: string, reason?: string | null): string {
+  const prefix = reason ? `❌ ${reason}\n\n` : '';
+  return (
+    `${prefix}El turno disponible más próximo es el *${slotLabel}*.\n\n` +
+    `¿Reservamos para ese momento? Respondé *sí* para confirmarlo, o decime otro día u horario si preferís.`
+  );
+}
+
 // ============================
 // M8b — Bloqueos de fechas configurados por el negocio
 // ============================
