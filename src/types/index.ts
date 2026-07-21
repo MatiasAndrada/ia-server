@@ -322,8 +322,11 @@ export interface ReservationDraft {
     | 'summary_edit_menu'
     | 'cancel_menu'
     | 'cancel_confirm'
+    | 'reservation_selection'
     | 'completed'
     | 'edit_menu';
+  // Reservation selection state for multiple active reservations.
+  availableReservationIds?: string[];
   // Scheduling fields (day/time chosen within the next 7 days; absent = instant/turno actual)
   scheduledDate?: string; // YYYY-MM-DD, Buenos Aires local day
   scheduledTime?: string; // HH:mm, 24h
