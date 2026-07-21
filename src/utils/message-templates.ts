@@ -178,6 +178,32 @@ export function cancelMenu(partySize: number, whenLabel: string, displayCode: st
   );
 }
 
+export function activeReservationsMenu(reservations: {
+  index: number;
+  partySize: number;
+  whenLabel: string;
+  displayCode: string | null;
+  statusLabel: string;
+}[]): string {
+  const reservationsList = reservations
+    .map((reservation) => {
+      const codeText = reservation.displayCode ? ` (${reservation.displayCode})` : '';
+      return `*${reservation.index}* - ${reservation.partySize} personas, ${reservation.whenLabel}${codeText} — ${reservation.statusLabel}`;
+    })
+    .join('\n');
+
+  return (
+    `📋 Tengo varias reservas activas:\n\n` +
+    `${reservationsList}\n\n` +
+    `Respondé con el *número* de la reserva para ver opciones de modificación o cancelación.\n` +
+    `O escribí *RESERVAR* para crear otra reserva.`
+  );
+}
+
+export function activeReservationSelectionInvalid(): string {
+  return `❌ No reconocí esa opción. Respondé con el número de la reserva que querés gestionar o escribí *RESERVAR* para crear otra.`;
+}
+
 export function cancelMenuInvalidChoice(): string {
   return `❌ Respondé *1* para reprogramar o *2* para cancelar definitivamente.`;
 }
@@ -212,6 +238,21 @@ export function reservationKept(): string {
 
 export function cancelFailed(): string {
   return `❌ No se pudo cancelar la reserva. Por favor contactá directamente al local.`;
+}
+
+export function reservationOverlapConflict(
+  requestedWhenLabel: string,
+  conflictingWhenLabel: string,
+  conflictingDisplayCode: string | null,
+  conflictingStatusLabel: string
+): string {
+  const displayCodeText = conflictingDisplayCode ? ` (código *${conflictingDisplayCode}*)` : '';
+  return (
+    `⚠️ No puedo crear la reserva para ${requestedWhenLabel} porque se superpone con otra reserva activa para ${conflictingWhenLabel}` +
+    `${displayCodeText} con estado *${conflictingStatusLabel}*.` +
+    `\n\nDebe haber al menos 120 minutos entre reservas para evitar solapamientos.` +
+    `\n\nSi querés, respondé *CANCELAR* para anularla y después crear una nueva.`
+  );
 }
 
 export function noActiveReservation(): string {
