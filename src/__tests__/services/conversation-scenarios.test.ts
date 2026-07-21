@@ -98,16 +98,22 @@ function setupMocks(scenario: ConversationScenario): ScenarioRunContext {
   } as any);
 
   // Active reservation for the scenario
-  if (scenario.activeReservation) {
-    jest.spyOn(SupabaseService, 'getActiveReservationByPhone').mockResolvedValue({
-      id: scenario.activeReservation.id,
-      status: scenario.activeReservation.status,
-      display_code: scenario.activeReservation.displayCode,
-      party_size: 4,
-    } as any);
-  } else {
-    jest.spyOn(SupabaseService, 'getActiveReservationByPhone').mockResolvedValue(null);
-  }
+  const activeReservationData = scenario.activeReservation
+    ? {
+        id: scenario.activeReservation.id,
+        status: scenario.activeReservation.status,
+        display_code: scenario.activeReservation.displayCode,
+        party_size: 4,
+      }
+    : null;
+
+  jest
+    .spyOn(SupabaseService, 'getActiveReservationByPhone')
+    .mockResolvedValue(activeReservationData as any);
+
+  jest
+    .spyOn(SupabaseService, 'getActiveReservationsByPhone')
+    .mockResolvedValue(activeReservationData ? [activeReservationData as any] : []);
 
   // Reservation status update
   jest.spyOn(SupabaseService, 'updateReservationStatus').mockResolvedValue(true);
@@ -408,7 +414,10 @@ async function runScenario(scenario: ConversationScenario): Promise<void> {
         scenario: turnLabel,
         expected: 'blocked by single-active policy',
         actual: botResponse,
-        pass: botResponse.toLowerCase().includes('ya tenés una reserva'),
+        pass:
+          botResponse.toLowerCase().includes('ya tenés una reserva') ||
+          botResponse.toLowerCase().includes('tu nueva reserva se superpone') ||
+          botResponse.toLowerCase().includes('se superpone con una reserva activa'),
       }).toEqual(
         expect.objectContaining({ pass: true })
       );

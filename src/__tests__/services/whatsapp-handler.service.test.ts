@@ -7,7 +7,7 @@ import * as ReservationDatetime from '../../utils/reservation-datetime';
 
 jest.mock('../../utils/logger');
 
-describe('WhatsAppHandler single-active-reservation policy', () => {
+describe('WhatsAppHandler reservation overlap policy', () => {
   let handler: WhatsAppHandler;
   let mockBaileysService: {
     sendMessage: jest.Mock<Promise<boolean>, [string, string, string]>;
@@ -15,11 +15,11 @@ describe('WhatsAppHandler single-active-reservation policy', () => {
   };
 
   beforeEach(() => {
+    jest.restoreAllMocks();
     jest.clearAllMocks();
 
-    // clearAllMocks() clears call history but NOT mockResolvedValue implementations,
-    // so a getBlockedDates mock set in one test would otherwise leak into later ones.
-    // Default every test to "no blocked dates"; tests that need blocks override this.
+    // restoreAllMocks() and clearAllMocks() ensure each test starts with a clean
+    // spy/mock state so value queues and pending implementations do not leak.
     jest.spyOn(SupabaseService, 'getBlockedDates').mockResolvedValue(new Map());
 
     mockBaileysService = {
@@ -30,14 +30,17 @@ describe('WhatsAppHandler single-active-reservation policy', () => {
     handler = new WhatsAppHandler(mockBaileysService as any);
   });
 
-  it('blocks explicit new reservation intent when there is an active reservation', async () => {
+  it('blocks explicit new reservation intent when the new reservation overlaps an active reservation', async () => {
     jest
-      .spyOn(SupabaseService, 'getActiveReservationByPhone')
-      .mockResolvedValue({
-        id: 'entry-1',
-        status: 'CONFIRMED',
-        display_code: 'A123',
-      } as any);
+      .spyOn(SupabaseService, 'getActiveReservationsByPhone')
+      .mockResolvedValue([
+        {
+          id: 'entry-1',
+          status: 'CONFIRMED',
+          scheduled_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+          display_code: 'A123',
+        } as any,
+      ]);
 
     const handled = await (handler as any).enforceSingleActiveReservationPolicy(
       'business-1',
@@ -51,14 +54,14 @@ describe('WhatsAppHandler single-active-reservation policy', () => {
     expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
       'business-1',
       '5491111111111@s.whatsapp.net',
-      expect.stringContaining('ya tenés una reserva para hoy')
+      expect.stringContaining('se superpone con una reserva activa')
     );
   });
 
-  it('does not block when there is no active reservation', async () => {
+  it('does not block when there are no overlapping active reservations', async () => {
     jest
-      .spyOn(SupabaseService, 'getActiveReservationByPhone')
-      .mockResolvedValue(null);
+      .spyOn(SupabaseService, 'getActiveReservationsByPhone')
+      .mockResolvedValue([]);
 
     const handled = await (handler as any).enforceSingleActiveReservationPolicy(
       'business-1',
@@ -73,12 +76,15 @@ describe('WhatsAppHandler single-active-reservation policy', () => {
 
   it('does not block unrelated messages even if there is an active reservation', async () => {
     jest
-      .spyOn(SupabaseService, 'getActiveReservationByPhone')
-      .mockResolvedValue({
-        id: 'entry-2',
-        status: 'WAITING',
-        display_code: 'B777',
-      } as any);
+      .spyOn(SupabaseService, 'getActiveReservationsByPhone')
+      .mockResolvedValue([
+        {
+          id: 'entry-2',
+          status: 'WAITING',
+          scheduled_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+          display_code: 'B777',
+        } as any,
+      ]);
 
     const handled = await (handler as any).enforceSingleActiveReservationPolicy(
       'business-1',
@@ -91,14 +97,17 @@ describe('WhatsAppHandler single-active-reservation policy', () => {
     expect(mockBaileysService.sendMessage).not.toHaveBeenCalled();
   });
 
-  it('prevents CREATE_RESERVATION action from starting a draft when active reservation exists', async () => {
+  it('starts reservation draft when CREATE_RESERVATION is requested even if there is an active reservation', async () => {
     jest
-      .spyOn(SupabaseService, 'getActiveReservationByPhone')
-      .mockResolvedValue({
-        id: 'entry-3',
-        status: 'NOTIFIED',
-        display_code: 'C999',
-      } as any);
+      .spyOn(SupabaseService, 'getActiveReservationsByPhone')
+      .mockResolvedValue([
+        {
+          id: 'entry-3',
+          status: 'NOTIFIED',
+          scheduled_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+          display_code: 'C999',
+        } as any,
+      ]);
 
     const startReservationSpy = jest
       .spyOn(ReservationService, 'startReservation')
@@ -116,13 +125,7 @@ describe('WhatsAppHandler single-active-reservation policy', () => {
       '5492222222222@s.whatsapp.net'
     );
 
-    expect(startReservationSpy).not.toHaveBeenCalled();
-    expect(mockBaileysService.sendMessage).toHaveBeenCalledTimes(1);
-    expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
-      'business-1',
-      '5492222222222@s.whatsapp.net',
-      expect.stringContaining('No puedo crear una nueva')
-    );
+    expect(startReservationSpy).toHaveBeenCalledTimes(1);
   });
 
   it('starts reservation draft when CREATE_RESERVATION is requested and no active reservation exists', async () => {
@@ -160,13 +163,15 @@ describe('WhatsAppHandler single-active-reservation policy', () => {
       .mockResolvedValue(undefined);
 
     jest
-      .spyOn(SupabaseService, 'getActiveReservationByPhone')
-      .mockResolvedValue({
-        id: 'entry-6',
-        party_size: 2,
-        display_code: 'R212',
-        status: 'CONFIRMED',
-      } as any);
+      .spyOn(SupabaseService, 'getActiveReservationsByPhone')
+      .mockResolvedValue([
+        {
+          id: 'entry-6',
+          party_size: 2,
+          display_code: 'R212',
+          status: 'CONFIRMED',
+        } as any,
+      ]);
 
     const startEditMenuSpy = jest
       .spyOn(ReservationService, 'startEditMenu')
@@ -258,12 +263,14 @@ describe('WhatsAppHandler single-active-reservation policy', () => {
       party_size: 3,
     } as any;
 
-    const getActiveSpy = jest
+    const getActiveReservationsSpy = jest
+      .spyOn(SupabaseService, 'getActiveReservationsByPhone')
+      .mockResolvedValueOnce([activeReservation]) // policy block on first message
+      .mockResolvedValueOnce([]); // policy check after cancellation, no active reservation remaining
+
+    const getActiveReservationSpy = jest
       .spyOn(SupabaseService, 'getActiveReservationByPhone')
-      .mockResolvedValueOnce(activeReservation) // policy block on first message
-      .mockResolvedValueOnce(activeReservation) // cancel path on second message (M3 menu)
-      .mockResolvedValueOnce(null) // policy check on final message
-      .mockResolvedValueOnce(null); // handleCreateReservation safety check
+      .mockResolvedValueOnce(activeReservation); // cancel path on second message (M3 menu)
 
     const cancelSpy = jest
       .spyOn(SupabaseService, 'updateReservationStatus')
@@ -331,14 +338,15 @@ describe('WhatsAppHandler single-active-reservation policy', () => {
       fromMe: false,
     });
 
-    // getActiveReservationByPhone: policy block (#1), cancel menu (#2), final policy check (#3).
-    // The confirmation turns ("2","1") resolve from the draft, not another DB lookup.
-    expect(getActiveSpy).toHaveBeenCalledTimes(3);
+    // getActiveReservationsByPhone: policy block (#1), final policy check (#2).
+    // getActiveReservationByPhone is called only for the cancellation intent.
+    expect(getActiveReservationsSpy).toHaveBeenCalledTimes(2);
+    expect(getActiveReservationSpy).toHaveBeenCalledTimes(1);
     expect(cancelSpy).toHaveBeenCalledWith('entry-7', 'CANCELLED');
     expect(startReservationSpy).toHaveBeenCalledTimes(1);
 
     const sentMessages = mockBaileysService.sendMessage.mock.calls.map((call) => call[2]);
-    expect(sentMessages.some((msg) => msg.includes('ya tenés una reserva para hoy'))).toBe(true);
+    expect(sentMessages.some((msg) => msg.includes('se superpone con una reserva activa'))).toBe(true);
     expect(sentMessages.some((msg) => msg.includes('¿Qué te gustaría hacer?'))).toBe(true);
     expect(sentMessages.some((msg) => msg.includes('¿Estás seguro de que querés cancelar'))).toBe(true);
     expect(sentMessages.some((msg) => msg.includes('fue cancelada correctamente'))).toBe(true);
