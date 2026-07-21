@@ -133,6 +133,29 @@ export class ReservationService {
     return draft;
   }
 
+  static async startReservationSelection(
+    conversationId: string,
+    businessId: string,
+    availableReservationIds: string[]
+  ): Promise<ReservationDraft> {
+    const draft: ReservationDraft = {
+      conversationId,
+      businessId,
+      step: 'reservation_selection',
+      availableReservationIds,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    await this.saveDraft(draft);
+    logger.info('Reservation selection flow started', {
+      conversationId,
+      businessId,
+      availableReservationIds,
+    });
+    return draft;
+  }
+
   /**
    * Update draft with customer name
    */

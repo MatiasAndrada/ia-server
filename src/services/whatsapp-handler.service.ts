@@ -355,15 +355,13 @@ export class WhatsAppHandler {
           return;
         }
 
-        // Business rule: one active reservation per phone/day.
-        // Block explicit attempts to create a second reservation while one is active.
-        const singleReservationPolicyHandled = await this.enforceSingleActiveReservationPolicy(
+        const reservationPolicyHandled = await this.enforceSingleActiveReservationPolicy(
           businessId,
           from,
           messageText,
           conversationId
         );
-        if (singleReservationPolicyHandled) {
+        if (reservationPolicyHandled) {
           return;
         }
       }
@@ -405,13 +403,12 @@ export class WhatsAppHandler {
         // For explicit opt-ins like "Si", "Dale", "Ok" that are NOT greetings, start
         // the reservation flow directly without the "¡Hola!" intro, since the bot
         // already introduced itself in the scope-guard message.
-        if (
-          isGreetingOrReservationOptInMessage(messageText) &&
-          !this.isGreetingMessage(messageText)
-        ) {
+        const isOptIn = isGreetingOrReservationOptInMessage(messageText);
+        const isGreeting = this.isGreetingMessage(messageText);
+        if (isOptIn && !isGreeting) {
           await ReservationService.startReservation(conversationId, businessId);
           await this.sendWhatsAppMessage(businessId, from, templates.askName());
-          logger.info('Opt-in handled deterministically after scope block', { conversationId });
+          logger.info('Opt-in handled deterministically after scope block', { conversationId, isOptIn, isGreeting });
           return;
         }
       }
@@ -1769,6 +1766,36 @@ export class WhatsAppHandler {
           return true;
         }
 
+        case 'reservation_selection': {
+          const phone = this.normalizeWhatsAppNumber(jid);
+          const selection = this.extractNumber(messageText);
+
+          if (this.isExplicitNewReservationIntent(messageText)) {
+            await ReservationService.startReservation(conversationId, businessId);
+            await this.sendWhatsAppMessage(businessId, jid, templates.askName());
+            return true;
+          }
+
+          if (selection && draft.availableReservationIds?.[selection - 1]) {
+            const selectedReservationId = draft.availableReservationIds[selection - 1];
+            const activeReservations = await SupabaseService.getActiveReservationsByPhone(
+              phone,
+              businessId
+            );
+            const selectedReservation = activeReservations.find(
+              (reservation) => reservation.id === selectedReservationId
+            );
+
+            if (selectedReservation) {
+              await this.startEditMenuFlow(conversationId, businessId, jid, selectedReservation);
+              return true;
+            }
+          }
+
+          await this.sendWhatsAppMessage(businessId, jid, templates.activeReservationSelectionInvalid());
+          return true;
+        }
+
         case 'cancel_menu': {
           // M3: 1=reprogramar, 2=cancelar definitivamente
           const normalizedCancel = normalizeReservationScopeText(messageText);
@@ -2911,10 +2938,6 @@ export class WhatsAppHandler {
       .trim();
   }
 
-  /**
-   * Business rule guard: one active reservation per day and phone.
-   * Blocks explicit attempts to create an additional reservation while current one is active.
-   */
   private async enforceSingleActiveReservationPolicy(
     businessId: string,
     jid: string,
@@ -2927,34 +2950,38 @@ export class WhatsAppHandler {
       }
 
       const phone = this.normalizeWhatsAppNumber(jid);
-      const activeReservation = await SupabaseService.getActiveReservationByPhone(phone, businessId);
-      if (!activeReservation) {
+      const activeReservations = await SupabaseService.getActiveReservationsByPhone(phone, businessId);
+      const conflictingReservation = activeReservations.find((reservation) =>
+        SupabaseService.reservationsOverlap(null, reservation.scheduled_at ?? null)
+      );
+
+      if (!conflictingReservation) {
         return false;
       }
 
-      const statusLabel = this.getReservationStatusLabel(activeReservation.status);
-      const displayCodeText = activeReservation.display_code
-        ? ` (código *${activeReservation.display_code}*)`
+      const statusLabel = this.getReservationStatusLabel(conflictingReservation.status);
+      const displayCodeText = conflictingReservation.display_code
+        ? ` (código *${conflictingReservation.display_code}*)`
         : '';
 
       const reminderMessage =
-        `⚠️ Recordatorio: ya tenés una reserva para ${this.describeReservationWhen(activeReservation.scheduled_at)}` +
+        `⚠️ Tu nueva reserva se superpone con una reserva activa para ${this.describeReservationWhen(conflictingReservation.scheduled_at)}` +
         `${displayCodeText} con estado *${statusLabel}*.` +
-        `\n\nNo puedo crear otra reserva hasta que la actual cambie a *finalizada* o se *cancele*.` +
+        `\n\nNo puedo crearla porque debe haber al menos 120 minutos entre reservas.` +
         `\n\nSi querés, respondé *CANCELAR* para anularla y después crear una nueva.`;
 
       await this.sendWhatsAppMessage(businessId, jid, reminderMessage);
 
-      logger.info('Single-active-reservation policy applied', {
+      logger.info('Reservation overlap policy applied', {
         conversationId,
         businessId,
-        status: activeReservation.status,
-        displayCode: activeReservation.display_code,
+        status: conflictingReservation.status,
+        displayCode: conflictingReservation.display_code,
       });
 
       return true;
     } catch (error) {
-      logger.error('Error enforcing single-active-reservation policy', {
+      logger.error('Error enforcing reservation overlap policy', {
         error,
         conversationId,
         businessId,
@@ -3258,7 +3285,8 @@ export class WhatsAppHandler {
           existingDraft.step === 'summary_edit_menu' ||
           existingDraft.step === 'cancel_menu' ||
           existingDraft.step === 'cancel_confirm' ||
-          existingDraft.step === 'edit_menu');
+          existingDraft.step === 'edit_menu' ||
+          existingDraft.step === 'reservation_selection');
 
       if (isProtectedDraft) {
         logger.info('Greeting ignored — preserving in-progress draft', {
@@ -3285,19 +3313,45 @@ export class WhatsAppHandler {
 
       const phone = this.normalizeWhatsAppNumber(jid);
 
-      // 3. Check for an active reservation today (Buenos Aires timezone)
-      const activeReservation = await SupabaseService.getActiveReservationByPhone(
+      // 3. Check for active reservations today (Buenos Aires timezone)
+      const activeReservations = await SupabaseService.getActiveReservationsByPhone(
         phone,
         businessId
       );
 
-      if (activeReservation) {
-        // 4a. Show reservation summary and the M2 edit menu
+      if (activeReservations.length === 1) {
+        const activeReservation = activeReservations[0];
+        // 4a. Single reservation: show the edit menu directly.
         await this.startEditMenuFlow(conversationId, businessId, jid, activeReservation);
 
-        logger.info('Greeting handled — reservation menu shown', {
+        logger.info('Greeting handled — single active reservation shown', {
           conversationId,
           reservationId: activeReservation.id,
+        });
+        return true;
+      }
+
+      if (activeReservations.length > 1) {
+        const availableReservationIds = activeReservations.map((reservation) => reservation.id);
+        await ReservationService.startReservationSelection(conversationId, businessId, availableReservationIds);
+
+        const quickOptions = activeReservations.map((reservation, index) => ({
+          index: index + 1,
+          partySize: reservation.party_size ?? 0,
+          whenLabel: this.describeReservationWhen(reservation.scheduled_at),
+          displayCode: reservation.display_code ?? null,
+          statusLabel: this.getReservationStatusLabel(reservation.status),
+        }));
+
+        await this.sendWhatsAppMessage(
+          businessId,
+          jid,
+          templates.activeReservationsMenu(quickOptions)
+        );
+
+        logger.info('Greeting handled — multiple active reservations shown', {
+          conversationId,
+          reservationCount: activeReservations.length,
         });
         return true;
       }
@@ -3677,35 +3731,10 @@ export class WhatsAppHandler {
     jid: string
   ): Promise<void> {
     try {
-      logger.info('🎯 Starting CREATE_RESERVATION action', { conversationId, businessId });
-
       const phone = this.normalizeWhatsAppNumber(jid);
-      const activeReservation = await SupabaseService.getActiveReservationByPhone(phone, businessId);
-      if (activeReservation) {
-        const statusLabel = this.getReservationStatusLabel(activeReservation.status);
-        const displayCodeText = activeReservation.display_code
-          ? ` (código *${activeReservation.display_code}*)`
-          : '';
+      logger.info('🎯 Starting CREATE_RESERVATION action', { conversationId, businessId, phone });
 
-        await this.sendWhatsAppMessage(
-          businessId,
-          jid,
-          `⚠️ Ya tenés una reserva activa para ${this.describeReservationWhen(activeReservation.scheduled_at)}` +
-          `${displayCodeText} con estado *${statusLabel}*.` +
-          `\n\nNo puedo crear una nueva hasta que la actual finalice o se cancele.` +
-          `\n\nSi querés, respondé *CANCELAR* para liberar tu cupo y luego crear otra.`
-        );
-
-        logger.info('CREATE_RESERVATION blocked by single-active-reservation policy', {
-          conversationId,
-          businessId,
-          status: activeReservation.status,
-          displayCode: activeReservation.display_code,
-        });
-        return;
-      }
-
-      // Start reservation flow
+      // Start reservation flow regardless of existing active reservations.
       const draft = await ReservationService.startReservation(conversationId, businessId);
       logger.info('✅ Reservation flow started', {
         conversationId,

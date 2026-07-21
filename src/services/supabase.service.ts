@@ -13,6 +13,11 @@ import {
 } from '../types';
 import { logger } from '../utils/logger';
 import { ollamaService } from './ollama.service';
+import { describeScheduledAtUtc, nowInBuenosAires } from '../utils/reservation-datetime';
+import * as templates from '../utils/message-templates';
+
+const RESERVATION_OVERLAP_MINUTES = 120;
+const RESERVATION_OVERLAP_MS = RESERVATION_OVERLAP_MINUTES * 60 * 1000;
 
 // Helper types for strict type safety without explicit imports
 type WaitlistEntriesRow = Database['public']['Tables']['waitlist_entries']['Row'];
@@ -26,6 +31,67 @@ type BusinessBlockedDatesRow = Database['public']['Tables']['business_blocked_da
 export class SupabaseService {
   private static getClient() {
     return SupabaseConfig.getClient();
+  }
+
+  static reservationsOverlap(
+    newScheduledAt: string | null,
+    existingScheduledAt: string | null
+  ): boolean {
+    const now = Date.now();
+    const newTimestamp = newScheduledAt ? new Date(newScheduledAt).getTime() : now;
+    const existingTimestamp = existingScheduledAt ? new Date(existingScheduledAt).getTime() : now;
+    return Math.abs(newTimestamp - existingTimestamp) < RESERVATION_OVERLAP_MS;
+  }
+
+  private static async getActiveReservations(
+    customerId: string,
+    businessId: string
+  ): Promise<WaitlistEntry[]> {
+    try {
+      const client = this.getClient();
+      const activeStatuses: WaitlistStatus[] = ['WAITING', 'CONFIRMED', 'NOTIFIED'];
+
+      const { data, error } = await client
+        .from('waitlist_entries')
+        .select('*')
+        .eq('customer_id', customerId)
+        .eq('business_id', businessId)
+        .in('status', activeStatuses)
+        .order('queued_at', { ascending: false });
+
+      if (error) throw error;
+      return (data as WaitlistEntry[]) || [];
+    } catch (error) {
+      logger.error('Error getting active reservations', { error, customerId, businessId });
+      return [];
+    }
+  }
+
+  /**
+   * Get the customer's active reservations (any date) by phone number.
+   */
+  static async getActiveReservationsByPhone(
+    phone: string,
+    businessId: string
+  ): Promise<WaitlistEntry[]> {
+    try {
+      const client = this.getClient();
+
+      const { data: customerData, error: customerError } = await client
+        .from('customers')
+        .select('id')
+        .eq('business_id', businessId)
+        .eq('phone', phone)
+        .maybeSingle();
+
+      if (customerError) throw customerError;
+      if (!customerData) return [];
+
+      return this.getActiveReservations(customerData.id, businessId);
+    } catch (error) {
+      logger.error('Error getting active reservations by phone', { error, phone, businessId });
+      return [];
+    }
   }
 
   /**
@@ -244,18 +310,55 @@ export class SupabaseService {
       );
       logger.info('✅ Customer ready', { customerId: customer.id, name: customer.name });
 
-      // Check for an existing active reservation (any date — max 1 active at a time)
-      const existingReservation = await this.getActiveReservation(customer.id, request.businessId);
-      if (existingReservation) {
-        logger.info('⚠️ Customer already has an active reservation', {
+      const activeReservations = await this.getActiveReservations(customer.id, request.businessId);
+      const conflictingReservation = activeReservations.find((reservation) =>
+        this.reservationsOverlap(request.scheduledAt ?? null, reservation.scheduled_at ?? null)
+      );
+
+      if (conflictingReservation) {
+        const nowBA = nowInBuenosAires();
+        const requestedWhenLabel = request.scheduledAt
+          ? describeScheduledAtUtc(request.scheduledAt, nowBA)
+          : 'Hoy (turno actual)';
+        const conflictingWhenLabel = conflictingReservation.scheduled_at
+          ? describeScheduledAtUtc(conflictingReservation.scheduled_at, nowBA)
+          : 'Hoy (turno actual)';
+
+        const statusLabel = (() => {
+          switch (conflictingReservation.status) {
+            case 'WAITING':
+              return 'Pendiente';
+            case 'CONFIRMED':
+              return 'Confirmada';
+            case 'NOTIFIED':
+              return 'Notificada';
+            case 'SEATED':
+              return 'Finalizada';
+            case 'CANCELLED':
+              return 'Cancelada';
+            case 'NO_SHOW':
+              return 'No show';
+            default:
+              return conflictingReservation.status;
+          }
+        })();
+
+        logger.warn('⚠️ Reservation creation rejected due to overlap with an active reservation', {
           customerId: customer.id,
-          entryId: existingReservation.id,
-          displayCode: existingReservation.display_code,
+          conflictId: conflictingReservation.id,
+          requestedWhen: requestedWhenLabel,
+          conflictingWhen: conflictingWhenLabel,
         });
+
         return {
-          success: true,
-          waitlistEntry: existingReservation,
-          alreadyExists: true,
+          success: false,
+          error: 'Reservation overlaps with an active reservation',
+          blockedMessage: templates.reservationOverlapConflict(
+            requestedWhenLabel,
+            conflictingWhenLabel,
+            conflictingReservation.display_code,
+            statusLabel
+          ),
         };
       }
 
