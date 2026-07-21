@@ -109,10 +109,22 @@ describe('reservation-scope', () => {
       });
     });
 
+    describe('at the "edit_menu" step', () => {
+      it('allows option 4 to start a new reservation flow', () => {
+        expect(evaluateReservationScope('4', { currentStep: 'edit_menu' }).decision).toBe('allow');
+      });
+    });
+
     describe('at the "schedule_choice" step', () => {
       it('allows menu options 1 or 2', () => {
         expect(
           evaluateReservationScope('1', { currentStep: 'schedule_choice' }).decision
+        ).toBe('allow');
+      });
+
+      it('allows numeric selection at the reservation_selection step', () => {
+        expect(
+          evaluateReservationScope('2', { currentStep: 'reservation_selection' }).decision
         ).toBe('allow');
       });
 

@@ -201,6 +201,184 @@ describe('WhatsAppHandler reservation overlap policy', () => {
     );
   });
 
+  it('greeting overrides a reservation-selection draft and shows the active reservations menu', async () => {
+    jest
+      .spyOn(ReservationService, 'getDraft')
+      .mockResolvedValue({
+        conversationId: 'conv-7',
+        businessId: 'business-1',
+        step: 'reservation_selection',
+        availableReservationIds: ['entry-8', 'entry-9'],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      } as any);
+
+    jest
+      .spyOn(ReservationService, 'deleteDraft')
+      .mockResolvedValue(true);
+
+    jest
+      .spyOn(agentService, 'clearConversationHistory')
+      .mockResolvedValue(undefined);
+
+    jest
+      .spyOn(SupabaseService, 'getActiveReservationsByPhone')
+      .mockResolvedValue([
+        {
+          id: 'entry-8',
+          party_size: 2,
+          display_code: 'R100',
+          status: 'CONFIRMED',
+          scheduled_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        },
+        {
+          id: 'entry-9',
+          party_size: 4,
+          display_code: 'R101',
+          status: 'WAITING',
+          scheduled_at: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
+        },
+      ] as any);
+
+    const handled = await (handler as any).handleGreeting(
+      'hola',
+      'business-1',
+      '5495555555555@s.whatsapp.net',
+      'conv-7'
+    );
+
+    expect(handled).toBe(true);
+    expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+      'business-1',
+      '5495555555555@s.whatsapp.net',
+      expect.stringContaining('Tengo varias reservas activas')
+    );
+  });
+
+  it('lists active reservations even when the user is inside another draft step', async () => {
+    jest
+      .spyOn(ReservationService, 'getDraft')
+      .mockResolvedValue({
+        conversationId: 'conv-8',
+        businessId: 'business-1',
+        step: 'edit_menu',
+        existingReservationId: 'entry-10',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      } as any);
+
+    jest
+      .spyOn(SupabaseService, 'getActiveReservationsByPhone')
+      .mockResolvedValue([
+        {
+          id: 'entry-10',
+          party_size: 3,
+          display_code: 'R102',
+          status: 'CONFIRMED',
+          scheduled_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+        },
+      ] as any);
+
+    const handled = await (handler as any).handleActiveReservationsInquiry(
+      'business-1',
+      '5496666666666@s.whatsapp.net',
+      'conv-8'
+    );
+
+    expect(handled).toBe(true);
+    expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+      'business-1',
+      '5496666666666@s.whatsapp.net',
+      expect.stringContaining('Tenés 1 reserva activa')
+    );
+  });
+
+  it('switches to reservation-selection mode when the user asks for their reservations and there are multiple options', async () => {
+    jest
+      .spyOn(ReservationService, 'startReservationSelection')
+      .mockResolvedValue({
+        conversationId: 'conv-10',
+        businessId: 'business-1',
+        step: 'reservation_selection',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      } as any);
+
+    jest
+      .spyOn(SupabaseService, 'getActiveReservationsByPhone')
+      .mockResolvedValue([
+        {
+          id: 'entry-20',
+          party_size: 2,
+          display_code: 'R200',
+          status: 'CONFIRMED',
+          scheduled_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        },
+        {
+          id: 'entry-21',
+          party_size: 4,
+          display_code: 'R201',
+          status: 'WAITING',
+          scheduled_at: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
+        },
+      ] as any);
+
+    const handled = await (handler as any).handleActiveReservationsInquiry(
+      'business-1',
+      '5498888888888@s.whatsapp.net',
+      'conv-10'
+    );
+
+    expect(handled).toBe(true);
+    expect(ReservationService.startReservationSelection).toHaveBeenCalledWith(
+      'conv-10',
+      'business-1',
+      ['entry-20', 'entry-21']
+    );
+    expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+      'business-1',
+      '5498888888888@s.whatsapp.net',
+      expect.stringContaining('Respondé con el *número* de la reserva')
+    );
+  });
+
+  it('starts a new reservation flow from the edit-menu when the user wants another reservation', async () => {
+    const draft = {
+      conversationId: 'conv-9',
+      businessId: 'business-1',
+      step: 'edit_menu',
+      existingReservationId: 'entry-11',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    } as any;
+
+    const startReservationSpy = jest
+      .spyOn(ReservationService, 'startReservation')
+      .mockResolvedValue({
+        conversationId: 'conv-9',
+        businessId: 'business-1',
+        step: 'name',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+
+    const handled = await (handler as any).processDraftStep(
+      draft,
+      'quiero hacer otra reserva',
+      'conv-9',
+      'business-1',
+      '5497777777777@s.whatsapp.net'
+    );
+
+    expect(handled).toBe(true);
+    expect(startReservationSpy).toHaveBeenCalledWith('conv-9', 'business-1');
+    expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+      'business-1',
+      '5497777777777@s.whatsapp.net',
+      expect.stringContaining('nombre')
+    );
+  });
+
   it('multi-turn flow: block new reservation, cancel active one, then allow new reservation', async () => {
     jest
       .spyOn(agentRegistry, 'get')
