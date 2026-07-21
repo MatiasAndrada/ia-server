@@ -342,6 +342,19 @@ export class WhatsAppHandler {
         draft = await ReservationService.getDraft(conversationId);
       }
 
+      // --- Active reservations inquiry: answer directly even while another draft is active ---
+      if (this.isActiveReservationsInquiryMessage(messageText)) {
+        const activeReservationsHandled = await this.handleActiveReservationsInquiry(
+          businessId,
+          from,
+          conversationId
+        );
+        if (activeReservationsHandled) {
+          logger.info('Active reservations inquiry handled', { conversationId });
+          return;
+        }
+      }
+
       // Courtesy handling: if reservation is already active/confirmed and user sends
       // a short acknowledgment (thanks/ok/dale/etc.), reply naturally without restarting flow.
       if (!draft) {
@@ -1619,13 +1632,20 @@ export class WhatsAppHandler {
         }
 
         case 'edit_menu': {
-          // M2: user is choosing what to modify: 1=personas, 2=fecha, 3=horario
+          // M2: user is choosing what to modify: 1=personas, 2=fecha, 3=horario, 4=nueva reserva
           const choice = this.extractNumber(messageText);
           const reservationId = draft.existingReservationId;
 
           if (!reservationId) {
             await ReservationService.deleteDraft(conversationId);
             await this.sendWhatsAppMessage(businessId, jid, 'Lo siento, no encontré tu reserva. Intentá de nuevo.');
+            return true;
+          }
+
+          if (choice === 4 || this.isExplicitNewReservationIntent(messageText)) {
+            await ReservationService.deleteDraft(conversationId);
+            await ReservationService.startReservation(conversationId, businessId);
+            await this.sendWhatsAppMessage(businessId, jid, templates.askName());
             return true;
           }
 
@@ -3171,6 +3191,91 @@ export class WhatsAppHandler {
     return new RegExp(`^${unit}(?: ${unit})*$`).test(normalized);
   }
 
+  private isActiveReservationsInquiryMessage(text: string): boolean {
+    const normalized = this.normalizeCourtesyText(text);
+
+    const patterns = [
+      /\bmis\s+reservas\b/,
+      /\bmis\s+reservas\s+activas\b/,
+      /\bcu[aá]les\s+son\s+mis\s+reservas\b/,
+      /\bcu[aá]ntas?\s+reservas\b/,
+      /\bcu[aá]ntas?\s+reservas\s+activas\b/,
+      /\bqu[eé]\s+reservas\s+tengo\b/,
+      /\bqu[eé]\s+reservas\s+ten(?:go|es|emos)\b/,
+    ];
+
+    return patterns.some((pattern) => pattern.test(normalized));
+  }
+
+  private async handleActiveReservationsInquiry(
+    businessId: string,
+    jid: string,
+    conversationId: string
+  ): Promise<boolean> {
+    try {
+      const phone = this.normalizeWhatsAppNumber(jid);
+      const activeReservations = await SupabaseService.getActiveReservationsByPhone(phone, businessId);
+
+      if (activeReservations.length === 0) {
+        await this.sendWhatsAppMessage(
+          businessId,
+          jid,
+          'No tenés reservas activas en este momento. Si querés, podés crear una nueva reserva escribiendo *RESERVAR*.'
+        );
+        logger.info('No active reservations to report', { conversationId });
+        return true;
+      }
+
+      if (activeReservations.length > 1) {
+        const availableReservationIds = activeReservations.map((reservation) => reservation.id);
+        await ReservationService.startReservationSelection(conversationId, businessId, availableReservationIds);
+
+        const quickOptions = activeReservations.map((reservation, index) => ({
+          index: index + 1,
+          partySize: reservation.party_size ?? 0,
+          whenLabel: this.describeReservationWhen(reservation.scheduled_at),
+          displayCode: reservation.display_code ?? null,
+          statusLabel: this.getReservationStatusLabel(reservation.status),
+        }));
+
+        await this.sendWhatsAppMessage(
+          businessId,
+          jid,
+          templates.activeReservationsMenu(quickOptions)
+        );
+
+        logger.info('Active reservations inquiry handled with selection menu', {
+          conversationId,
+          reservationCount: activeReservations.length,
+        });
+        return true;
+      }
+
+      const quickOptions = activeReservations.map((reservation, index) => ({
+        index: index + 1,
+        partySize: reservation.party_size ?? 0,
+        whenLabel: this.describeReservationWhen(reservation.scheduled_at),
+        displayCode: reservation.display_code ?? null,
+        statusLabel: this.getReservationStatusLabel(reservation.status),
+      }));
+
+      await this.sendWhatsAppMessage(
+        businessId,
+        jid,
+        templates.activeReservationsSummary(quickOptions)
+      );
+
+      logger.info('Active reservations inquiry handled', {
+        conversationId,
+        reservationCount: activeReservations.length,
+      });
+      return true;
+    } catch (error) {
+      logger.error('Error handling active reservations inquiry', { error, conversationId });
+      return false;
+    }
+  }
+
   /**
    * Handle a greeting: cancel any active draft, check for today's reservation,
    * and either show the reservation menu or a normal welcome response.
@@ -3285,8 +3390,7 @@ export class WhatsAppHandler {
           existingDraft.step === 'summary_edit_menu' ||
           existingDraft.step === 'cancel_menu' ||
           existingDraft.step === 'cancel_confirm' ||
-          existingDraft.step === 'edit_menu' ||
-          existingDraft.step === 'reservation_selection');
+          existingDraft.step === 'edit_menu');
 
       if (isProtectedDraft) {
         logger.info('Greeting ignored — preserving in-progress draft', {
