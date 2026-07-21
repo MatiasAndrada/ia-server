@@ -4,6 +4,8 @@ import { logger } from '../utils/logger';
 import type { Database } from '../types/supabase';
 import * as templates from '../utils/message-templates';
 import { PostVisitService } from './post-visit.service';
+import { SupabaseService } from './supabase.service';
+import { ollamaService } from './ollama.service';
 
 // Helper types for strict type safety
 type CustomersRow = Database['public']['Tables']['customers']['Row'];
@@ -69,6 +71,9 @@ export class RealtimeSyncService {
 
       // Subscribe to waitlist_entries table changes (for status notifications)
       this.subscribeToWaitlistEntries(client);
+
+      // Subscribe to business_blocked_dates changes (pre-generate reason_message)
+      this.subscribeToBlockedDates(client);
 
       this.initialized = true;
       logger.info('✅ Realtime sync initialized successfully');
@@ -797,6 +802,99 @@ export class RealtimeSyncService {
         errorMessage: error instanceof Error ? error.message : 'Unknown error',
         errorStack: error instanceof Error ? error.stack : undefined,
         payload: JSON.stringify(payload).substring(0, 500),
+      });
+    }
+  }
+
+  /**
+   * Subscribe to business_blocked_dates changes so the client-facing
+   * `reason_message` is generated as soon as the date is blocked (typically
+   * from the dashboard, which inserts straight into Postgres) instead of
+   * on the first customer that asks about that date.
+   */
+  private static subscribeToBlockedDates(client: any): void {
+    try {
+      const subscription = client
+        .channel('public:business_blocked_dates')
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'business_blocked_dates',
+          },
+          async (payload: any) => {
+            await this.handleBlockedDateChange(payload);
+          }
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'business_blocked_dates',
+          },
+          async (payload: any) => {
+            await this.handleBlockedDateChange(payload);
+          }
+        )
+        .subscribe((status: string) => {
+          if (status === 'SUBSCRIBED') {
+            logger.info('✅ Subscribed to business_blocked_dates realtime changes');
+          } else if (status === 'CHANNEL_ERROR') {
+            logger.error('❌ Error subscribing to business_blocked_dates');
+          }
+        });
+
+      this.subscriptions.set('business_blocked_dates', subscription);
+    } catch (error) {
+      logger.error('Failed to subscribe to business_blocked_dates', { error });
+    }
+  }
+
+  /**
+   * Generate and store `reason_message` for a blocked date.
+   * Skipped when there is no `reason` to work from, and when a message already
+   * matches the current reason — which also keeps our own `reason_message`
+   * write from re-triggering this handler in a loop.
+   */
+  private static async handleBlockedDateChange(payload: any): Promise<void> {
+    try {
+      const newRow = payload?.new;
+      const oldRow = payload?.old;
+      if (!newRow) return;
+
+      const businessId: string | undefined = newRow.business_id;
+      const date: string | undefined = newRow.date;
+      const reason: string | null = newRow.reason?.trim() || null;
+
+      if (!businessId || !date || !reason) return;
+
+      // Nothing to do when a message is already stored for this exact reason:
+      // either the API path pre-generated it, or this UPDATE is our own write.
+      const reasonUnchanged = !oldRow || oldRow.reason?.trim() === reason;
+      if (newRow.reason_message && reasonUnchanged) return;
+
+      const business = await SupabaseService.getBusinessById(businessId);
+      const reasonMessage = await ollamaService.generateBlockedDateReasonMessage(
+        reason,
+        business?.name,
+        business?.type
+      );
+
+      await SupabaseService.updateBlockedDateReasonMessage(businessId, date, reasonMessage);
+
+      logger.info('Blocked date reason_message pre-generated from realtime', {
+        businessId,
+        date,
+        event: payload?.eventType,
+      });
+    } catch (error) {
+      // Non-critical: the WhatsApp handler still generates on-the-fly as fallback.
+      logger.warn('Failed to pre-generate blocked date reason_message', {
+        error,
+        businessId: payload?.new?.business_id,
+        date: payload?.new?.date,
       });
     }
   }
