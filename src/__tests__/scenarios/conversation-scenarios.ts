@@ -1681,7 +1681,7 @@ const mixedInputScenarios: ConversationScenario[] = [
         user: 'Quiero hacer otra reserva',
         expect: {
           isBlocked: true,
-          contains: ['ya tenés una reserva'],
+          contains: ['tu nueva reserva se superpone', 'código *Z099*'],
         },
       },
     ],
