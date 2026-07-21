@@ -144,14 +144,15 @@ export function editMenu(
     `¿Qué querés modificar?\n\n` +
     `1️⃣ Cantidad de personas\n` +
     `2️⃣ Fecha\n` +
-    `3️⃣ Horario\n\n` +
+    `3️⃣ Horario\n` +
+    `4️⃣ Crear otra reserva\n\n` +
     `Respondé con el *número* de la opción.\n\n` +
     `_Para cancelar tu reserva escribí *CANCELAR*._`
   );
 }
 
 export function editMenuInvalidChoice(): string {
-  return `❌ Por favor respondé con *1*, *2* o *3* según la opción que elegiste.`;
+  return `❌ Por favor respondé con *1*, *2*, *3* o *4* según la opción que elegiste.`;
 }
 
 export function partySizeUpdated(partySize: number): string {
@@ -175,6 +176,27 @@ export function cancelMenu(partySize: number, whenLabel: string, displayCode: st
     `¿Qué te gustaría hacer?\n\n` +
     `1️⃣ Reprogramar la reserva\n` +
     `2️⃣ Cancelar definitivamente`
+  );
+}
+
+export function activeReservationsSummary(reservations: {
+  index: number;
+  partySize: number;
+  whenLabel: string;
+  displayCode: string | null;
+  statusLabel: string;
+}[]): string {
+  const countLabel = reservations.length === 1 ? '1 reserva activa' : `${reservations.length} reservas activas`;
+  const reservationsList = reservations
+    .map((reservation) => {
+      const codeText = reservation.displayCode ? ` (${reservation.displayCode})` : '';
+      return `*${reservation.index}* - ${reservation.partySize} personas, ${reservation.whenLabel}${codeText} — ${reservation.statusLabel}`;
+    })
+    .join('\n');
+
+  return (
+    `📋 Tenés ${countLabel}:\n\n` +
+    `${reservationsList}`
   );
 }
 

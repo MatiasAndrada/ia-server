@@ -115,7 +115,7 @@ export function evaluateReservationScope(
   }
 
   if (currentStep === 'edit_menu' || currentStep === 'summary_edit_menu') {
-    if (/^[123]$/.test(trimmedMessage) || reservationRelated || isGreetingOrOptIn) {
+    if (/^[1234]$/.test(trimmedMessage) || reservationRelated || isGreetingOrOptIn) {
       return { decision: 'allow' };
     }
 
@@ -136,9 +136,9 @@ export function evaluateReservationScope(
     return { decision: 'allow' };
   }
 
-  if (currentStep === 'schedule_choice') {
+  if (currentStep === 'schedule_choice' || currentStep === 'reservation_selection') {
     if (
-      /^[12]$/.test(trimmedMessage) ||
+      /^[0-9]+$/.test(trimmedMessage) ||
       isInstantChoiceMessage(normalizedMessage) ||
       hasDateOrTimeSignal(trimmedMessage, normalizedMessage) ||
       reservationRelated ||
