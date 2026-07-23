@@ -31,9 +31,10 @@ async function generateTypes() {
 
   const tables = [
     'businesses',
-    'customers', 
+    'customers',
     'tables',
-    'waitlist_entries'
+    'waitlist_entries', 
+    'business_blocked_dates'
   ];
 
   const client = createClient(supabaseUrl, supabaseKey);
