@@ -15,8 +15,10 @@ import {
   isGreetingOrReservationOptInMessage,
   isObviouslyGibberish,
   isInstantChoiceMessage,
+  isPureNoiseMessage,
   normalizeReservationScopeText,
   hasDateOrTimeSignal,
+  isAskingOtherDaysScheduleMessage,
 } from '../utils/reservation-scope';
 import {
   nowInBuenosAires,
@@ -45,6 +47,7 @@ import {
   isDateBlocked,
   isFutureReservationBlockedToday,
   isWithinCurrentShift,
+  hasBookableMomentLeftToday,
   formatBookableDays,
   getUpcomingOpenDaysWithHours,
   type ParsedDay,
@@ -426,6 +429,24 @@ export class WhatsAppHandler {
       }
 
       if (scopeEvaluation.decision === 'off_topic') {
+        // Bare digits/punctuation with no letters (e.g. a stray "1") carry no
+        // real intent and have nothing for the LLM to ground a "natural"
+        // answer in — sending them to the agent risks it hallucinating a
+        // plausible-looking but fake flow (seen in prod: a lone "1" right
+        // after a reservation was confirmed made it invent "¿De qué mes?").
+        // Bounce with the canned message instead, same as prompt-injection/
+        // out-of-window, without touching the draft/step.
+        if (isPureNoiseMessage(messageText.trim()) && scopeEvaluation.message) {
+          await this.sendWhatsAppMessage(businessId, from, scopeEvaluation.message);
+
+          logger.info('Off-topic noise message bounced without reaching the LLM', {
+            conversationId,
+            businessId,
+            draftStep: draft?.step,
+          });
+          return;
+        }
+
         // Generic off-topic ("¿para qué servís?", general questions) — let the
         // agent answer naturally instead of always sending the same canned
         // bounce message. processAction()/processDraftStep() would otherwise
@@ -624,19 +645,17 @@ export class WhatsAppHandler {
 
               logger.info('🎬 Auto-creating reservation draft', { conversationId, businessId, userName: messageText });
 
-              // Create draft and set customer name (asking apellido if missing)
+              // Create draft and set customer name (apellido is optional, never asked separately)
               await ReservationService.startReservation(conversationId, businessId);
               const { firstName: autoFirst, lastName: autoLast } = this.splitFullName(extractedName);
 
               if (autoLast) {
                 await ReservationService.setCustomerNameParts(conversationId, autoFirst, autoLast);
-                draft = await ReservationService.getDraft(conversationId);
-                await this.sendWhatsAppMessage(businessId, from, templates.askPartySize(autoFirst));
               } else {
                 await ReservationService.setCustomerName(conversationId, autoFirst);
-                draft = await ReservationService.getDraft(conversationId);
-                await this.sendWhatsAppMessage(businessId, from, templates.askLastName(autoFirst));
               }
+              draft = await ReservationService.getDraft(conversationId);
+              await this.sendWhatsAppMessage(businessId, from, templates.askPartySize(autoFirst));
 
               logger.info('✅ Draft created and name saved', {
                 conversationId,
@@ -873,26 +892,21 @@ export class WhatsAppHandler {
           logger.info('📝 Setting customer name', { conversationId, raw: messageText, firstName, lastName });
 
           if (lastName) {
-            // Full "Nombre Apellido" given in one message — store both and continue.
+            // Full "Nombre Apellido" given in one message — store both.
             await ReservationService.setCustomerNameParts(conversationId, firstName, lastName);
-            await this.continueAfterNameCollected(
-              conversationId,
-              businessId,
-              jid,
-              messageText,
-              firstName,
-              partySize
-            );
-            return true;
+          } else {
+            // Only a first name — the apellido is optional, don't ask for it separately.
+            await ReservationService.setCustomerName(conversationId, firstName);
           }
 
-          // Only a first name so far — ask for the apellido next, stashing any
-          // party size already mentioned so it survives the extra step.
-          await ReservationService.setCustomerName(conversationId, firstName);
-          if (partySize && partySize > 0 && partySize <= 50) {
-            await ReservationService.setPartySize(conversationId, partySize);
-          }
-          await this.sendWhatsAppMessage(businessId, jid, templates.askLastName(firstName));
+          await this.continueAfterNameCollected(
+            conversationId,
+            businessId,
+            jid,
+            messageText,
+            firstName,
+            partySize
+          );
           return true;
         }
 
@@ -1102,6 +1116,14 @@ export class WhatsAppHandler {
             return true;
           }
 
+          // Same "otros días" question as at the `time`/`date` steps — answer
+          // with real hours instead of bouncing to the LLM fallback.
+          if (isAskingOtherDaysScheduleMessage(normalizeReservationScopeText(messageText))) {
+            if (await this.maybeAnswerOtherDaysScheduleQuestion(messageText, businessId, jid, templates.askScheduleChoice())) {
+              return true;
+            }
+          }
+
           const trimmedChoice = messageText.trim();
           const normalizedChoice = normalizeReservationScopeText(messageText);
           const wantsInstant = trimmedChoice === '1' || isInstantChoiceMessage(normalizedChoice);
@@ -1298,9 +1320,12 @@ export class WhatsAppHandler {
               await this.raiseWeekdayAmbiguityIfNeeded(
                 draft,
                 parsedDay,
+                conversationId,
                 businessId,
                 jid,
-                parsedTimeSameMsg ?? undefined
+                parsedTimeSameMsg ?? undefined,
+                weeklyHoursForScheduleDay,
+                businessForScheduleDay?.reservation_closing_margin_minutes ?? 15
               )
             ) {
               return true;
@@ -1365,6 +1390,15 @@ export class WhatsAppHandler {
             });
             await this.sendWhatsAppMessage(businessId, jid, templates.invalidDate());
             return true;
+          }
+
+          // Same "otros días" question as at the `time` step (see there) —
+          // answer with real hours instead of bouncing to the LLM fallback.
+          if (isAskingOtherDaysScheduleMessage(normalizeReservationScopeText(messageText))) {
+            const followUp = await this.buildAskDayMessage(businessId);
+            if (await this.maybeAnswerOtherDaysScheduleQuestion(messageText, businessId, jid, followUp)) {
+              return true;
+            }
           }
 
           const nowBA = nowInBuenosAires();
@@ -1494,9 +1528,12 @@ export class WhatsAppHandler {
             await this.raiseWeekdayAmbiguityIfNeeded(
               draft,
               parsedDay,
+              conversationId,
               businessId,
               jid,
-              parsedTimeSameMsg ?? undefined
+              parsedTimeSameMsg ?? undefined,
+              weeklyHoursForDate,
+              businessForDate?.reservation_closing_margin_minutes ?? 15
             )
           ) {
             return true;
@@ -1550,6 +1587,20 @@ export class WhatsAppHandler {
             return true;
           }
 
+          // The customer may be asking about other days' schedules instead of
+          // answering the hour for the currently chosen day (e.g. "¿y los
+          // horarios de los otros días?"). Answer with the real hours instead
+          // of falling through to the LLM fallback, which has no access to
+          // weekly_hours and ends up falsely claiming it doesn't know.
+          if (draft.scheduledDate && isAskingOtherDaysScheduleMessage(normalizeReservationScopeText(messageText))) {
+            const nowBAForOtherDays = nowInBuenosAires();
+            const dayLabelForOtherDays = describeBaDateKey(draft.scheduledDate, nowBAForOtherDays);
+            const followUp = await this.buildAskTimeMessage(businessId, draft.scheduledDate, dayLabelForOtherDays);
+            if (await this.maybeAnswerOtherDaysScheduleQuestion(messageText, businessId, jid, followUp)) {
+              return true;
+            }
+          }
+
           // The customer may be naming a different day in this same message
           // instead of just answering the hour (e.g. "el martes a las 14" while
           // the draft was still holding the previously chosen Wednesday).
@@ -1595,9 +1646,12 @@ export class WhatsAppHandler {
               await this.raiseWeekdayAmbiguityIfNeeded(
                 draft,
                 dayOverride,
+                conversationId,
                 businessId,
                 jid,
-                parsedTime ?? undefined
+                parsedTime ?? undefined,
+                weeklyHoursForDayOverride,
+                businessForDayOverride?.reservation_closing_margin_minutes ?? 15
               )
             ) {
               return true;
@@ -1760,10 +1814,26 @@ export class WhatsAppHandler {
                 const newTimeLabel = `${String(targetHour).padStart(2, '0')}:${String(targetMinute).padStart(2, '0')}`;
                 await ReservationService.moveToConfirmSlot(conversationId, newDateKey, newTimeLabel, newAt, origin ?? 'schedule_choice');
                 const label = describeScheduledAtUtc(newAt, nowBA);
+
+                // The customer only named a day here — the time shown is carried
+                // over from the previously proposed slot, not something they typed
+                // for this day. Surface that day's hours so they notice and can
+                // pick a different time instead of confirming one they never chose.
+                let carriedTimeHoursNote = '';
+                if (parsedDay && !parsedTimeOverride && weeklyHoursForConfirm && Object.keys(weeklyHoursForConfirm).length > 0) {
+                  const hoursRangeForDay = formatDayHoursForDate(
+                    targetBaDate,
+                    weeklyHoursForConfirm,
+                    openingMarginForConfirm,
+                    closingMarginForConfirm
+                  );
+                  carriedTimeHoursNote = `\n\nEse día atendemos de *${hoursRangeForDay}*. Decime otro horario si preferís.`;
+                }
+
                 await this.sendWhatsAppMessage(
                   businessId,
                   jid,
-                  `Respondé *sí* o *no*: ¿confirmamos la reserva para el *${label}*?`
+                  `¿Confirmamos la reserva para el *${label}*?${carriedTimeHoursNote}\n\nRespondé *sí* o *no*.`
                 );
                 return true;
               }
@@ -2210,13 +2280,24 @@ export class WhatsAppHandler {
    * customer to clarify, and returns true — the caller should stop processing
    * and let the next inbound message resolve it (see the top of
    * {@link processDraftStep}). Returns false when there's nothing ambiguous.
+   *
+   * There's one case where naming today's weekday is NOT ambiguous: if the
+   * business is already closed for the rest of today (no bookable shift left),
+   * "today" isn't a real option anymore, so it can only mean next week — that
+   * case resolves straight through {@link finalizeWeekdayChoice} instead of
+   * asking a question with an answer that's already known. `weeklyHours` is
+   * optional so callers that haven't fetched it yet keep the always-ask
+   * behavior rather than skipping this check.
    */
   private async raiseWeekdayAmbiguityIfNeeded(
     draft: ReservationDraft,
     parsedDay: ParsedDay,
+    conversationId: string,
     businessId: string,
     jid: string,
-    pendingTime?: { hour: number; minute: number }
+    pendingTime?: { hour: number; minute: number },
+    weeklyHours?: WeeklyHours | null,
+    closingMarginMinutes = 15
   ): Promise<boolean> {
     if (!parsedDay.isToday || !parsedDay.matchedWeekdayName) {
       return false;
@@ -2227,6 +2308,24 @@ export class WhatsAppHandler {
     const nextDateKey = formatBaDateKey(nextBaDate);
     const weekdayLabel = formatDayLabel(parsedDay.baDate, false); // e.g. "jueves 02/07"
     const nextLabel = formatDayLabel(nextBaDate, false); // e.g. "jueves 09/07"
+
+    if (
+      weeklyHours &&
+      Object.keys(weeklyHours).length > 0 &&
+      !hasBookableMomentLeftToday(nowInBuenosAires(), weeklyHours, closingMarginMinutes)
+    ) {
+      await this.finalizeWeekdayChoice(
+        draft,
+        conversationId,
+        businessId,
+        jid,
+        nextDateKey,
+        todayDateKey,
+        pendingTime?.hour,
+        pendingTime?.minute
+      );
+      return true;
+    }
 
     draft.pendingWeekdayDisambiguation = {
       weekdayLabel,
@@ -2289,7 +2388,38 @@ export class WhatsAppHandler {
     const chosenDateKey = wantsToday ? pending.todayDateKey : pending.nextDateKey;
     draft.pendingWeekdayDisambiguation = undefined;
 
-    if (pending.pendingHour !== undefined && pending.pendingMinute !== undefined) {
+    await this.finalizeWeekdayChoice(
+      draft,
+      conversationId,
+      businessId,
+      jid,
+      chosenDateKey,
+      pending.todayDateKey,
+      pending.pendingHour,
+      pending.pendingMinute
+    );
+    return true;
+  }
+
+  /**
+   * Commits a resolved weekday choice (either "today" or "next week", however
+   * that was decided — an explicit 1/2 reply via
+   * {@link resolvePendingWeekdayDisambiguation}, or the automatic next-week
+   * resolution in {@link raiseWeekdayAmbiguityIfNeeded} when today is already
+   * closed): applies any time given in the same original message, otherwise
+   * checks the date isn't business-blocked and asks for the time.
+   */
+  private async finalizeWeekdayChoice(
+    draft: ReservationDraft,
+    conversationId: string,
+    businessId: string,
+    jid: string,
+    chosenDateKey: string,
+    todayDateKey: string,
+    pendingHour?: number,
+    pendingMinute?: number
+  ): Promise<void> {
+    if (pendingHour !== undefined && pendingMinute !== undefined) {
       await ReservationService.saveDraft(draft);
       await this.finalizeScheduledTime(
         draft,
@@ -2297,10 +2427,10 @@ export class WhatsAppHandler {
         businessId,
         jid,
         chosenDateKey,
-        pending.pendingHour,
-        pending.pendingMinute
+        pendingHour,
+        pendingMinute
       );
-      return true;
+      return;
     }
 
     const chosenBaDate = parseBaDateKey(chosenDateKey);
@@ -2308,27 +2438,26 @@ export class WhatsAppHandler {
 
     // Reject dates the business has explicitly blocked (business_blocked_dates)
     // right away — before asking for the time.
-    const blockedDatesForDisambiguation = await SupabaseService.getBlockedDates(businessId);
-    if (isDateBlocked(chosenDateKey, blockedDatesForDisambiguation)) {
+    const blockedDatesForChoice = await SupabaseService.getBlockedDates(businessId);
+    if (isDateBlocked(chosenDateKey, blockedDatesForChoice)) {
       await this.sendWhatsAppMessage(
         businessId,
         jid,
         templates.dateBlocked(
           chosenLabel,
-          await this.resolveBlockedDateMessage(businessId, chosenDateKey, blockedDatesForDisambiguation)
+          await this.resolveBlockedDateMessage(businessId, chosenDateKey, blockedDatesForChoice)
         )
       );
-      return true;
+      return;
     }
 
     await ReservationService.setScheduledDate(conversationId, {
       baDate: chosenBaDate,
       label: chosenLabel,
-      isToday: chosenDateKey === pending.todayDateKey,
+      isToday: chosenDateKey === todayDateKey,
       matchedWeekdayName: true,
     });
     await this.sendWhatsAppMessage(businessId, jid, await this.buildAskTimeMessage(businessId, chosenDateKey, chosenLabel));
-    return true;
   }
 
   /**
@@ -2611,6 +2740,54 @@ export class WhatsAppHandler {
         ) || null;
     }
     return templates.askDay(openDays);
+  }
+
+  /**
+   * Handles "¿y los horarios de los otros días?" at the `schedule_choice`/
+   * `date`/`time` steps: instead of falling through to the LLM fallback (which
+   * has no access to `weekly_hours` and ends up claiming ignorance), answers
+   * with the real upcoming days/hours and re-sends `followUpMessage` so the
+   * customer can pick a day/time right after — without touching the draft's
+   * step or losing what's already been chosen. Returns true when it handled
+   * the message (caller should `return true` immediately after); false when
+   * the message wasn't this kind of question, or hours aren't configured, so
+   * the caller's normal parsing logic should run instead.
+   */
+  private async maybeAnswerOtherDaysScheduleQuestion(
+    messageText: string,
+    businessId: string,
+    jid: string,
+    followUpMessage: string
+  ): Promise<boolean> {
+    if (!isAskingOtherDaysScheduleMessage(normalizeReservationScopeText(messageText))) {
+      return false;
+    }
+
+    const business = await SupabaseService.getBusinessById(businessId);
+    const weeklyHours = business?.weekly_hours as WeeklyHours | null | undefined;
+    if (!weeklyHours || Object.keys(weeklyHours).length === 0) {
+      return false;
+    }
+
+    const nowBA = nowInBuenosAires();
+    const blockedDates = await SupabaseService.getBlockedDates(businessId);
+    const openingMargin = business?.reservation_opening_margin_minutes ?? 15;
+    const closingMargin = business?.reservation_closing_margin_minutes ?? 15;
+    const dayLines = getUpcomingOpenDaysWithHours(
+      weeklyHours,
+      nowBA,
+      (dateKey) => isDateBlocked(dateKey, blockedDates),
+      openingMargin,
+      closingMargin,
+      6
+    );
+
+    await this.sendWhatsAppMessage(
+      businessId,
+      jid,
+      `${templates.otherDaysSchedule(dayLines)}\n\n${followUpMessage}`
+    );
+    return true;
   }
 
   /**
@@ -2935,7 +3112,8 @@ export class WhatsAppHandler {
           nowBA,
           (dateKey) => isDateBlocked(dateKey, blockedDates),
           openingMargin,
-          closingMargin
+          closingMargin,
+          7
         );
         await this.sendWhatsAppMessage(businessId, jid, templates.askDayClosedTodayWithSchedule(dayLines));
         return;
@@ -2993,6 +3171,7 @@ export class WhatsAppHandler {
             `📋 Código: *${entry.display_code}*\n\n` +
             `Si querés modificarla, respondé *hola* para ver las opciones.`;
           await this.sendWhatsAppMessage(businessId, jid, summaryMsg);
+          await agentService.recordAssistantMessage(conversationId, summaryMsg);
           return;
         }
 
@@ -3049,6 +3228,7 @@ export class WhatsAppHandler {
         });
 
         await this.sendWhatsAppMessage(businessId, jid, confirmationMessage);
+        await agentService.recordAssistantMessage(conversationId, confirmationMessage);
 
         // Mark dedup keys after sending:
         // - For CONFIRMED/NOTIFIED: short-lived key (90s) to prevent realtime duplicate.
@@ -3543,6 +3723,11 @@ export class WhatsAppHandler {
       /\bcu[aá]ntas?\s+reservas\s+activas\b/,
       /\bqu[eé]\s+reservas\s+tengo\b/,
       /\bqu[eé]\s+reservas\s+ten(?:go|es|emos)\b/,
+      // "tengo reservas?", "hola tengo reservas?", "tengo reservas activas?"
+      /\btengo\s+reservas?\b/,
+      // "ver mis reservas", "consultar mis reservas"
+      /\bver\s+mis?\s+reservas?\b/,
+      /\bconsultar?\s+(?:mis?\s+)?reservas?\b/,
     ];
 
     return patterns.some((pattern) => pattern.test(normalized));
@@ -4357,21 +4542,12 @@ export class WhatsAppHandler {
 
       if (lastName) {
         await ReservationService.setCustomerNameParts(conversationId, firstName, lastName);
-        if (partySize && partySize > 0 && partySize <= 50) {
-          await ReservationService.setPartySize(conversationId, partySize);
-          await this.resolveEmbeddedScheduleOrPromptChoice(conversationId, businessId, jid, messageText);
-          return true;
-        }
-        await this.sendWhatsAppMessage(businessId, jid, templates.askPartySize(firstName));
-        return true;
+      } else {
+        // Only a first name — the apellido is optional, don't ask for it separately.
+        await ReservationService.setCustomerName(conversationId, firstName);
       }
 
-      // Only a first name — ask apellido next, stashing any party size given.
-      await ReservationService.setCustomerName(conversationId, firstName);
-      if (partySize && partySize > 0 && partySize <= 50) {
-        await ReservationService.setPartySize(conversationId, partySize);
-      }
-      await this.sendWhatsAppMessage(businessId, jid, templates.askLastName(firstName));
+      await this.continueAfterNameCollected(conversationId, businessId, jid, messageText, firstName, partySize);
       return true;
     } catch (error) {
       logger.error('Error handling prefilled reservation request', {

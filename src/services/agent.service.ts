@@ -308,6 +308,32 @@ class AgentService {
   }
 
   /**
+   * Registra en el historial un mensaje enviado fuera de generateResponse()
+   * (ej. la confirmación de reserva, que se manda de forma determinista desde
+   * whatsapp-handler.service.ts sin pasar por el LLM). Sin esto, si después
+   * llega un mensaje ambiguo y termina en el fallback del LLM, el historial
+   * no tiene rastro de la reserva ya confirmada y el modelo puede alucinar
+   * una continuación de flujo inexistente.
+   */
+  async recordAssistantMessage(conversationId: string, content: string): Promise<void> {
+    try {
+      const history = await this.getConversationHistory(conversationId);
+      history.push({ role: 'assistant', content, timestamp: Date.now() });
+
+      const limitedHistory = history.slice(-this.MAX_HISTORY_MESSAGES);
+      const client = RedisConfig.getClient();
+      const key = `${this.HISTORY_KEY_PREFIX}${conversationId}`;
+      await client.setEx(key, this.HISTORY_TTL, JSON.stringify(limitedHistory));
+    } catch (error) {
+      logger.error('Error recording assistant message', {
+        conversationId,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      // No lanzar error, el historial no es crítico
+    }
+  }
+
+  /**
    * Limpia el historial de una conversación
    */
   async clearConversationHistory(conversationId: string): Promise<void> {

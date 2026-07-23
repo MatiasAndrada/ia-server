@@ -193,14 +193,17 @@ export class ReservationService {
   }
 
   /**
-   * Update draft with customer name
+   * Update draft with customer name only. The apellido is optional and is
+   * never asked for separately — when the customer's reply didn't include
+   * one, `customerLastName` is simply left unset and the flow advances
+   * straight to `party_size`, same as {@link setCustomerNameParts}.
    */
   static async setCustomerName(
     conversationId: string,
     name: string
   ): Promise<ReservationDraft | null> {
     const draft = await this.getDraft(conversationId);
-    
+
     if (!draft) {
       logger.warn('Draft not found for setting name', { conversationId });
       return null;
@@ -208,8 +211,7 @@ export class ReservationService {
 
     // Format name with capitalized first letter of each word
     draft.customerName = formatName(name);
-    // Ask for the apellido next (see the `last_name` step in WhatsAppHandler).
-    draft.step = 'last_name';
+    draft.step = 'party_size';
 
     await this.saveDraft(draft);
     return draft;
@@ -241,7 +243,10 @@ export class ReservationService {
 
   /**
    * Set the apellido after it was asked in the `last_name` step and advance to
-   * the party_size step.
+   * the party_size step. The `name` step no longer transitions into
+   * `last_name` (the apellido is optional and is never asked separately) —
+   * this only remains reachable for drafts already sitting at `last_name`
+   * when this behavior shipped, so in-flight conversations don't break.
    */
   static async setCustomerLastName(
     conversationId: string,
