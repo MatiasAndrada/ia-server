@@ -4544,7 +4544,28 @@ export class WhatsAppHandler {
       const dateKey = formatBaDateKey(namedDay.baDate);
       const blockedDates = await SupabaseService.getBlockedDates(businessId);
 
-      if (dayOpen.open && !isDateBlocked(dateKey, blockedDates)) {
+      // Reject dates the business has explicitly blocked — show the reason before re-prompting
+      if (isDateBlocked(dateKey, blockedDates)) {
+        const blockedReason = await this.resolveBlockedDateMessage(
+          businessId,
+          dateKey,
+          blockedDates
+        );
+        // Try to suggest the soonest available slot so customer can confirm with "sí"
+        if (await this.proposeSoonestSlot(conversationId, businessId, jid, 'date', blockedReason ?? null)) {
+          return;
+        }
+        // No suitable slot found — show the block notice and re-prompt
+        await this.sendWhatsAppMessage(
+          businessId,
+          jid,
+          templates.dateBlocked(namedDay.label, blockedReason)
+        );
+        await this.promptScheduleChoice(conversationId, businessId, jid);
+        return;
+      }
+
+      if (dayOpen.open) {
         await ReservationService.setScheduledDate(conversationId, namedDay);
 
         const namedTime = parseTimeOfDay(messageText);
