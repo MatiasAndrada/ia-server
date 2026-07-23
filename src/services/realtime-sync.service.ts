@@ -812,8 +812,18 @@ export class RealtimeSyncService {
    * from the dashboard, which inserts straight into Postgres) instead of
    * on the first customer that asks about that date.
    */
+  /**
+   * Subscribe to business_blocked_dates table changes.
+   * Listens for INSERT (new blocked dates from dashboard) and UPDATE
+   * (modifications to existing blocked dates) events.
+   *
+   * When a blocked date is created/updated with a reason but no reason_message,
+   * this handler automatically generates the professional client-facing message.
+   */
   private static subscribeToBlockedDates(client: any): void {
     try {
+      logger.info('🔌 [REALTIME] Setting up business_blocked_dates subscription...');
+
       const subscription = client
         .channel('public:business_blocked_dates')
         .on(
@@ -824,6 +834,11 @@ export class RealtimeSyncService {
             table: 'business_blocked_dates',
           },
           async (payload: any) => {
+            logger.debug('📨 [BLOCKED_DATE] INSERT event received', {
+              businessId: payload?.new?.business_id,
+              date: payload?.new?.date,
+              hasReason: !!payload?.new?.reason,
+            });
             await this.handleBlockedDateChange(payload);
           }
         )
@@ -835,66 +850,129 @@ export class RealtimeSyncService {
             table: 'business_blocked_dates',
           },
           async (payload: any) => {
+            logger.debug('📨 [BLOCKED_DATE] UPDATE event received', {
+              businessId: payload?.new?.business_id,
+              date: payload?.new?.date,
+              hasReason: !!payload?.new?.reason,
+            });
             await this.handleBlockedDateChange(payload);
           }
         )
         .subscribe((status: string) => {
           if (status === 'SUBSCRIBED') {
-            logger.info('✅ Subscribed to business_blocked_dates realtime changes');
+            logger.info('✅ [REALTIME] Successfully subscribed to business_blocked_dates - listening for auto-generation of reason_message', {
+              channel: 'public:business_blocked_dates',
+            });
           } else if (status === 'CHANNEL_ERROR') {
-            logger.error('❌ Error subscribing to business_blocked_dates');
+            logger.error('❌ [REALTIME] Error subscribing to business_blocked_dates', { status });
+          } else {
+            logger.info('📡 [REALTIME] business_blocked_dates subscription status update', { status });
           }
         });
 
       this.subscriptions.set('business_blocked_dates', subscription);
+      logger.info('💾 [REALTIME] business_blocked_dates subscription stored in registry');
     } catch (error) {
-      logger.error('Failed to subscribe to business_blocked_dates', { error });
+      logger.error('❌ [REALTIME] Failed to subscribe to business_blocked_dates', { error });
     }
   }
 
   /**
-   * Generate and store `reason_message` for a blocked date.
-   * Skipped when there is no `reason` to work from, and when a message already
-   * matches the current reason — which also keeps our own `reason_message`
-   * write from re-triggering this handler in a loop.
+   * Generate and store `reason_message` for a blocked date when detected from
+   * realtime changes (e.g., created from external dashboard).
+   *
+   * Generates message when:
+   * - A date is newly inserted with a reason but no reason_message yet
+   * - A date is updated with a new or changed reason
+   *
+   * Skips generation when a message already exists for the current reason
+   * to avoid re-triggering when our own write occurs.
    */
   private static async handleBlockedDateChange(payload: any): Promise<void> {
     try {
+      const eventType = payload?.eventType || 'UNKNOWN';
       const newRow = payload?.new;
       const oldRow = payload?.old;
-      if (!newRow) return;
+
+      if (!newRow) {
+        logger.debug('Blocked date change: skipped (no new row)', { eventType });
+        return;
+      }
 
       const businessId: string | undefined = newRow.business_id;
       const date: string | undefined = newRow.date;
       const reason: string | null = newRow.reason?.trim() || null;
+      const reasonMessage: string | null = newRow.reason_message || null;
 
-      if (!businessId || !date || !reason) return;
+      logger.info('🔍 [BLOCKED_DATE] Realtime change detected', {
+        eventType,
+        businessId,
+        date,
+        hasReason: !!reason,
+        hasReasonMessage: !!reasonMessage,
+        oldReason: oldRow?.reason?.trim() || null,
+      });
 
-      // Nothing to do when a message is already stored for this exact reason:
-      // either the API path pre-generated it, or this UPDATE is our own write.
-      const reasonUnchanged = !oldRow || oldRow.reason?.trim() === reason;
-      if (newRow.reason_message && reasonUnchanged) return;
+      // Skip if missing required fields
+      if (!businessId || !date || !reason) {
+        logger.debug('[BLOCKED_DATE] Skipped: missing businessId, date, or reason', {
+          businessId,
+          date,
+          reason,
+        });
+        return;
+      }
+
+      // Check if message already exists for this reason
+      if (reasonMessage) {
+        logger.info('⏭️ [BLOCKED_DATE] Skipped: reason_message already exists', {
+          businessId,
+          date,
+          messageLength: reasonMessage.length,
+        });
+        return;
+      }
+
+      // Check if the reason changed (for UPDATE events)
+      const oldReason = oldRow?.reason?.trim() || null;
+      if (eventType === 'UPDATE' && oldReason === reason) {
+        logger.debug('[BLOCKED_DATE] Skipped: reason unchanged in UPDATE', {
+          businessId,
+          date,
+          reason,
+        });
+        return;
+      }
+
+      logger.info('🚀 [BLOCKED_DATE] Starting reason_message generation from realtime', {
+        businessId,
+        date,
+        reason,
+        eventType,
+      });
 
       const business = await SupabaseService.getBusinessById(businessId);
-      const reasonMessage = await openRouterService.generateBlockedDateReasonMessage(
+      const generatedMessage = await openRouterService.generateBlockedDateReasonMessage(
         reason,
         business?.name,
         business?.type
       );
 
-      await SupabaseService.updateBlockedDateReasonMessage(businessId, date, reasonMessage);
+      await SupabaseService.updateBlockedDateReasonMessage(businessId, date, generatedMessage);
 
-      logger.info('Blocked date reason_message pre-generated from realtime', {
+      logger.info('✅ [BLOCKED_DATE] reason_message generated and saved from realtime', {
         businessId,
         date,
-        event: payload?.eventType,
+        eventType,
+        messageLength: generatedMessage.length,
       });
     } catch (error) {
-      // Non-critical: the WhatsApp handler still generates on-the-fly as fallback.
-      logger.warn('Failed to pre-generate blocked date reason_message', {
-        error,
+      logger.error('❌ [BLOCKED_DATE] Failed to generate reason_message from realtime', {
+        error: error instanceof Error ? error.message : 'Unknown error',
         businessId: payload?.new?.business_id,
         date: payload?.new?.date,
+        eventType: payload?.eventType,
+        stack: error instanceof Error ? error.stack : undefined,
       });
     }
   }
