@@ -155,6 +155,7 @@ export function evaluateReservationScope(
       /^[0-9]+$/.test(trimmedMessage) ||
       isInstantChoiceMessage(normalizedMessage) ||
       hasDateOrTimeSignal(trimmedMessage, normalizedMessage) ||
+      isAskingOtherDaysScheduleMessage(normalizedMessage) ||
       reservationRelated ||
       isGreetingOrOptIn
     ) {
@@ -171,6 +172,7 @@ export function evaluateReservationScope(
   if (currentStep === 'date' || currentStep === 'time') {
     if (
       hasDateOrTimeSignal(trimmedMessage, normalizedMessage) ||
+      isAskingOtherDaysScheduleMessage(normalizedMessage) ||
       reservationRelated ||
       isGreetingOrOptIn
     ) {
@@ -288,6 +290,18 @@ export function looksLikePersonName(text: string): boolean {
 export function isGreetingOrReservationOptInMessage(text: string): boolean {
   const normalizedMessage = normalizeReservationScopeText(text);
   return isGreetingMessage(normalizedMessage) || isReservationOptInMessage(normalizedMessage);
+}
+
+/**
+ * Bare digits/punctuation with no letters at all (e.g. "1", "22", "..") carry
+ * no interpretable intent on their own — most often stray taps or a reaction
+ * to something outside the chat. When this falls through to 'off_topic', it
+ * should get the canned bounce message rather than being routed to the LLM:
+ * with no active draft to ground it, the LLM has nothing real to respond to
+ * and tends to hallucinate a plausible-sounding but fake reservation flow.
+ */
+export function isPureNoiseMessage(trimmedMessage: string): boolean {
+  return trimmedMessage.length > 0 && !/\p{L}/u.test(trimmedMessage);
 }
 
 function resolveBusinessName(businessName?: string): string {
@@ -528,6 +542,28 @@ export function hasDateOrTimeSignal(message: string, normalizedMessage: string):
     hasSpacedTime ||
     hasSlashDate
   );
+}
+
+/**
+ * Detects a customer asking about the schedule of OTHER days instead of
+ * answering the pending day/time question — e.g. after being told Saturday's
+ * hours, "¿y los horarios de los otros días?" or "¿qué días abren?". Used to
+ * let this kind of question through as `allow` at the `schedule_choice`/
+ * `date`/`time` steps (see whatsapp-handler.service.ts) instead of bouncing
+ * it to the LLM fallback, which has no access to `weekly_hours` and ends up
+ * falsely claiming it doesn't have the information.
+ */
+export function isAskingOtherDaysScheduleMessage(normalizedMessage: string): boolean {
+  const patterns = [
+    /\bhorarios?\b.*\b(otro|otros|dem[a]s|todos)\s+(los\s+)?dias?\b/,
+    /\b(otro|otros|dem[a]s)\s+dias?\b.*\bhorarios?\b/,
+    /\bhorarios?\s+de\s+(la\s+semana|todos\s+los\s+dias)\b/,
+    /\bque\s+dias?\s+(abren|atienden|trabajan|estan\s+abiertos?)\b/,
+    /\bcuales?\s+son\s+(sus|los)\s+horarios\b/,
+    /\botro\s+dia\b.*\bhorario\b/,
+  ];
+
+  return patterns.some((pattern) => pattern.test(normalizedMessage));
 }
 
 /**

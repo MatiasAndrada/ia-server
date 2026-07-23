@@ -62,8 +62,6 @@ export function askDayClosedToday(openDays?: string | null): string {
   );
 }
 
-const LIST_EMOJIS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣'];
-
 /**
  * Shown instead of {@link askScheduleChoice} when today is already closed —
  * skips the "Hoy / Otra fecha" question entirely and jumps straight to
@@ -77,7 +75,7 @@ export function askDayClosedTodayWithSchedule(dayLines: string[]): string {
       `Escribinos más adelante para coordinar tu reserva.`
     );
   }
-  const list = dayLines.map((line, i) => `${LIST_EMOJIS[i] ?? `${i + 1}.`} ${line}`).join('\n');
+  const list = dayLines.join('\n');
   return (
     `⛔ Hoy está cerrado.\n\n` +
     `📅 ¿Para cuál de estos días querés la reserva?\n\n` +
@@ -95,6 +93,19 @@ export function askDay(openDays?: string | null): string {
     );
   }
   return `📅 ¿Qué día preferís? Podés decir "mañana", "el viernes", etc.`;
+}
+
+/**
+ * Answers "¿y los horarios de los otros días?" with the real upcoming
+ * open days/hours, instead of the bot falsely claiming it doesn't have
+ * that information (see reservation-scope.ts's isAskingOtherDaysScheduleMessage).
+ */
+export function otherDaysSchedule(dayLines: string[]): string {
+  if (dayLines.length === 0) {
+    return '📅 Por ahora no tengo más días con disponibilidad para mostrarte.';
+  }
+  const list = dayLines.map((line) => `• ${line}`).join('\n');
+  return `📅 Estos son los horarios de los próximos días:\n\n${list}`;
 }
 
 export function askTime(dayLabel: string, hoursRange?: string | null): string {

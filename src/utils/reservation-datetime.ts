@@ -397,8 +397,9 @@ export function getUpcomingOpenDaysWithHours(
     if (!entry || entry.closed || entry.shifts.length === 0) continue;
 
     const label = formatDayLabel(date, false);
+    const capitalizedLabel = label.charAt(0).toUpperCase() + label.slice(1);
     const hours = formatDayHoursForDate(date, weeklyHours, openingMarginMinutes, closingMarginMinutes);
-    lines.push(`${label} - ${hours}`);
+    lines.push(`${capitalizedLabel} - ${hours}`);
   }
 
   return lines;
@@ -575,6 +576,37 @@ export function isWithinCurrentShift(
   const activeShift = findActiveShift(nowBA, nowBA.getUTCHours(), nowBA.getUTCMinutes(), weeklyHours, closingMarginMinutes);
   if (!activeShift) return false;
   return isMinuteInShift(hour * 60 + minute, activeShift, closingMarginMinutes);
+}
+
+/**
+ * True when today still has at least one bookable moment left, i.e. some
+ * configured shift's effective close (raw close time minus the closing
+ * margin) is still ahead of `nowBA` — whether that shift is already in
+ * progress or starts later today. A cross-midnight shift (close time earlier
+ * than its own open time, e.g. "20:00"–"02:00") always counts as still open
+ * today since it runs past midnight into tomorrow.
+ *
+ * Used to tell a genuine "today or next week?" ambiguity (naming today's own
+ * weekday while there's still time to book into today) apart from naming a
+ * weekday after the business has already closed for the day, where "today"
+ * isn't a real option anymore and the customer can only mean next week.
+ */
+export function hasBookableMomentLeftToday(
+  nowBA: Date,
+  weeklyHours: WeeklyHours,
+  closingMarginMinutes = 0
+): boolean {
+  const dayKey = DOW_TO_KEY[nowBA.getUTCDay()];
+  const entry = weeklyHours[dayKey];
+  if (!entry || entry.closed || entry.shifts.length === 0) return false;
+
+  const nowMin = nowBA.getUTCHours() * 60 + nowBA.getUTCMinutes();
+  return entry.shifts.some(s => {
+    const open = minutesOfDay(s.open);
+    const closeRaw = s.close === '00:00' ? 24 * 60 : minutesOfDay(s.close);
+    if (closeRaw <= open) return true; // cross-midnight shift: still open into tomorrow
+    return nowMin < closeRaw - closingMarginMinutes;
+  });
 }
 
 /**
