@@ -1,10 +1,10 @@
 import { Request, Response } from 'express';
-import { ChatRequest, ChatResponse, BatchRequest, BatchResponse, OllamaMessage } from '../types';
-import { ollamaService } from '../services/ollama.service';
+import { ChatRequest, ChatResponse, BatchRequest, BatchResponse, LlmMessage } from '../types';
+import { openRouterService } from '../services/openrouter.service';
 import { conversationService } from '../services/conversation.service';
 import { intentService } from '../services/intent.service';
 import { buildSystemPrompt } from '../utils/prompts';
-import { parseActions, calculateConfidence, cleanResponseText } from '../utils/actions';
+import { buildActionTool, parseToolCallActions, calculateConfidence, cleanResponseText } from '../utils/actions';
 import { logger } from '../utils/logger';
 
 /**
@@ -29,8 +29,8 @@ export async function chatHandler(req: Request, res: Response) {
     // Build system prompt with business context
     const systemPrompt = buildSystemPrompt(context);
 
-    // Build messages array for Ollama
-    const ollamaMessages: OllamaMessage[] = [
+    // Build messages array for the LLM
+    const llmMessages: LlmMessage[] = [
       ...history.map((msg) => ({
         role: msg.role as 'user' | 'assistant',
         content: msg.content,
@@ -41,13 +41,17 @@ export async function chatHandler(req: Request, res: Response) {
       },
     ];
 
-    // Get AI response
-    const aiResponse = await ollamaService.chat(ollamaMessages, systemPrompt);
+    // Get AI response — actions come back as native tool calls, not a text marker
+    const { content: aiResponse, toolCalls } = await openRouterService.chatWithActions(
+      llmMessages,
+      systemPrompt,
+      [buildActionTool()]
+    );
 
-    // Parse actions from response
-    const actions = parseActions(aiResponse);
+    // Parse actions from tool calls (schema-validated, not regex-guessed)
+    const actions = parseToolCallActions(toolCalls);
 
-    // Clean response text (remove action markers)
+    // Clean response text (defensive: strips any stray legacy markers)
     const cleanResponse = cleanResponseText(aiResponse);
 
     // Calculate confidence
@@ -182,7 +186,7 @@ export async function batchHandler(req: Request, res: Response) {
           const systemPrompt = buildSystemPrompt(msg.context);
 
           // Build messages array
-          const ollamaMessages: OllamaMessage[] = [
+          const llmMessages: LlmMessage[] = [
             ...history.map((h) => ({
               role: h.role as 'user' | 'assistant',
               content: h.content,
@@ -193,11 +197,15 @@ export async function batchHandler(req: Request, res: Response) {
             },
           ];
 
-          // Get AI response
-          const aiResponse = await ollamaService.chat(ollamaMessages, systemPrompt);
+          // Get AI response — actions come back as native tool calls
+          const { content: aiResponse, toolCalls } = await openRouterService.chatWithActions(
+            llmMessages,
+            systemPrompt,
+            [buildActionTool()]
+          );
 
-          // Parse actions
-          const actions = parseActions(aiResponse);
+          // Parse actions from tool calls
+          const actions = parseToolCallActions(toolCalls);
 
           // Clean response
           const cleanResponse = cleanResponseText(aiResponse);

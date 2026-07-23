@@ -5,7 +5,7 @@ import type { Database } from '../types/supabase';
 import * as templates from '../utils/message-templates';
 import { PostVisitService } from './post-visit.service';
 import { SupabaseService } from './supabase.service';
-import { ollamaService } from './ollama.service';
+import { openRouterService } from './openrouter.service';
 
 // Helper types for strict type safety
 type CustomersRow = Database['public']['Tables']['customers']['Row'];
@@ -876,7 +876,7 @@ export class RealtimeSyncService {
       if (newRow.reason_message && reasonUnchanged) return;
 
       const business = await SupabaseService.getBusinessById(businessId);
-      const reasonMessage = await ollamaService.generateBlockedDateReasonMessage(
+      const reasonMessage = await openRouterService.generateBlockedDateReasonMessage(
         reason,
         business?.name,
         business?.type

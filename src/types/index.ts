@@ -60,7 +60,7 @@ export interface BatchResponse {
 
 export interface HealthResponse {
   status: 'healthy' | 'degraded' | 'unhealthy';
-  ollama: boolean;
+  llm: boolean;
   redis: boolean;
   model: string;
   uptime: number;
@@ -98,6 +98,8 @@ export interface AgentConfig {
   actions?: AgentActionDefinition[];
   temperature?: number;
   maxTokens?: number;
+  /** See {@link LlmGenerationOptions.reasoningMaxTokens}. */
+  reasoningMaxTokens?: number;
   numCtx?: number;
   enabled?: boolean;
 }
@@ -180,37 +182,72 @@ export interface ConversationHistory {
   lastUpdated: number;
 }
 
-// Ollama Types
-export interface OllamaMessage {
+// LLM (OpenRouter) Types
+export interface LlmMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
 }
 
-export interface OllamaGenerationOptions {
+export interface LlmGenerationOptions {
   temperature?: number;
   top_p?: number;
-  num_predict?: number;
-  num_ctx?: number;
+  maxTokens?: number;
+  /**
+   * Caps the model's internal reasoning/"thinking" tokens (OpenRouter's unified
+   * `reasoning.max_tokens`). Reasoning models like google/gemini-2.5-pro draw
+   * thinking tokens from the same `maxTokens` budget by default and can consume
+   * nearly all of it unpredictably, truncating the visible reply mid-sentence —
+   * this bounds that so the visible answer always has room.
+   */
+  reasoningMaxTokens?: number;
 }
 
-export interface OllamaRequest {
-  model: string;
-  messages: OllamaMessage[];
-  stream?: boolean;
-  options?: OllamaGenerationOptions;
-}
-
-export interface OllamaResponse {
-  model: string;
-  message: {
-    role: string;
-    content: string;
+export interface LlmToolDefinition {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, any>;
   };
-  done: boolean;
-  total_duration?: number;
-  load_duration?: number;
-  prompt_eval_count?: number;
-  eval_count?: number;
+}
+
+export interface LlmToolCall {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string; // JSON string, must be JSON.parse'd
+  };
+}
+
+export interface OpenRouterChatCompletionRequest {
+  model: string;
+  models?: string[]; // fallback routing: tried in order if the primary is unavailable
+  messages: LlmMessage[];
+  temperature?: number;
+  top_p?: number;
+  max_tokens?: number;
+  reasoning?: { max_tokens?: number };
+  tools?: LlmToolDefinition[];
+  tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
+}
+
+export interface OpenRouterChatCompletionResponse {
+  id: string;
+  model: string;
+  choices: Array<{
+    message: {
+      role: string;
+      content: string | null;
+      tool_calls?: LlmToolCall[];
+    };
+    finish_reason: string;
+  }>;
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
 }
 
 // Error Types
@@ -230,9 +267,12 @@ export interface CachedBusinessContext extends BusinessContext {
 export interface EnvConfig {
   port: number;
   nodeEnv: string;
-  ollamaBaseUrl: string;
-  ollamaModel: string;
-  ollamaTimeout: number;
+  openRouterApiKey: string;
+  openRouterModel: string;
+  openRouterFallbackModels: string[];
+  openRouterTimeout: number;
+  openRouterSiteUrl?: string;
+  openRouterSiteName?: string;
   apiKey: string;
   allowedOrigins: string[];
   redisUrl: string;
@@ -310,9 +350,12 @@ export interface ReservationDraft {
   conversationId: string;
   businessId: string;
   customerName?: string;
+  /** Apellido — collected in the `last_name` step; combined with customerName for the reservation detail. */
+  customerLastName?: string;
   partySize?: number;
   step:
     | 'name'
+    | 'last_name'
     | 'party_size'
     | 'schedule_choice'
     | 'date'
@@ -324,9 +367,15 @@ export interface ReservationDraft {
     | 'cancel_confirm'
     | 'reservation_selection'
     | 'completed'
-    | 'edit_menu';
+    | 'edit_menu'
+    | 'edit_customer_name';
+  // edit_customer_name step: which part of the stored name is being changed.
+  nameEditField?: 'full' | 'lastName';
   // Reservation selection state for multiple active reservations.
   availableReservationIds?: string[];
+  // What to do once the customer picks one of several active reservations:
+  // open the edit menu (default) or go straight to the cancel menu.
+  pendingSelectionAction?: 'edit' | 'cancel';
   // Scheduling fields (day/time chosen within the next 7 days; absent = instant/turno actual)
   scheduledDate?: string; // YYYY-MM-DD, Buenos Aires local day
   scheduledTime?: string; // HH:mm, 24h
@@ -387,6 +436,8 @@ export interface ReservationDraft {
 export interface CreateReservationRequest {
   businessId: string;
   customerName: string;
+  /** Apellido, stored in customers.lastName; optional for legacy/instant flows. */
+  customerLastName?: string | null;
   customerPhone: string;
   partySize: number;
   tableId?: string;

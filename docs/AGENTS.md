@@ -16,7 +16,7 @@ El servidor ahora soporta múltiples agentes de IA con diferentes propósitos y 
 
 **ID:** `waitlist`  
 **Propósito:** Gestión de listas de espera para restaurantes vía WhatsApp  
-**Modelo:** `llama3.2`
+**Modelo:** `openrouter` (resuelto por OPENROUTER_MODEL)
 
 **Acciones soportadas:**
 - `CHECK_STATUS` - Consultar estado en la lista
@@ -162,7 +162,7 @@ export const salesAgent: AgentConfig = {
   id: 'sales',
   name: 'Asistente de Ventas',
   description: 'Asiste en consultas y cotizaciones de productos',
-  model: 'llama3.2',
+  model: 'openrouter',
   temperature: 0.8,
   maxTokens: 600,
   enabled: true,

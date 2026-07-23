@@ -1,116 +1,80 @@
-import { Action, ActionType } from '../types';
+import { Action, ActionType, LlmToolCall, LlmToolDefinition } from '../types';
 import { logger } from './logger';
 
-/**
- * Parses actions from AI response text
- * Format: [ACTION:type:{"key": "value"}]
- */
-export function parseActions(responseText: string): Action[] {
-  const actions: Action[] = [];
-  
-  // Regex to match [ACTION:type:json]
-  const actionRegex = /\[ACTION:(\w+):(.*?)\]/g;
-  let match;
+const VALID_ACTION_TYPES: ActionType[] = ['REGISTER', 'CHECK_STATUS', 'CANCEL', 'INFO_REQUEST'];
 
-  while ((match = actionRegex.exec(responseText)) !== null) {
+/**
+ * Tool definition passed to the LLM so it emits structured, schema-validated
+ * actions via native tool calling instead of a hand-rolled [ACTION:...] text
+ * marker that had to be regex-parsed (and could be malformed or hallucinated).
+ */
+export function buildActionTool(): LlmToolDefinition {
+  return {
+    type: 'function',
+    function: {
+      name: 'emit_action',
+      description:
+        'Registra la acción concreta que corresponde a la intención del cliente en este turno. ' +
+        'Llamala solo cuando el mensaje del cliente efectivamente dispara una de estas acciones; ' +
+        'si el turno es solo conversación (saludo, pregunta general sin acción clara), no la llames.',
+      parameters: {
+        type: 'object',
+        properties: {
+          type: {
+            type: 'string',
+            enum: VALID_ACTION_TYPES,
+            description:
+              'REGISTER: anotar al cliente en la lista de espera. CHECK_STATUS: consultar posición/tiempo de espera. ' +
+              'CANCEL: cancelar la entrada del cliente. INFO_REQUEST: el cliente pide información del local.',
+          },
+          name: { type: 'string', description: 'Nombre del cliente, si lo mencionó.' },
+          partySize: { type: 'integer', description: 'Cantidad de personas, si la mencionó.' },
+          preferences: { type: 'string', description: 'Preferencias especiales mencionadas.' },
+          reason: { type: 'string', description: 'Motivo de cancelación, si aplica.' },
+        },
+        required: ['type'],
+        additionalProperties: false,
+      },
+    },
+  };
+}
+
+/**
+ * Converts tool_calls returned by the LLM into the Action[] shape the rest
+ * of the app expects. Unlike the old regex-based parseActions, every action
+ * here already validated against the tool's JSON schema before arriving.
+ */
+export function parseToolCallActions(toolCalls: LlmToolCall[]): Action[] {
+  const actions: Action[] = [];
+
+  for (const call of toolCalls) {
+    if (call.function?.name !== 'emit_action') continue;
+
     try {
-      const type = match[1] as ActionType;
-      const dataStr = match[2];
-      
-      // Parse JSON data
-      const data = JSON.parse(dataStr);
-      
+      const parsed = JSON.parse(call.function.arguments);
+      const type = parsed.type as ActionType;
+
+      if (!VALID_ACTION_TYPES.includes(type)) {
+        logger.warn('Model emitted an action with an unknown type', { type });
+        continue;
+      }
+
+      const { type: _discard, ...data } = parsed;
+
       actions.push({
         type,
         data,
-        confidence: 0.9, // High confidence for explicitly formatted actions
+        confidence: 0.9,
       });
     } catch (error) {
-      logger.warn('Failed to parse action from response', { 
-        match: match[0],
-        error: error instanceof Error ? error.message : 'Unknown error'
+      logger.warn('Failed to parse tool call arguments', {
+        arguments: call.function?.arguments,
+        error: error instanceof Error ? error.message : 'Unknown error',
       });
-    }
-  }
-
-  // If no explicit actions found, try to infer from content
-  if (actions.length === 0) {
-    const inferredAction = inferActionFromText(responseText);
-    if (inferredAction) {
-      actions.push(inferredAction);
     }
   }
 
   return actions;
-}
-
-/**
- * Infers action type from response text when not explicitly formatted
- */
-function inferActionFromText(text: string): Action | null {
-  const lowerText = text.toLowerCase();
-
-  // Check for status query first (more specific)
-  if (
-    lowerText.includes('posición') ||
-    lowerText.includes('posicion') ||
-    lowerText.includes('cuánto falta') ||
-    lowerText.includes('cuanto falta') ||
-    lowerText.includes('tiempo de espera')
-  ) {
-    return {
-      type: 'CHECK_STATUS',
-      data: { inferred: true },
-      confidence: 0.7,
-    };
-  }
-
-  // Check for registration intent
-  if (
-    lowerText.includes('anot') ||
-    lowerText.includes('registr') ||
-    (lowerText.includes('lista de espera') && !lowerText.includes('posición')) ||
-    (lowerText.includes('nombre') && lowerText.includes('personas'))
-  ) {
-    return {
-      type: 'REGISTER',
-      data: { inferred: true },
-      confidence: 0.6,
-    };
-  }
-
-  // Check for cancellation
-  if (
-    lowerText.includes('cancelar') ||
-    lowerText.includes('no voy') ||
-    lowerText.includes('no podré') ||
-    lowerText.includes('no podre')
-  ) {
-    return {
-      type: 'CANCEL',
-      data: { inferred: true },
-      confidence: 0.8,
-    };
-  }
-
-  // Check for info request
-  if (
-    lowerText.includes('dirección') ||
-    lowerText.includes('direccion') ||
-    lowerText.includes('ubicación') ||
-    lowerText.includes('ubicacion') ||
-    lowerText.includes('horario') ||
-    lowerText.includes('dónde') ||
-    lowerText.includes('donde')
-  ) {
-    return {
-      type: 'INFO_REQUEST',
-      data: { inferred: true },
-      confidence: 0.65,
-    };
-  }
-
-  return null;
 }
 
 /**

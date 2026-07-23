@@ -300,8 +300,14 @@ function minutesOfDay(hhmm: string): number {
   return h * 60 + m;
 }
 
-function isMinuteInShift(t: number, shift: WeeklyHoursShift, closingMarginMinutes = 0): boolean {
-  const open = minutesOfDay(shift.open);
+function isMinuteInShift(
+  t: number,
+  shift: WeeklyHoursShift,
+  closingMarginMinutes = 0,
+  openingMarginMinutes = 0
+): boolean {
+  // The first bookable minute is the opening time plus the opening margin.
+  const open = minutesOfDay(shift.open) + openingMarginMinutes;
   // "00:00" as close = end of day (midnight = 1440 min, no cross-midnight)
   const close = (shift.close === '00:00' ? 24 * 60 : minutesOfDay(shift.close)) - closingMarginMinutes;
   if (close > open) {
@@ -309,6 +315,14 @@ function isMinuteInShift(t: number, shift: WeeklyHoursShift, closingMarginMinute
   }
   // Cross-midnight shift: valid in the evening (>= open) or early morning (< close)
   return t >= open || t < close;
+}
+
+/** Formats a minutes-of-day value ("HH:MM", 24h). 1440 (midnight end) → "00:00". */
+function formatMinutesOfDay(min: number): string {
+  const wrapped = ((min % (24 * 60)) + 24 * 60) % (24 * 60);
+  const h = Math.floor(wrapped / 60);
+  const m = wrapped % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
 /**
@@ -357,16 +371,78 @@ export function formatBookableDays(
     .join(', ');
 }
 
-/** Human-readable shift ranges for a day, e.g. "08:00–14:00 y 17:00–02:00". */
-export function formatDayHours(dayKey: WeeklyHoursDayKey, weeklyHours: WeeklyHours): string {
+/**
+ * Next open, unblocked days (starting tomorrow) with their bookable hour
+ * ranges, e.g. "jueves 23/07 - 09:15–12:00 y 16:30–22:00". Used to list
+ * concrete alternatives when today is closed, instead of just weekday names
+ * (see {@link formatBookableDays}).
+ */
+export function getUpcomingOpenDaysWithHours(
+  weeklyHours: WeeklyHours,
+  nowBA: Date,
+  isDateBlockedFn: (dateKey: string) => boolean,
+  openingMarginMinutes = 0,
+  closingMarginMinutes = 0,
+  limit = 3
+): string[] {
+  const todayStart = startOfBaDay(nowBA);
+  const lines: string[] = [];
+
+  for (let daysAhead = 1; daysAhead < REQUESTED_DAY_WINDOW && lines.length < limit; daysAhead++) {
+    const date = addBaDays(todayStart, daysAhead);
+    const dateKey = formatBaDateKey(date);
+    if (isDateBlockedFn(dateKey)) continue;
+
+    const entry = weeklyHours[DOW_TO_KEY[date.getUTCDay()]];
+    if (!entry || entry.closed || entry.shifts.length === 0) continue;
+
+    const label = formatDayLabel(date, false);
+    const hours = formatDayHoursForDate(date, weeklyHours, openingMarginMinutes, closingMarginMinutes);
+    lines.push(`${label} - ${hours}`);
+  }
+
+  return lines;
+}
+
+/**
+ * Human-readable shift ranges for a day, e.g. "08:00–14:00 y 17:00–02:00".
+ * When `openingMarginMinutes`/`closingMarginMinutes` are given, the displayed
+ * range is the actually-bookable window (opening + margin → close − margin), so
+ * what the customer is shown matches what the time validation accepts.
+ */
+export function formatDayHours(
+  dayKey: WeeklyHoursDayKey,
+  weeklyHours: WeeklyHours,
+  openingMarginMinutes = 0,
+  closingMarginMinutes = 0
+): string {
   const entry = weeklyHours[dayKey];
   if (!entry || entry.closed || entry.shifts.length === 0) return 'cerrado';
-  return entry.shifts.map(s => `${s.open}–${s.close}`).join(' y ');
+  if (openingMarginMinutes === 0 && closingMarginMinutes === 0) {
+    return entry.shifts.map(s => `${s.open}–${s.close}`).join(' y ');
+  }
+  return entry.shifts
+    .map(s => {
+      const openMin = minutesOfDay(s.open) + openingMarginMinutes;
+      const closeRaw = s.close === '00:00' ? 24 * 60 : minutesOfDay(s.close);
+      const closeMin = closeRaw - closingMarginMinutes;
+      // Degenerate window (margins collapse it) — fall back to the raw range.
+      if (closeRaw > minutesOfDay(s.open) && closeMin <= openMin) {
+        return `${s.open}–${s.close}`;
+      }
+      return `${formatMinutesOfDay(openMin)}–${formatMinutesOfDay(closeMin)}`;
+    })
+    .join(' y ');
 }
 
 /** Same as {@link formatDayHours} but keyed off a BA calendar Date instead of a weekday key. */
-export function formatDayHoursForDate(baDate: Date, weeklyHours: WeeklyHours): string {
-  return formatDayHours(DOW_TO_KEY[baDate.getUTCDay()], weeklyHours);
+export function formatDayHoursForDate(
+  baDate: Date,
+  weeklyHours: WeeklyHours,
+  openingMarginMinutes = 0,
+  closingMarginMinutes = 0
+): string {
+  return formatDayHours(DOW_TO_KEY[baDate.getUTCDay()], weeklyHours, openingMarginMinutes, closingMarginMinutes);
 }
 
 /**
@@ -629,7 +705,8 @@ export function checkBusinessHours(
   hour: number,
   minute: number,
   weeklyHours: WeeklyHours,
-  closingMarginMinutes = 0
+  closingMarginMinutes = 0,
+  openingMarginMinutes = 0
 ): { allowed: boolean; reason?: string } {
   const dow = baDate.getUTCDay();
   const dayKey = DOW_TO_KEY[dow];
@@ -640,7 +717,11 @@ export function checkBusinessHours(
   const prevDayEntry = weeklyHours[prevDayKey];
 
   // Check current day's shifts
-  if (dayEntry && !dayEntry.closed && dayEntry.shifts.some(s => isMinuteInShift(t, s, closingMarginMinutes))) {
+  if (
+    dayEntry &&
+    !dayEntry.closed &&
+    dayEntry.shifts.some(s => isMinuteInShift(t, s, closingMarginMinutes, openingMarginMinutes))
+  ) {
     return { allowed: true };
   }
 
@@ -660,10 +741,10 @@ export function checkBusinessHours(
     return { allowed: false, reason: `El local está cerrado los ${DOW_LABELS_ES[dow]}.` };
   }
 
-  const hoursDesc = formatDayHours(dayKey, weeklyHours);
+  const hoursDesc = formatDayHours(dayKey, weeklyHours, openingMarginMinutes, closingMarginMinutes);
   return {
     allowed: false,
-    reason: `El ${DOW_LABELS_ES[dow]} el local abre de ${hoursDesc}. Por favor elegí un horario dentro de ese rango.`,
+    reason: `El ${DOW_LABELS_ES[dow]} se puede reservar de ${hoursDesc}. Por favor elegí un horario dentro de ese rango.`,
   };
 }
 
@@ -681,7 +762,7 @@ export function isDateBlocked(dateKey: string, blockedDates: ReadonlyMap<string,
 
 /**
  * Returns the pre-stored client-facing message for a blocked date, or null
- * when none exists yet. Callers that need on-the-fly Ollama generation should
+ * when none exists yet. Callers that need on-the-fly LLM generation should
  * use `WhatsAppHandler.resolveBlockedDateMessage` instead.
  */
 export function getBlockedDateReasonMessage(

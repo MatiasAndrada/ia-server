@@ -32,9 +32,9 @@ Si no se configuran certificados, el servidor usa HTTP para desarrollo.
   - Example response (200):
     {
       "status": "healthy",
-      "ollama": true,
+      "llm": true,
       "redis": true,
-      "model": "llama3.2",
+      "model": "anthropic/claude-3.5-sonnet",
       "uptime": 12345,
       "timestamp": "2026-02-11T18:05:21.123Z"
     }
@@ -155,7 +155,7 @@ Si no se configuran certificados, el servidor usa HTTP para desarrollo.
         "id": "waitlist",
         "name": "Asistente de Lista de Espera",
         "description": "...",
-        "model": "llama3.2",
+        "model": "openrouter",
         "enabled": true,
         "actions": [
           { "type": "CHECK_STATUS", "description": "Consultar estado" }

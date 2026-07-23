@@ -1,18 +1,19 @@
 import { BaileysService } from './baileys.service';
 import { agentService } from './agent.service';
-import { ollamaService } from './ollama.service';
+import { openRouterService } from './openrouter.service';
 import { ReservationService } from './reservation.service';
 import { SupabaseService } from './supabase.service';
 import { SupabaseConfig } from '../config/supabase';
 import { RedisConfig } from '../config/redis';
 import { agentRegistry } from '../agents';
-import { BaileysMessage, BlockedDateEntry, ReservationDraft, WeeklyHours } from '../types';
+import { BaileysMessage, BlockedDateEntry, Customer, ReservationDraft, WaitlistEntry, WeeklyHours } from '../types';
 import { logger } from '../utils/logger';
+import { extractReservationUpdate, ReservationSlots } from './reservation-nlu.service';
+import { planReservationActions, countActionableIntents, PlannedAction } from './reservation-planner.service';
 import {
   evaluateReservationScope,
   isGreetingOrReservationOptInMessage,
   isObviouslyGibberish,
-  containsProfanity,
   isInstantChoiceMessage,
   normalizeReservationScopeText,
   hasDateOrTimeSignal,
@@ -43,10 +44,13 @@ import {
   utcIsoToBaParts,
   isDateBlocked,
   isFutureReservationBlockedToday,
+  isWithinCurrentShift,
   formatBookableDays,
+  getUpcomingOpenDaysWithHours,
   type ParsedDay,
 } from '../utils/reservation-datetime';
 import * as templates from '../utils/message-templates';
+import { formatBusinessAddress } from '../utils/prompts';
 
 type ActiveReservationSnapshot = {
   status: 'WAITING' | 'CONFIRMED' | 'NOTIFIED';
@@ -96,7 +100,7 @@ export class WhatsAppHandler {
    * Multiple messages arriving within DEBOUNCE_MS are merged into a single call
    * to _processMessage, producing exactly one response.
    *
-   * If a previous batch is still being processed (Ollama latency), incoming
+   * If a previous batch is still being processed (LLM latency), incoming
    * messages are coalesced into a pending buffer. When the in-flight processing
    * finishes, the pending buffer is drained and merged into a single call,
    * ensuring the bot always responds to the latest user context.
@@ -106,7 +110,7 @@ export class WhatsAppHandler {
     const phone = this.normalizeWhatsAppNumber(from);
     const conversationId = `${businessId}-${phone}`;
 
-    // If there is active processing for this conversation (Ollama in-flight),
+    // If there is active processing for this conversation (LLM in-flight),
     // accumulate the message for processing after the current one finishes.
     if (this.processingLock.has(conversationId)) {
       const pending = this.pendingWhileProcessing.get(conversationId) ?? [];
@@ -274,14 +278,16 @@ export class WhatsAppHandler {
       ) {
         // Cancellation intent with a real reservation in DB → M3 menu
         // (reprogramar / cancelar definitivamente) instead of cancelling directly.
+        // With several active reservations, ask which one first.
         if (this.isCancellationIntent(messageText)) {
-          const phoneForCancel = this.normalizeWhatsAppNumber(from);
-          const activeRes = await SupabaseService.getActiveReservationByPhone(
-            phoneForCancel,
-            businessId
+          const routed = await this.routeToReservationAction(
+            'cancel',
+            businessId,
+            from,
+            conversationId,
+            false // no active reservation → fall through to the draft cancellation below
           );
-          if (activeRes) {
-            await this.startCancelFlow(conversationId, businessId, from, activeRes);
+          if (routed) {
             return;
           }
         }
@@ -302,30 +308,51 @@ export class WhatsAppHandler {
         return;
       }
 
+      // --- Multi-action message (e.g. "cancelá la del viernes y creá una para
+      // mañana a las 21") — detect and run every requested action, not just the
+      // first. Only when there's no active draft; gated by a cheap pre-filter so
+      // ordinary single-intent messages never hit the planner LLM. ---
+      if (!draft && this.isPotentialMultiActionMessage(messageText)) {
+        const multiHandled = await this.handleMultiActionMessage(
+          businessId,
+          from,
+          messageText,
+          conversationId,
+          businessStatus.name
+        );
+        if (multiHandled) {
+          logger.info('Multi-action message handled', { conversationId });
+          return;
+        }
+      }
+
       // --- Cancellation intent without an active draft ---
       // e.g. "la quiero cancelar", "cancelar mi reserva", "quiero cancelar"
       if (!draft && this.isCancellationIntent(messageText)) {
-        const phone = this.normalizeWhatsAppNumber(from);
-        const activeRes = await SupabaseService.getActiveReservationByPhone(phone, businessId);
-        if (activeRes) {
-          await this.startCancelFlow(conversationId, businessId, from, activeRes);
-        } else {
-          await this.sendWhatsAppMessage(businessId, from, templates.noActiveReservation());
-        }
+        await this.routeToReservationAction('cancel', businessId, from, conversationId);
         return;
       }
 
       // --- Modification intent without an active draft (M2) ---
       // e.g. "MODIFICAR", "quiero cambiar mi reserva"
       if (!draft && this.isModificationIntent(messageText)) {
-        const phone = this.normalizeWhatsAppNumber(from);
-        const activeRes = await SupabaseService.getActiveReservationByPhone(phone, businessId);
-        if (activeRes) {
-          await this.startEditMenuFlow(conversationId, businessId, from, activeRes);
-        } else {
-          await this.sendWhatsAppMessage(businessId, from, templates.noActiveReservation());
-        }
+        await this.routeToReservationAction('edit', businessId, from, conversationId);
         return;
+      }
+
+      // --- Name/apellido change intent without an active draft ---
+      // e.g. "cambiá mi nombre a Juan Pérez", "mi apellido es Gómez"
+      if (!draft && this.isNameChangeIntent(messageText)) {
+        const nameChangeHandled = await this.handleNameChangeIntent(
+          businessId,
+          from,
+          messageText,
+          conversationId
+        );
+        if (nameChangeHandled) {
+          logger.info('Name change intent handled', { conversationId });
+          return;
+        }
       }
 
       // --- Greeting: reset flow and check for active reservation ---
@@ -384,13 +411,46 @@ export class WhatsAppHandler {
         currentStep: draft?.step,
         awaitingNameCorrection: draft?.awaitingNameCorrection,
       });
-      if (scopeEvaluation.decision !== 'allow' && scopeEvaluation.message) {
-        await this.sendWhatsAppMessage(businessId, from, scopeEvaluation.message);
+      if (scopeEvaluation.decision === 'out_of_window' || scopeEvaluation.reason === 'prompt_injection') {
+        // Deterministic, non-negotiable: the 7-day window rule and prompt-injection
+        // attempts always get the canned message — never reach the LLM.
+        await this.sendWhatsAppMessage(businessId, from, scopeEvaluation.message!);
 
         logger.info('Reservation scope guard blocked WhatsApp flow', {
           conversationId,
           businessId,
           decision: scopeEvaluation.decision,
+          draftStep: draft?.step,
+        });
+        return;
+      }
+
+      if (scopeEvaluation.decision === 'off_topic') {
+        // Generic off-topic ("¿para qué servís?", general questions) — let the
+        // agent answer naturally instead of always sending the same canned
+        // bounce message. processAction()/processDraftStep() would otherwise
+        // discard this reply and re-send their own step message whenever a
+        // draft is active, so this is sent directly and the draft/step are
+        // left untouched — the customer can still answer the pending question
+        // afterwards exactly as before.
+        const naturalResponse = await agentService.generateResponse(
+          messageText,
+          agent,
+          conversationId,
+          {
+            businessId,
+            businessName: businessStatus.name,
+            businessAddress: formatBusinessAddress(businessStatus.address, businessStatus.city),
+            phone,
+            hasActiveDraft: !!draft,
+            currentStep: draft?.step,
+          }
+        );
+        await this.sendWhatsAppMessage(businessId, from, this.sanitizeAgentResponse(naturalResponse.response, draft));
+
+        logger.info('Off-topic message answered by the agent instead of the canned bounce', {
+          conversationId,
+          businessId,
           draftStep: draft?.step,
         });
         return;
@@ -416,13 +476,39 @@ export class WhatsAppHandler {
         // For explicit opt-ins like "Si", "Dale", "Ok" that are NOT greetings, start
         // the reservation flow directly without the "¡Hola!" intro, since the bot
         // already introduced itself in the scope-guard message.
+        //
+        // IMPORTANT: only assume this when the bot's own last message really was
+        // that canned prompt. Since off-topic messages can now also be answered
+        // by the agent in free text (see the off_topic branch above), a bare "Si"
+        // might instead be confirming something the AGENT just asked (e.g. "¿te
+        // cancelo la reserva de Matías Andrada del 22/07?") — blindly starting a
+        // brand-new reservation there would silently discard that pending
+        // confirmation. When the last bot turn wasn't the canned prompt, fall
+        // through and let the agent interpret the reply with its own history.
         const isOptIn = isGreetingOrReservationOptInMessage(messageText);
         const isGreeting = this.isGreetingMessage(messageText);
         if (isOptIn && !isGreeting) {
-          await ReservationService.startReservation(conversationId, businessId);
-          await this.sendWhatsAppMessage(businessId, from, templates.askName());
-          logger.info('Opt-in handled deterministically after scope block', { conversationId, isOptIn, isGreeting });
-          return;
+          const history = await agentService.getConversationHistory(conversationId);
+          const lastAssistantMessage = history
+            .slice()
+            .reverse()
+            .find((msg) => msg.role === 'assistant');
+          // No history at all (a brand-new conversation whose first message is
+          // a bare "Si") keeps the original assumption — there's nothing else
+          // it could be confirming. Only skip when there IS a last bot message
+          // and it's something other than the canned scope-guard prompt.
+          const lastMessageWasScopeGuardPrompt =
+            !lastAssistantMessage || lastAssistantMessage.content.includes('¿Querés hacer una reserva?');
+
+          if (lastMessageWasScopeGuardPrompt) {
+            await this.startNewReservationFlow(conversationId, businessId, from, phone, templates.askName());
+            logger.info('Opt-in handled deterministically after scope block', { conversationId, isOptIn, isGreeting });
+            return;
+          }
+
+          logger.info('Opt-in received but last bot message was not the scope-guard prompt — deferring to the agent', {
+            conversationId,
+          });
         }
       }
 
@@ -430,6 +516,7 @@ export class WhatsAppHandler {
       if (
         draft &&
         (draft.step === 'name' ||
+          draft.step === 'last_name' ||
           draft.step === 'party_size' ||
           draft.step === 'edit_menu' ||
           draft.step === 'schedule_choice' ||
@@ -438,7 +525,8 @@ export class WhatsAppHandler {
           draft.step === 'confirm_summary' ||
           draft.step === 'summary_edit_menu' ||
           draft.step === 'cancel_menu' ||
-          draft.step === 'cancel_confirm')
+          draft.step === 'cancel_confirm' ||
+          draft.step === 'edit_customer_name')
       ) {
         logger.info('⚡ Bypassing agent for deterministic draft step', {
           conversationId,
@@ -482,6 +570,7 @@ export class WhatsAppHandler {
       const context: any = {
         businessId,
         businessName,
+        businessAddress: formatBusinessAddress(business?.address, business?.city),
         phone,
         hasActiveDraft: !!draft,
       };
@@ -491,6 +580,8 @@ export class WhatsAppHandler {
         context.draftData = {
           customerName: draft.customerName,
           partySize: draft.partySize,
+          scheduledDate: draft.scheduledDate,
+          scheduledTime: draft.scheduledTime,
         };
       }
       // CRITICAL FIX: Auto-create draft BEFORE generating agent response
@@ -521,7 +612,7 @@ export class WhatsAppHandler {
 
             if (isAskingForName && looksLikeName) {
               const extractedName = this.extractNameFromMessage(messageText);
-              if (isObviouslyGibberish(extractedName) || containsProfanity(extractedName)) {
+              if (isObviouslyGibberish(extractedName)) {
                 logger.info('Invalid name rejected in auto-creation path — re-asking', { conversationId, candidate: extractedName });
                 await this.sendWhatsAppMessage(
                   businessId,
@@ -533,17 +624,21 @@ export class WhatsAppHandler {
 
               logger.info('🎬 Auto-creating reservation draft', { conversationId, businessId, userName: messageText });
 
-              // Create draft and set customer name
+              // Create draft and set customer name (asking apellido if missing)
               await ReservationService.startReservation(conversationId, businessId);
-              await ReservationService.setCustomerName(conversationId, extractedName);
+              const { firstName: autoFirst, lastName: autoLast } = this.splitFullName(extractedName);
 
-              // Update local draft reference
-              draft = await ReservationService.getDraft(conversationId);
+              if (autoLast) {
+                await ReservationService.setCustomerNameParts(conversationId, autoFirst, autoLast);
+                draft = await ReservationService.getDraft(conversationId);
+                await this.sendWhatsAppMessage(businessId, from, templates.askPartySize(autoFirst));
+              } else {
+                await ReservationService.setCustomerName(conversationId, autoFirst);
+                draft = await ReservationService.getDraft(conversationId);
+                await this.sendWhatsAppMessage(businessId, from, templates.askLastName(autoFirst));
+              }
 
-              // Send confirmation message and ask for party size immediately
-              await this.sendWhatsAppMessage(businessId, from, templates.askPartySize(extractedName));
-
-              logger.info('✅ Draft created, name saved, and party size question sent', {
+              logger.info('✅ Draft created and name saved', {
                 conversationId,
                 step: draft?.step,
                 name: draft?.customerName,
@@ -741,8 +836,19 @@ export class WhatsAppHandler {
             return true;
           }
 
-          const extractedName = this.extractNameCandidate(messageText);
-          const partySize = this.extractPartySize(messageText);
+          let extractedName = this.extractNameCandidate(messageText);
+          let partySize = this.extractPartySize(messageText);
+          let nameLlmSlots: ReservationSlots | null = null;
+
+          // Regex couldn't find a name at all — give the model one look before
+          // bouncing the customer with "no entendí" (see reservation-nlu.service.ts).
+          if (!extractedName) {
+            nameLlmSlots = await this.getLlmSlotsFallback(draft, messageText, businessId, conversationId);
+            if (nameLlmSlots?.customerName) {
+              extractedName = nameLlmSlots.customerName;
+              partySize = partySize ?? this.extractPartySize(nameLlmSlots.partySizeText ?? '');
+            }
+          }
 
           if (!extractedName) {
             await this.sendWhatsAppMessage(
@@ -753,7 +859,8 @@ export class WhatsAppHandler {
             return true;
           }
 
-          if (isObviouslyGibberish(extractedName) || containsProfanity(extractedName)) {
+          const nameFlaggedByModel = nameLlmSlots?.customerName === extractedName && nameLlmSlots?.nameLooksInvalid;
+          if (isObviouslyGibberish(extractedName) || nameFlaggedByModel) {
             logger.info('Invalid name rejected — re-asking', { conversationId, candidate: extractedName });
             await this.sendWhatsAppMessage(
               businessId,
@@ -763,23 +870,69 @@ export class WhatsAppHandler {
             return true;
           }
 
-          logger.info('📝 Setting customer name', { conversationId, raw: messageText, extracted: extractedName });
-          const updatedDraft = await ReservationService.setCustomerName(conversationId, extractedName);
-          logger.info('✅ Customer name set', {
-            conversationId,
-            name: extractedName,
-            nextStep: updatedDraft?.step,
-          });
+          const { firstName, lastName } = this.splitFullName(extractedName);
+          logger.info('📝 Setting customer name', { conversationId, raw: messageText, firstName, lastName });
 
-          if (partySize && partySize > 0 && partySize <= 50) {
-            await ReservationService.setPartySize(conversationId, partySize);
-            logger.info('✅ Embedded party size set at name step', { conversationId, partySize });
-            await this.promptScheduleChoice(conversationId, businessId, jid);
+          if (lastName) {
+            // Full "Nombre Apellido" given in one message — store both and continue.
+            await ReservationService.setCustomerNameParts(conversationId, firstName, lastName);
+            await this.continueAfterNameCollected(
+              conversationId,
+              businessId,
+              jid,
+              messageText,
+              firstName,
+              partySize
+            );
             return true;
           }
 
-          // Send confirmation and ask for party size
-          await this.sendWhatsAppMessage(businessId, jid, templates.askPartySize(extractedName));
+          // Only a first name so far — ask for the apellido next, stashing any
+          // party size already mentioned so it survives the extra step.
+          await ReservationService.setCustomerName(conversationId, firstName);
+          if (partySize && partySize > 0 && partySize <= 50) {
+            await ReservationService.setPartySize(conversationId, partySize);
+          }
+          await this.sendWhatsAppMessage(businessId, jid, templates.askLastName(firstName));
+          return true;
+        }
+
+        case 'last_name': {
+          // A greeting/opt-in isn't an apellido — re-ask without burning attempts.
+          if (isGreetingOrReservationOptInMessage(messageText)) {
+            await this.sendWhatsAppMessage(businessId, jid, templates.askLastNameAgain());
+            return true;
+          }
+
+          const lastNameCandidate = this.extractNameCandidate(messageText);
+          if (!lastNameCandidate) {
+            draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
+            await ReservationService.saveDraft(draft);
+            if (draft.invalidAttempts >= 2) {
+              await ReservationService.deleteDraft(conversationId);
+              await this.sendWhatsAppMessage(businessId, jid, templates.tooManyInvalidAttempts());
+            } else {
+              await this.sendWhatsAppMessage(businessId, jid, templates.askLastNameAgain());
+            }
+            return true;
+          }
+
+          // A single token is the apellido itself; a "Nombre Apellido" reply
+          // keeps only the apellido part (the first name is already stored).
+          const { firstName: lnFirst, lastName: lnRest } = this.splitFullName(lastNameCandidate);
+          const apellido = lnRest || lnFirst;
+          await ReservationService.setCustomerLastName(conversationId, apellido);
+          logger.info('✅ Customer last name set', { conversationId, apellido });
+
+          const displayName = draft.customerName || lnFirst;
+          await this.continueAfterNameCollected(
+            conversationId,
+            businessId,
+            jid,
+            messageText,
+            displayName,
+            this.extractPartySize(messageText)
+          );
           return true;
         }
 
@@ -857,7 +1010,7 @@ export class WhatsAppHandler {
                   conversationId,
                   partySize,
                 });
-                await this.promptScheduleChoice(conversationId, businessId, jid);
+                await this.resolveEmbeddedScheduleOrPromptChoice(conversationId, businessId, jid, messageText);
                 return true;
               }
 
@@ -879,24 +1032,35 @@ export class WhatsAppHandler {
           logger.info('📝 Extracting party size', { conversationId, messageText });
           logger.info('🔢 Party size extracted', { conversationId, partySize });
 
-          if (partySize && partySize > 0 && partySize <= 50) {
+          // Regex found nothing usable — give the model one look (e.g. "para toda
+          // la familia, unos ocho" won't match the regex's number patterns) before
+          // burning an invalid attempt.
+          let resolvedPartySize = partySize;
+          if (!resolvedPartySize) {
+            const llmSlots = await this.getLlmSlotsFallback(draft, messageText, businessId, conversationId);
+            if (llmSlots?.partySizeText) {
+              resolvedPartySize = this.extractPartySize(llmSlots.partySizeText);
+            }
+          }
+
+          if (resolvedPartySize && resolvedPartySize > 0 && resolvedPartySize <= 50) {
             // ----- EDIT MODE: just update the existing reservation -----
             if (draft.editMode && draft.existingReservationId) {
               const ok = await SupabaseService.updateReservationPartySize(
                 draft.existingReservationId,
-                partySize
+                resolvedPartySize
               );
               await ReservationService.deleteDraft(conversationId);
               const msg = ok
-                ? `✅ ¡Listo! Tu reserva fue actualizada a *${partySize}* personas.`
+                ? `✅ ¡Listo! Tu reserva fue actualizada a *${resolvedPartySize}* personas.`
                 : '❌ No se pudo actualizar la cantidad. Por favor intentá de nuevo.';
               await this.sendWhatsAppMessage(businessId, jid, msg);
               return true;
             }
 
             // ----- NORMAL MODE -----
-            await ReservationService.setPartySize(conversationId, partySize);
-            logger.info('✅ Party size set', { conversationId, partySize });
+            await ReservationService.setPartySize(conversationId, resolvedPartySize);
+            logger.info('✅ Party size set', { conversationId, partySize: resolvedPartySize });
 
             // Editing from the pre-confirmation summary: go back to it
             if (draft.returnToSummary) {
@@ -904,8 +1068,10 @@ export class WhatsAppHandler {
               return true;
             }
 
-            // Ask whether this is for the current turn or a future day/time
-            await this.promptScheduleChoice(conversationId, businessId, jid);
+            // Out-of-order slot-filling (#7): if the customer also named a day
+            // (and maybe a time) in this same message — e.g. "4 el viernes a las
+            // 21" — resolve it now instead of asking "¿hoy u otro día?" again.
+            await this.resolveEmbeddedScheduleOrPromptChoice(conversationId, businessId, jid, messageText);
             return true;
           } else {
             // Invalid party size — track attempts and cancel after 2
@@ -1040,7 +1206,20 @@ export class WhatsAppHandler {
 
           // The customer may have already named a day in this same message (e.g. "el viernes")
           const nowBA = nowInBuenosAires();
-          const parsedDay = wantsToPickDay ? null : parseRelativeDay(messageText, nowBA);
+          let parsedDay = wantsToPickDay ? null : parseRelativeDay(messageText, nowBA);
+
+          // Regex found no day in a message that wasn't "1"/"2" either — give
+          // the model one look before falling through to the invalid-choice
+          // re-ask below (e.g. "prefiero el finde que viene").
+          if (!parsedDay && !wantsToPickDay) {
+            const scheduleLlmSlots = await this.getLlmSlotsFallback(draft, messageText, businessId, conversationId);
+            if (scheduleLlmSlots?.dateText) {
+              const llmParsedDay = parseRelativeDay(scheduleLlmSlots.dateText, nowBA);
+              if (llmParsedDay && isWithinNextWeek(llmParsedDay.baDate, nowBA)) {
+                parsedDay = llmParsedDay;
+              }
+            }
+          }
 
           if (parsedDay) {
             if (!isWithinNextWeek(parsedDay.baDate, nowBA)) {
@@ -1190,7 +1369,19 @@ export class WhatsAppHandler {
           }
 
           const nowBA = nowInBuenosAires();
-          const parsedDay = parseRelativeDay(messageText, nowBA);
+          let parsedDay = parseRelativeDay(messageText, nowBA);
+
+          if (!parsedDay || !isWithinNextWeek(parsedDay.baDate, nowBA)) {
+            // Regex found no valid day — give the model one look before giving
+            // up (e.g. "el finde que viene no, mejor el jueves de esta semana").
+            const dateLlmSlots = await this.getLlmSlotsFallback(draft, messageText, businessId, conversationId);
+            if (dateLlmSlots?.dateText) {
+              const llmParsedDay = parseRelativeDay(dateLlmSlots.dateText, nowBA);
+              if (llmParsedDay && isWithinNextWeek(llmParsedDay.baDate, nowBA)) {
+                parsedDay = llmParsedDay;
+              }
+            }
+          }
 
           // Fetch business once — needed for both invalid-date fallback and hours validation below.
           const businessForDate = await SupabaseService.getBusinessById(businessId);
@@ -1365,7 +1556,7 @@ export class WhatsAppHandler {
           // the draft was still holding the previously chosen Wednesday).
           const nowBAForTime = nowInBuenosAires();
           const dayOverride = parseRelativeDay(messageText, nowBAForTime);
-          const parsedTime = parseTimeOfDay(messageText);
+          let parsedTime = parseTimeOfDay(messageText);
           let scheduledDate = draft.scheduledDate;
 
           if (dayOverride && formatBaDateKey(dayOverride.baDate) !== scheduledDate) {
@@ -1424,6 +1615,15 @@ export class WhatsAppHandler {
           if (partySizeOverride) {
             await ReservationService.setPartySize(conversationId, partySizeOverride);
             draft.partySize = partySizeOverride;
+          }
+
+          // Regex found no hour — give the model one look before giving up
+          // (e.g. "a la nochecita, tipo 9" won't match the regex's time patterns).
+          if (!parsedTime && scheduledDate) {
+            const timeLlmSlots = await this.getLlmSlotsFallback(draft, messageText, businessId, conversationId);
+            if (timeLlmSlots?.timeText) {
+              parsedTime = parseTimeOfDay(timeLlmSlots.timeText);
+            }
           }
 
           if (!parsedTime || !scheduledDate) {
@@ -1544,8 +1744,9 @@ export class WhatsAppHandler {
                   return true;
                 }
 
+                const openingMarginForConfirm = businessForConfirm?.reservation_opening_margin_minutes ?? 15;
                 const hoursCheck = weeklyHoursForConfirm && Object.keys(weeklyHoursForConfirm).length > 0
-                  ? checkBusinessHours(targetBaDate, targetHour, targetMinute, weeklyHoursForConfirm, closingMarginForConfirm)
+                  ? checkBusinessHours(targetBaDate, targetHour, targetMinute, weeklyHoursForConfirm, closingMarginForConfirm, openingMarginForConfirm)
                   : { allowed: true as const };
 
                 if (!hoursCheck.allowed) {
@@ -1644,10 +1845,20 @@ export class WhatsAppHandler {
 
           if (choice === 4 || this.isExplicitNewReservationIntent(messageText)) {
             await ReservationService.deleteDraft(conversationId);
-            await ReservationService.startReservation(conversationId, businessId);
-            await this.sendWhatsAppMessage(businessId, jid, templates.askName());
+            await this.startNewReservationFlow(
+              conversationId,
+              businessId,
+              jid,
+              this.normalizeWhatsAppNumber(jid),
+              templates.askName()
+            );
             return true;
           }
+
+          // Editing the stored name/apellido is intentionally NOT a numbered
+          // menu option (it's only reachable via natural language — see
+          // handleNameChangeIntent() / the edit_customer_name step) so it
+          // doesn't advertise itself as an action the customer has to guess is there.
 
           if (choice === 1) {
             await ReservationService.startEditReservation(conversationId, businessId, reservationId, {
@@ -1791,8 +2002,7 @@ export class WhatsAppHandler {
           const selection = this.extractNumber(messageText);
 
           if (this.isExplicitNewReservationIntent(messageText)) {
-            await ReservationService.startReservation(conversationId, businessId);
-            await this.sendWhatsAppMessage(businessId, jid, templates.askName());
+            await this.startNewReservationFlow(conversationId, businessId, jid, phone, templates.askName());
             return true;
           }
 
@@ -1807,12 +2017,72 @@ export class WhatsAppHandler {
             );
 
             if (selectedReservation) {
-              await this.startEditMenuFlow(conversationId, businessId, jid, selectedReservation);
+              // Route to the flow the customer originally asked for (cancel vs
+              // modify); default to the edit menu when the selection came from a
+              // plain "hola"/inquiry with no specific action attached.
+              if (draft.pendingSelectionAction === 'cancel') {
+                await this.startCancelFlow(conversationId, businessId, jid, selectedReservation);
+              } else {
+                await this.startEditMenuFlow(conversationId, businessId, jid, selectedReservation);
+              }
               return true;
             }
           }
 
           await this.sendWhatsAppMessage(businessId, jid, templates.activeReservationSelectionInvalid());
+          return true;
+        }
+
+        case 'edit_customer_name': {
+          // Capturing a natural-language name/apellido change (see handleNameChangeIntent).
+          if (isGreetingOrReservationOptInMessage(messageText)) {
+            await this.sendWhatsAppMessage(
+              businessId,
+              jid,
+              draft.nameEditField === 'lastName'
+                ? '¿Cuál es tu apellido correcto?'
+                : '¿Cuál es tu nombre y apellido correcto?'
+            );
+            return true;
+          }
+
+          const candidate = this.extractNameCandidate(messageText);
+          if (!candidate) {
+            draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
+            await ReservationService.saveDraft(draft);
+            if (draft.invalidAttempts >= 2) {
+              await ReservationService.deleteDraft(conversationId);
+              await this.sendWhatsAppMessage(businessId, jid, templates.tooManyInvalidAttempts());
+            } else {
+              await this.sendWhatsAppMessage(
+                businessId,
+                jid,
+                'No reconocí ese nombre. ¿Me lo repetís, por favor?'
+              );
+            }
+            return true;
+          }
+
+          const phone = this.normalizeWhatsAppNumber(jid);
+          const field = draft.nameEditField ?? 'full';
+          const updated = await this.applyCustomerNameChange(phone, businessId, field, candidate);
+          await ReservationService.deleteDraft(conversationId);
+
+          if (!updated) {
+            await this.sendWhatsAppMessage(
+              businessId,
+              jid,
+              'Todavía no tengo tus datos guardados. Cuando hagas una reserva se guardará tu nombre. 😊'
+            );
+            return true;
+          }
+
+          const fullName = this.buildFullName(updated.name, updated.lastName) || updated.name;
+          await this.sendWhatsAppMessage(
+            businessId,
+            jid,
+            `✅ Listo, actualicé tu nombre. Ahora figurás como *${fullName}*.`
+          );
           return true;
         }
 
@@ -2286,13 +2556,19 @@ export class WhatsAppHandler {
     dayLabel: string,
     knownWeeklyHours?: WeeklyHours | null
   ): Promise<string> {
+    // Fetch the business (Redis-cached) for both weekly_hours and the margins so
+    // the displayed range reflects the actually-bookable window (opening+margin
+    // → close−margin) rather than the raw open/close times.
+    const business = await SupabaseService.getBusinessById(businessId);
     const weeklyHours =
       knownWeeklyHours !== undefined
         ? knownWeeklyHours
-        : ((await SupabaseService.getBusinessById(businessId))?.weekly_hours as WeeklyHours | null | undefined);
+        : (business?.weekly_hours as WeeklyHours | null | undefined);
+    const openingMargin = business?.reservation_opening_margin_minutes ?? 0;
+    const closingMargin = business?.reservation_closing_margin_minutes ?? 0;
     const hoursRange =
       weeklyHours && Object.keys(weeklyHours).length > 0
-        ? formatDayHoursForDate(parseBaDateKey(dateKey), weeklyHours)
+        ? formatDayHoursForDate(parseBaDateKey(dateKey), weeklyHours, openingMargin, closingMargin)
         : null;
     return templates.askTime(dayLabel, hoursRange);
   }
@@ -2306,18 +2582,34 @@ export class WhatsAppHandler {
     businessId: string,
     knownWeeklyHours?: WeeklyHours | null
   ): Promise<string> {
+    const business = await SupabaseService.getBusinessById(businessId);
     const weeklyHours =
       knownWeeklyHours !== undefined
         ? knownWeeklyHours
-        : ((await SupabaseService.getBusinessById(businessId))?.weekly_hours as WeeklyHours | null | undefined);
+        : (business?.weekly_hours as WeeklyHours | null | undefined);
     let openDays: string | null = null;
     if (weeklyHours && Object.keys(weeklyHours).length > 0) {
-      // Omit weekdays whose upcoming occurrence is a blocked date so we never
-      // suggest a day the customer cannot actually book.
+      const nowBA = nowInBuenosAires();
       const blockedDates = await SupabaseService.getBlockedDates(businessId);
+      const todayKey = formatBaDateKey(startOfBaDay(nowBA));
+      const closingMargin = business?.reservation_closing_margin_minutes ?? 15;
+
+      // When the business has blocked further reservations for today
+      // (future_reservations_blocked_for_date) and no shift is active right now,
+      // today has no bookable slot left — drop it from the offered days too.
+      const todayFullyBlocked =
+        business?.future_reservations_blocked_for_date === todayKey &&
+        !isWithinCurrentShift(nowBA.getUTCHours(), nowBA.getUTCMinutes(), nowBA, weeklyHours, closingMargin);
+
       openDays =
-        formatBookableDays(weeklyHours, nowInBuenosAires(), (key) => isDateBlocked(key, blockedDates)) ||
-        null;
+        formatBookableDays(
+          weeklyHours,
+          nowBA,
+          // Omit weekdays whose upcoming occurrence is a blocked date — or today
+          // when future reservations are closed and there's no current turno — so
+          // we never suggest a day the customer cannot actually book.
+          (key) => isDateBlocked(key, blockedDates) || (todayFullyBlocked && key === todayKey)
+        ) || null;
     }
     return templates.askDay(openDays);
   }
@@ -2490,9 +2782,10 @@ export class WhatsAppHandler {
 
     // Check business hours if weekly_hours is configured
     if (weeklyHours && Object.keys(weeklyHours).length > 0) {
-      const hoursCheck = checkBusinessHours(baDate, hour, minute, weeklyHours, closingMargin);
+      const openingMargin = business?.reservation_opening_margin_minutes ?? 15;
+      const hoursCheck = checkBusinessHours(baDate, hour, minute, weeklyHours, closingMargin, openingMargin);
       if (!hoursCheck.allowed) {
-        const margin = business?.reservation_opening_margin_minutes ?? 15;
+        const margin = openingMargin;
         const afterMinutes = hour * 60 + minute;
         const nextSlot = findNextSlotOnDay(baDate, afterMinutes, weeklyHours, margin, closingMargin);
 
@@ -2590,7 +2883,8 @@ export class WhatsAppHandler {
       templates.reservationSummary(
         draft.customerName || 'Cliente',
         draft.partySize || 0,
-        whenLabel
+        whenLabel,
+        this.buildFullName(draft.customerName, draft.customerLastName) || draft.customerName || 'Cliente'
       )
     );
   }
@@ -2598,12 +2892,57 @@ export class WhatsAppHandler {
   /**
    * Ask the customer whether the reservation is for the current turn or for a
    * specific day/time within the next 7 days, advancing the draft to `schedule_choice`.
+   *
+   * Checks today's real availability FIRST — not just whether today's weekday
+   * is marked closed, but whether there is any bookable moment left today
+   * (accounting for the current instant, shift gaps, and blocked dates). If
+   * there is none, the "1) Hoy" option is never shown at all: the customer
+   * gets the closed notice up front, right after giving the party size, with
+   * the next open days/hours attached — instead of picking "Hoy" and being
+   * told afterward that it's closed.
    */
   private async promptScheduleChoice(
     conversationId: string,
     businessId: string,
     jid: string
   ): Promise<void> {
+    const nowBA = nowInBuenosAires();
+    const business = await SupabaseService.getBusinessById(businessId);
+    const weeklyHours = business?.weekly_hours as WeeklyHours | null | undefined;
+
+    if (weeklyHours && Object.keys(weeklyHours).length > 0) {
+      const blockedDates = await SupabaseService.getBlockedDates(businessId);
+      const todayKey = formatBaDateKey(nowBA);
+      const openingMargin = business?.reservation_opening_margin_minutes ?? 15;
+      const closingMargin = business?.reservation_closing_margin_minutes ?? 15;
+
+      const todayBlocked = isDateBlocked(todayKey, blockedDates);
+      const nowCheck = !todayBlocked
+        ? checkBusinessHours(nowBA, nowBA.getUTCHours(), nowBA.getUTCMinutes(), weeklyHours, closingMargin, openingMargin)
+        : { allowed: false };
+
+      let todayHasAvailability = nowCheck.allowed;
+      if (!todayHasAvailability && !todayBlocked) {
+        // Not open right this instant — but there may still be a later shift
+        // today (e.g. before opening, or a gap between lunch and dinner).
+        const nextSlot = findNextOpenSlot(nowBA, weeklyHours, openingMargin, closingMargin);
+        todayHasAvailability = !!nextSlot?.isToday;
+      }
+
+      if (!todayHasAvailability) {
+        await ReservationService.moveToDateStep(conversationId);
+        const dayLines = getUpcomingOpenDaysWithHours(
+          weeklyHours,
+          nowBA,
+          (dateKey) => isDateBlocked(dateKey, blockedDates),
+          openingMargin,
+          closingMargin
+        );
+        await this.sendWhatsAppMessage(businessId, jid, templates.askDayClosedTodayWithSchedule(dayLines));
+        return;
+      }
+    }
+
     await ReservationService.moveToScheduleChoice(conversationId);
     await this.sendWhatsAppMessage(businessId, jid, templates.askScheduleChoice());
   }
@@ -2679,6 +3018,7 @@ export class WhatsAppHandler {
           ? this.describeReservationWhen(entry.scheduled_at)
           : 'Hoy (turno actual)';
         const customerLabel = draft.customerName || 'Cliente';
+        const fullNameLabel = this.buildFullName(draft.customerName, draft.customerLastName) || customerLabel;
         const partySizeLabel = draft.partySize || entry.party_size;
 
         if (entry.status === 'CONFIRMED' || entry.status === 'NOTIFIED') {
@@ -2686,7 +3026,8 @@ export class WhatsAppHandler {
             customerLabel,
             partySizeLabel,
             whenLabel,
-            entry.display_code
+            entry.display_code,
+            fullNameLabel
           );
         } else {
           // WAITING — el operador debe confirmar manualmente
@@ -2694,7 +3035,8 @@ export class WhatsAppHandler {
             customerLabel,
             partySizeLabel,
             whenLabel,
-            entry.display_code
+            entry.display_code,
+            fullNameLabel
           );
         }
 
@@ -2776,7 +3118,7 @@ export class WhatsAppHandler {
   /**
    * Returns the best available client-facing message for a blocked date.
    * Uses the pre-stored `reasonMessage` when present; otherwise generates one
-   * via Ollama from the raw `reason` and caches it in the DB so future calls
+   * via the LLM from the raw `reason` and caches it in the DB so future calls
    * are instant. Returns null when neither field is available (generic template
    * fallback is handled by `templates.dateBlocked`).
    */
@@ -2804,13 +3146,13 @@ export class WhatsAppHandler {
     // cache it so the next customer gets the fast path.
     try {
       const business = await SupabaseService.getBusinessById(businessId);
-      logger.info('DIAG: calling Ollama for blocked date', { businessId, dateKey, reason: entry.reason });
-      const generated = await ollamaService.generateBlockedDateReasonMessage(
+      logger.info('DIAG: calling LLM for blocked date', { businessId, dateKey, reason: entry.reason });
+      const generated = await openRouterService.generateBlockedDateReasonMessage(
         entry.reason,
         business?.name,
         business?.type
       );
-      logger.info('DIAG: Ollama returned', { businessId, dateKey, generatedLength: generated?.length, generated });
+      logger.info('DIAG: LLM returned', { businessId, dateKey, generatedLength: generated?.length, generated });
       await SupabaseService.updateBlockedDateReasonMessage(businessId, dateKey, generated);
       logger.info('Blocked date reason_message generated on-the-fly', { businessId, dateKey });
       return generated;
@@ -3153,14 +3495,14 @@ export class WhatsAppHandler {
 
   private isCancellationIntent(text: string): boolean {
     const lower = this.normalizeCourtesyText(text);
-    return (
-      lower.includes('cancelar') ||
-      lower.includes('cancela') ||
-      lower.includes('anular') ||
-      lower.includes('anula') ||
-      lower.includes('borrar reserva') ||
-      lower.includes('eliminar reserva')
-    );
+    // "cancelar"/"anular" always signal cancellation on their own.
+    if (/\bcancela/.test(lower) || /\banula/.test(lower)) return true;
+    // "borrar/eliminar/sacar/quitar" only count when clearly about the
+    // reservation — matched as word-boundary stems (covers "sacá"/"saca"/
+    // "sacar", "eliminá"/"elimina"/"eliminar", etc.) and without requiring an
+    // exact fixed phrase, so filler words in between ("esa", "mi", "la") don't
+    // break the match (e.g. "eliminar ESA reserva", not just "eliminar reserva").
+    return /\b(borr|elimin|saca|quita)/.test(lower) && /\breserva/.test(lower);
   }
 
   private isExitKeyword(text: string): boolean {
@@ -3251,21 +3593,12 @@ export class WhatsAppHandler {
         return true;
       }
 
-      const quickOptions = activeReservations.map((reservation, index) => ({
-        index: index + 1,
-        partySize: reservation.party_size ?? 0,
-        whenLabel: this.describeReservationWhen(reservation.scheduled_at),
-        displayCode: reservation.display_code ?? null,
-        statusLabel: this.getReservationStatusLabel(reservation.status),
-      }));
+      // A single active reservation: go straight to the action menu (same as
+      // a plain greeting does) instead of a read-only listing — the customer
+      // should choose what to do (modificar/cancelar), not just see a summary.
+      await this.startEditMenuFlow(conversationId, businessId, jid, activeReservations[0]);
 
-      await this.sendWhatsAppMessage(
-        businessId,
-        jid,
-        templates.activeReservationsSummary(quickOptions)
-      );
-
-      logger.info('Active reservations inquiry handled', {
+      logger.info('Active reservations inquiry handled — routed straight to edit menu', {
         conversationId,
         reservationCount: activeReservations.length,
       });
@@ -3302,6 +3635,9 @@ export class WhatsAppHandler {
         ? '✅ Confirmada'
         : '⏳ Pendiente';
 
+    const phone = this.normalizeWhatsAppNumber(jid);
+    const customer = await SupabaseService.getCustomerByPhone(phone, businessId);
+
     await this.sendWhatsAppMessage(
       businessId,
       jid,
@@ -3309,7 +3645,8 @@ export class WhatsAppHandler {
         activeReservation.party_size,
         this.describeReservationWhen(activeReservation.scheduled_at),
         activeReservation.display_code ?? '-',
-        statusLabel
+        statusLabel,
+        customer?.name?.trim() || null
       )
     );
 
@@ -3334,22 +3671,344 @@ export class WhatsAppHandler {
       scheduled_at?: string | null;
     }
   ): Promise<void> {
+    // Direct CANCELAR intent skips the reprogramar/cancelar-definitivamente
+    // menu and goes straight to a single Sí/Volver-atrás confirmation.
     await this.sendWhatsAppMessage(
       businessId,
       jid,
-      templates.cancelMenu(
+      templates.cancelDirectConfirmPrompt(
         activeReservation.party_size,
         this.describeReservationWhen(activeReservation.scheduled_at),
         activeReservation.display_code ?? '-'
       )
     );
 
-    await ReservationService.startCancelMenu(conversationId, businessId, activeReservation.id, {
+    await ReservationService.startCancelConfirm(conversationId, businessId, activeReservation.id, {
       partySize: activeReservation.party_size ?? undefined,
       scheduledAt: activeReservation.scheduled_at ?? null,
     });
 
-    logger.info('Cancel menu shown (M3)', { conversationId, reservationId: activeReservation.id });
+    logger.info('Cancel confirm shown directly (M3, menu skipped)', {
+      conversationId,
+      reservationId: activeReservation.id,
+    });
+  }
+
+  /**
+   * Starts a brand-new reservation flow, skipping the name/apellido steps
+   * when the phone number is already registered in `customers` for this
+   * business (CAMBIO 1). The customer's identity is resolved fresh from the
+   * DB on every call — by phone + businessId, both always available on the
+   * incoming message — rather than cached on the (short-lived, 1h TTL)
+   * reservation draft, so it survives draft deletion/expiry.
+   */
+  private async startNewReservationFlow(
+    conversationId: string,
+    businessId: string,
+    jid: string,
+    phone: string,
+    unknownCustomerMessage: string
+  ): Promise<void> {
+    const knownCustomer = await SupabaseService.getCustomerByPhone(phone, businessId);
+
+    if (knownCustomer?.name) {
+      await ReservationService.startReservationForKnownCustomer(
+        conversationId,
+        businessId,
+        knownCustomer.name,
+        knownCustomer.lastName
+      );
+      await this.sendWhatsAppMessage(
+        businessId,
+        jid,
+        templates.welcomeBackAskPartySize(knownCustomer.name)
+      );
+      logger.info('Reservation flow started for known customer — name step skipped', {
+        conversationId,
+        businessId,
+      });
+      return;
+    }
+
+    await ReservationService.startReservation(conversationId, businessId);
+    await this.sendWhatsAppMessage(businessId, jid, unknownCustomerMessage);
+  }
+
+  /**
+   * Routes a direct edit/cancel intent to the right flow, disambiguating when
+   * the customer has more than one active reservation: 0 → optional "no tenés
+   * reserva"; 1 → straight to the edit/cancel menu; >1 → the selection menu,
+   * remembering the requested action so the picked reservation goes to the
+   * matching flow (see the `reservation_selection` step). Returns true when it
+   * sent a message; false only when there were no active reservations and
+   * `notifyIfNone` was false, so the caller can fall through.
+   */
+  private async routeToReservationAction(
+    action: 'edit' | 'cancel',
+    businessId: string,
+    jid: string,
+    conversationId: string,
+    notifyIfNone: boolean = true
+  ): Promise<boolean> {
+    const phone = this.normalizeWhatsAppNumber(jid);
+    const activeReservations = await SupabaseService.getActiveReservationsByPhone(phone, businessId);
+
+    if (activeReservations.length === 0) {
+      if (notifyIfNone) {
+        await this.sendWhatsAppMessage(businessId, jid, templates.noActiveReservation());
+        return true;
+      }
+      return false;
+    }
+
+    if (activeReservations.length === 1) {
+      if (action === 'cancel') {
+        await this.startCancelFlow(conversationId, businessId, jid, activeReservations[0]);
+      } else {
+        await this.startEditMenuFlow(conversationId, businessId, jid, activeReservations[0]);
+      }
+      return true;
+    }
+
+    // Multiple active reservations — ask which one, remembering the action.
+    const availableReservationIds = activeReservations.map((reservation) => reservation.id);
+    await ReservationService.startReservationSelection(
+      conversationId,
+      businessId,
+      availableReservationIds,
+      action
+    );
+
+    const quickOptions = activeReservations.map((reservation, index) => ({
+      index: index + 1,
+      partySize: reservation.party_size ?? 0,
+      whenLabel: this.describeReservationWhen(reservation.scheduled_at),
+      displayCode: reservation.display_code ?? null,
+      statusLabel: this.getReservationStatusLabel(reservation.status),
+    }));
+
+    await this.sendWhatsAppMessage(
+      businessId,
+      jid,
+      templates.activeReservationsMenu(quickOptions, action)
+    );
+
+    logger.info('Reservation selection menu shown for direct action', {
+      conversationId,
+      action,
+      reservationCount: activeReservations.length,
+    });
+    return true;
+  }
+
+  /**
+   * Cheap pre-filter (no LLM) for messages that plausibly pack MORE THAN ONE
+   * distinct action, so the planner is only invoked for genuine compounds and
+   * ordinary single-intent messages stay on the deterministic path. Requires a
+   * conjunction plus at least two distinct action families.
+   */
+  private isPotentialMultiActionMessage(text: string): boolean {
+    const n = this.normalizeCourtesyText(text);
+    const hasConnector = /\b(y|e|luego|despues|tambien|ademas|aparte|mas tarde)\b/.test(n);
+    if (!hasConnector) return false;
+
+    let families = 0;
+    if (/\b(cancel|anul|dar de baja|no voy)\b/.test(n)) families += 1;
+    if (/\b(reserv|crea|crear|nueva|otra mesa|mesa para|una mesa|anota|apunta)\b/.test(n)) families += 1;
+    if (/\b(modific|cambi|reprogram|edit|mov[ée]|corr[ée])\b/.test(n)) families += 1;
+    if (/\b(mis reservas|cuales|que reservas|estado de)\b/.test(n)) families += 1;
+
+    return families >= 2;
+  }
+
+  /**
+   * Executes every action found in a compound message. Non-terminal actions
+   * (cancel, query) run first and in order; the terminal one (a new reservation,
+   * or a modify) runs last since it may need further turns. Returns true when it
+   * handled the message; false to fall back to single-intent handling.
+   */
+  private async handleMultiActionMessage(
+    businessId: string,
+    from: string,
+    messageText: string,
+    conversationId: string,
+    businessName?: string
+  ): Promise<boolean> {
+    try {
+      const history = await agentService.getConversationHistory(conversationId);
+      const actions = await planReservationActions(messageText, businessName, history);
+      if (!actions || countActionableIntents(actions) < 2) {
+        return false;
+      }
+
+      const phone = this.normalizeWhatsAppNumber(from);
+      let activeReservations = await SupabaseService.getActiveReservationsByPhone(phone, businessId);
+      const summaryLines: string[] = [];
+
+      // --- Non-terminal actions: cancels and queries, in the requested order ---
+      for (const action of actions) {
+        if (action.intent === 'cancel') {
+          const target = this.matchTargetReservation(action, activeReservations);
+          if (!target) {
+            summaryLines.push(
+              activeReservations.length === 0
+                ? '⚠️ No encontré una reserva activa para cancelar.'
+                : '⚠️ No pude identificar cuál reserva cancelar; escribí *CANCELAR* y te muestro tus reservas.'
+            );
+            continue;
+          }
+          const ok = await SupabaseService.updateReservationStatus(target.id, 'CANCELLED');
+          if (ok) {
+            summaryLines.push(
+              `✅ Cancelé tu reserva para ${this.describeReservationWhen(target.scheduled_at)}` +
+                `${target.display_code ? ` (código *${target.display_code}*)` : ''}.`
+            );
+            activeReservations = activeReservations.filter((r) => r.id !== target.id);
+          } else {
+            summaryLines.push('❌ No pude cancelar una de las reservas. Intentá de nuevo.');
+          }
+        } else if (action.intent === 'query') {
+          summaryLines.push(
+            activeReservations.length === 0
+              ? 'No tenés reservas activas en este momento.'
+              : this.describeActiveReservationsInline(activeReservations)
+          );
+        }
+      }
+
+      const createAction = actions.find((a) => a.intent === 'create');
+      const modifyAction = actions.find((a) => a.intent === 'modify');
+
+      // --- Terminal action (interactive): a new reservation, or a modify ---
+      if (createAction || modifyAction) {
+        if (summaryLines.length > 0) {
+          await this.sendWhatsAppMessage(businessId, from, summaryLines.join('\n'));
+        }
+
+        if (createAction) {
+          await this.startPlannedCreate(conversationId, businessId, from, phone, createAction, messageText);
+          return true;
+        }
+
+        const target = this.matchTargetReservation(modifyAction!, activeReservations);
+        if (target) {
+          await this.startEditMenuFlow(conversationId, businessId, from, target);
+        } else {
+          await this.routeToReservationAction('edit', businessId, from, conversationId);
+        }
+        return true;
+      }
+
+      if (summaryLines.length > 0) {
+        await this.sendWhatsAppMessage(businessId, from, summaryLines.join('\n'));
+        return true;
+      }
+
+      return false;
+    } catch (error) {
+      logger.error('Error handling multi-action message', { error, conversationId, businessId });
+      return false;
+    }
+  }
+
+  /**
+   * Picks which active reservation a cancel/modify action refers to: the only
+   * one when there's a single active reservation; otherwise the one whose day
+   * matches the referenced text ("la del viernes"). Returns null when it stays
+   * ambiguous so the caller can ask.
+   */
+  private matchTargetReservation(
+    action: PlannedAction,
+    reservations: WaitlistEntry[]
+  ): WaitlistEntry | null {
+    if (reservations.length === 0) return null;
+    if (reservations.length === 1) return reservations[0];
+
+    const refText = [action.targetReservationText, action.dateText].filter(Boolean).join(' ');
+    if (!refText) return null;
+
+    const nowBA = nowInBuenosAires();
+    const parsed = parseRelativeDay(refText, nowBA);
+    if (parsed) {
+      const key = formatBaDateKey(parsed.baDate);
+      const matches = reservations.filter(
+        (r) => r.scheduled_at && utcIsoToBaParts(r.scheduled_at).dateKey === key
+      );
+      if (matches.length === 1) return matches[0];
+    }
+
+    if (/\b(hoy|turno actual|ahora)\b/.test(this.normalizeCourtesyText(refText))) {
+      const instant = reservations.filter((r) => !r.scheduled_at);
+      if (instant.length === 1) return instant[0];
+    }
+
+    return null;
+  }
+
+  /** One-message summary of a customer's active reservations (for the query action). */
+  private describeActiveReservationsInline(reservations: WaitlistEntry[]): string {
+    const lines = reservations.map(
+      (r, i) =>
+        `${i + 1}. ${r.party_size} personas, ${this.describeReservationWhen(r.scheduled_at)}` +
+        `${r.display_code ? ` (${r.display_code})` : ''} — ${this.getReservationStatusLabel(r.status)}`
+    );
+    return ['📋 Tus reservas activas:', ...lines].join('\n');
+  }
+
+  /**
+   * Starts a new-reservation flow from a planned `create` action, pre-filling
+   * whatever slots the planner extracted (name, party size, day, time). Resolves
+   * the name from the message or the stored customer; when everything is present
+   * the reservation is finalized, otherwise the normal flow prompts for the rest.
+   */
+  private async startPlannedCreate(
+    conversationId: string,
+    businessId: string,
+    jid: string,
+    phone: string,
+    action: PlannedAction,
+    originalMessage: string
+  ): Promise<void> {
+    await ReservationService.startReservation(conversationId, businessId);
+
+    let fullName = action.customerName?.trim() || '';
+    if (!fullName) {
+      const customer = await SupabaseService.getCustomerByPhone(phone, businessId);
+      if (customer?.name) {
+        fullName = this.buildFullName(customer.name, customer.lastName) || customer.name;
+      }
+    }
+
+    const partySize = action.partySizeText ? this.extractPartySize(action.partySizeText) : null;
+    const scheduleText = [action.dateText, action.timeText].filter(Boolean).join(' ').trim();
+
+    if (!fullName) {
+      // No name yet — stash the party size and let the normal flow ask name/apellido.
+      if (partySize && partySize > 0 && partySize <= 50) {
+        await ReservationService.setPartySize(conversationId, partySize);
+      }
+      await this.sendWhatsAppMessage(businessId, jid, templates.askName());
+      return;
+    }
+
+    // Treat the resolved name as complete (don't re-ask apellido mid-compound).
+    const { firstName, lastName } = this.splitFullName(fullName);
+    await ReservationService.setCustomerNameParts(conversationId, firstName, lastName);
+
+    if (!(partySize && partySize > 0 && partySize <= 50)) {
+      await this.sendWhatsAppMessage(businessId, jid, templates.askPartySize(firstName));
+      return;
+    }
+    await ReservationService.setPartySize(conversationId, partySize);
+
+    // Resolve day/time from the extracted schedule text (falls back to the full
+    // message), finalizing when complete or prompting for whatever's missing.
+    await this.resolveEmbeddedScheduleOrPromptChoice(
+      conversationId,
+      businessId,
+      jid,
+      scheduleText || originalMessage
+    );
   }
 
   private isModificationIntent(text: string): boolean {
@@ -3364,6 +4023,106 @@ export class WhatsAppHandler {
     ];
 
     return patterns.some((pattern) => pattern.test(normalized));
+  }
+
+  /**
+   * Detects a natural-language request to change the stored name/apellido, e.g.
+   * "cambiá mi nombre a Juan", "mi apellido es Gómez", "corregí mi nombre".
+   * Only meaningful when there is no active reservation draft (the name/last_name
+   * steps handle in-flow corrections themselves).
+   */
+  private isNameChangeIntent(text: string): boolean {
+    const n = this.normalizeCourtesyText(text);
+    return (
+      /\b(cambia|cambiar|cambiame|corregi|corregir|corrige|actualiza|actualizar|edita|editar)\s+(mi\s+|el\s+)?(nombre|apellido)\b/.test(n) ||
+      /\b(mi\s+)(nombre|apellido)\s+(es|seria|real\s+es|correcto\s+es|va\s+a\s+ser)\b/.test(n) ||
+      /\b(pone[rm]e?|anota[rm]e?)\s+(el\s+|como\s+)?(nombre|apellido)\b/.test(n)
+    );
+  }
+
+  /**
+   * Splits a name-change request into the target field and (optionally) the new
+   * value. `field` is `'lastName'` when the message mentions only "apellido",
+   * else `'full'` (updates first name + apellido). `value` is null when the
+   * customer named the intent but not the new value ("quiero cambiar mi nombre").
+   */
+  private extractNameChangeRequest(text: string): { field: 'full' | 'lastName'; value: string | null } {
+    const n = this.normalizeCourtesyText(text);
+    const field: 'full' | 'lastName' =
+      /\bapellido\b/.test(n) && !/\bnombre\b/.test(n) ? 'lastName' : 'full';
+
+    // Capture whatever follows the connector ("a", "por", "es", "sea", ":").
+    const match = text.match(/(?:\ba\b|\bpor\b|\bes\b|\bsea\b|:)\s+(.+)$/i);
+    const value = match?.[1] ? this.extractNameCandidate(match[1]) : null;
+    return { field, value };
+  }
+
+  /** Applies a name/apellido change to the customer record by phone. */
+  private async applyCustomerNameChange(
+    phone: string,
+    businessId: string,
+    field: 'full' | 'lastName',
+    value: string
+  ): Promise<Customer | null> {
+    if (field === 'lastName') {
+      return SupabaseService.updateCustomerNameByPhone(phone, businessId, { lastName: value });
+    }
+    const { firstName, lastName } = this.splitFullName(value);
+    return SupabaseService.updateCustomerNameByPhone(phone, businessId, {
+      name: firstName,
+      // Only overwrite the apellido when the customer actually provided one.
+      ...(lastName ? { lastName } : {}),
+    });
+  }
+
+  /**
+   * Handles a natural-language name-change request. When the new value is
+   * present it's applied immediately; otherwise a short `edit_customer_name`
+   * draft is started to capture the follow-up reply.
+   */
+  private async handleNameChangeIntent(
+    businessId: string,
+    jid: string,
+    messageText: string,
+    conversationId: string
+  ): Promise<boolean> {
+    try {
+      const phone = this.normalizeWhatsAppNumber(jid);
+      const { field, value } = this.extractNameChangeRequest(messageText);
+
+      if (!value) {
+        await ReservationService.startCustomerNameEdit(conversationId, businessId, field);
+        await this.sendWhatsAppMessage(
+          businessId,
+          jid,
+          field === 'lastName'
+            ? '¿Cuál es tu apellido correcto?'
+            : '¿Cuál es tu nombre y apellido correcto?'
+        );
+        return true;
+      }
+
+      const updated = await this.applyCustomerNameChange(phone, businessId, field, value);
+      if (!updated) {
+        await this.sendWhatsAppMessage(
+          businessId,
+          jid,
+          'Todavía no tengo tus datos guardados. Cuando hagas una reserva se guardará tu nombre. 😊'
+        );
+        return true;
+      }
+
+      const fullName = this.buildFullName(updated.name, updated.lastName) || updated.name;
+      await this.sendWhatsAppMessage(
+        businessId,
+        jid,
+        `✅ Listo, actualicé tu nombre. Ahora figurás como *${fullName}*.`
+      );
+      return true;
+    } catch (error) {
+      logger.error('Error handling name change intent', { error, conversationId, businessId });
+      return false;
+    }
   }
 
   private async handleGreeting(
@@ -3407,7 +4166,7 @@ export class WhatsAppHandler {
         logger.info('Draft cancelled on greeting', { conversationId, step: existingDraft.step });
       }
 
-      // 2. Clear Ollama conversation history so the agent starts fresh
+      // 2. Clear LLM conversation history so the agent starts fresh
       try {
         await agentService.clearConversationHistory(conversationId);
         logger.info('Conversation history cleared on greeting', { conversationId });
@@ -3460,15 +4219,17 @@ export class WhatsAppHandler {
         return true;
       }
 
-      // 4b. No reservation: deterministic M1 welcome — start the flow directly
+      // 4b. No reservation: known customers skip straight to party size (CAMBIO 1);
+      // unknown customers get the deterministic M1 welcome + name question.
       const business = await SupabaseService.getBusinessById(businessId);
-      await ReservationService.startReservation(conversationId, businessId);
-      await this.sendWhatsAppMessage(
+      await this.startNewReservationFlow(
+        conversationId,
         businessId,
         jid,
+        phone,
         templates.welcomeMessage(business?.name || 'el local')
       );
-      logger.info('Greeting handled — M1 welcome sent, reservation flow started', {
+      logger.info('Greeting handled — reservation flow started', {
         conversationId,
       });
       return true;
@@ -3584,23 +4345,34 @@ export class WhatsAppHandler {
       }
 
       const partySize = this.extractPartySize(messageText);
+      const { firstName, lastName } = this.splitFullName(extractedName);
 
       await ReservationService.startReservation(conversationId, businessId);
-      await ReservationService.setCustomerName(conversationId, extractedName);
 
       logger.info('Prefilled reservation data captured', {
         conversationId,
-        extractedName,
+        firstName,
+        lastName,
         partySize,
       });
 
-      if (partySize && partySize > 0 && partySize <= 50) {
-        await ReservationService.setPartySize(conversationId, partySize);
-        await this.promptScheduleChoice(conversationId, businessId, jid);
+      if (lastName) {
+        await ReservationService.setCustomerNameParts(conversationId, firstName, lastName);
+        if (partySize && partySize > 0 && partySize <= 50) {
+          await ReservationService.setPartySize(conversationId, partySize);
+          await this.resolveEmbeddedScheduleOrPromptChoice(conversationId, businessId, jid, messageText);
+          return true;
+        }
+        await this.sendWhatsAppMessage(businessId, jid, templates.askPartySize(firstName));
         return true;
       }
 
-      await this.sendWhatsAppMessage(businessId, jid, templates.askPartySize(extractedName));
+      // Only a first name — ask apellido next, stashing any party size given.
+      await ReservationService.setCustomerName(conversationId, firstName);
+      if (partySize && partySize > 0 && partySize <= 50) {
+        await ReservationService.setPartySize(conversationId, partySize);
+      }
+      await this.sendWhatsAppMessage(businessId, jid, templates.askLastName(firstName));
       return true;
     } catch (error) {
       logger.error('Error handling prefilled reservation request', {
@@ -3669,6 +4441,140 @@ export class WhatsAppHandler {
 
     const numericValue = parseInt(match[1], 10);
     return numericValue >= 1 && numericValue <= 50 ? numericValue : null;
+  }
+
+  /**
+   * Second-look via the LLM for a message the regex parsers below couldn't
+   * make sense of (see reservation-nlu.service.ts). Returns null when there's
+   * nothing usable — callers keep their existing "no entendí" behavior as-is.
+   */
+  private async getLlmSlotsFallback(
+    draft: ReservationDraft,
+    messageText: string,
+    businessId: string,
+    conversationId: string
+  ): Promise<ReservationSlots | null> {
+    try {
+      const [business, history] = await Promise.all([
+        SupabaseService.getBusinessById(businessId),
+        agentService.getConversationHistory(conversationId),
+      ]);
+      return await extractReservationUpdate(messageText, draft, business?.name, history);
+    } catch (error) {
+      logger.warn('LLM slots fallback lookup failed', { conversationId, error });
+      return null;
+    }
+  }
+
+  /** Splits a cleaned name candidate into first name + apellido (rest of the tokens). */
+  private splitFullName(full: string): { firstName: string; lastName: string } {
+    const parts = full.trim().split(/\s+/).filter(Boolean);
+    if (parts.length <= 1) {
+      return { firstName: parts[0] ?? full.trim(), lastName: '' };
+    }
+    return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
+  }
+
+  /** Joins first name + apellido for the reservation detail; skips empty parts. */
+  private buildFullName(name?: string | null, lastName?: string | null): string {
+    return [name, lastName]
+      .filter((part): part is string => !!part && part.trim().length > 0)
+      .join(' ')
+      .trim();
+  }
+
+  /**
+   * Shared tail of the name/last_name steps once the customer's name (and, when
+   * available, apellido) is stored: sets any party size the customer already
+   * mentioned, resolves an embedded day/time if present, and otherwise asks the
+   * next pending question. `embeddedPartySize` is the party size parsed from the
+   * current message (may be null); a previously-stashed draft.partySize is used
+   * as a fallback so nothing collected earlier is lost.
+   */
+  private async continueAfterNameCollected(
+    conversationId: string,
+    businessId: string,
+    jid: string,
+    messageText: string,
+    displayName: string,
+    embeddedPartySize: number | null
+  ): Promise<void> {
+    const draftNow = await ReservationService.getDraft(conversationId);
+    const validEmbedded =
+      embeddedPartySize && embeddedPartySize > 0 && embeddedPartySize <= 50
+        ? embeddedPartySize
+        : null;
+    const effectivePartySize = validEmbedded ?? draftNow?.partySize ?? null;
+
+    if (!(effectivePartySize && effectivePartySize > 0 && effectivePartySize <= 50)) {
+      await this.sendWhatsAppMessage(businessId, jid, templates.askPartySize(displayName));
+      return;
+    }
+
+    if (validEmbedded) {
+      await ReservationService.setPartySize(conversationId, validEmbedded);
+      logger.info('✅ Embedded party size set after name collected', { conversationId, partySize: validEmbedded });
+    }
+
+    await this.resolveEmbeddedScheduleOrPromptChoice(conversationId, businessId, jid, messageText);
+  }
+
+  /**
+   * Out-of-order slot-filling tail (requirement #7): once name and party size
+   * are known, if the SAME message already named a valid day (and possibly a
+   * time), resolve it immediately instead of forcing the "¿hoy u otro día?"
+   * question. Shared by the name/last_name steps, the party_size step and the
+   * prefilled fast-path so any of them can complete the reservation from a
+   * single message regardless of the order the data arrived in. Falls back to
+   * the normal schedule-choice prompt when there's no usable day in the message.
+   */
+  private async resolveEmbeddedScheduleOrPromptChoice(
+    conversationId: string,
+    businessId: string,
+    jid: string,
+    messageText: string
+  ): Promise<void> {
+    const nowBA = nowInBuenosAires();
+    const namedDay = parseRelativeDay(messageText, nowBA);
+    if (namedDay && isWithinNextWeek(namedDay.baDate, nowBA)) {
+      const business = await SupabaseService.getBusinessById(businessId);
+      const weeklyHours = business?.weekly_hours as WeeklyHours | null | undefined;
+      const dayOpen = weeklyHours && Object.keys(weeklyHours).length > 0
+        ? isDayOpen(namedDay.baDate, weeklyHours)
+        : { open: true };
+      const dateKey = formatBaDateKey(namedDay.baDate);
+      const blockedDates = await SupabaseService.getBlockedDates(businessId);
+
+      if (dayOpen.open && !isDateBlocked(dateKey, blockedDates)) {
+        await ReservationService.setScheduledDate(conversationId, namedDay);
+
+        const namedTime = parseTimeOfDay(messageText);
+        if (namedTime) {
+          const refreshedDraft = await ReservationService.getDraft(conversationId);
+          if (refreshedDraft) {
+            await this.finalizeScheduledTime(
+              refreshedDraft,
+              conversationId,
+              businessId,
+              jid,
+              dateKey,
+              namedTime.hour,
+              namedTime.minute
+            );
+            return;
+          }
+        }
+
+        await this.sendWhatsAppMessage(
+          businessId,
+          jid,
+          await this.buildAskTimeMessage(businessId, dateKey, namedDay.label, weeklyHours)
+        );
+        return;
+      }
+    }
+
+    await this.promptScheduleChoice(conversationId, businessId, jid);
   }
 
   private extractNameCandidate(text: string): string | null {
@@ -3839,7 +4745,18 @@ export class WhatsAppHandler {
       logger.info('🎯 Starting CREATE_RESERVATION action', { conversationId, businessId, phone });
 
       // Start reservation flow regardless of existing active reservations.
-      const draft = await ReservationService.startReservation(conversationId, businessId);
+      // Known customers (phone already in `customers`) skip straight to
+      // party_size — the agent's own reply is driven by the resulting step,
+      // so no message is sent from here either way.
+      const knownCustomer = await SupabaseService.getCustomerByPhone(phone, businessId);
+      const draft = knownCustomer?.name
+        ? await ReservationService.startReservationForKnownCustomer(
+            conversationId,
+            businessId,
+            knownCustomer.name,
+            knownCustomer.lastName
+          )
+        : await ReservationService.startReservation(conversationId, businessId);
       logger.info('✅ Reservation flow started', {
         conversationId,
         draftStep: draft.step,

@@ -14,7 +14,7 @@ export function welcomeMessage(businessName: string): string {
     `👋 ¡Hola!\n` +
     `Soy el asistente de reservas de *${businessName}*.\n` +
     `Voy a ayudarte a reservar tu mesa en pocos segundos.\n\n` +
-    `¿Cómo te llamás?`
+    `¿Cómo te llamás? Decime tu *nombre y apellido*.`
   );
 }
 
@@ -26,12 +26,63 @@ export function askPartySize(name: string): string {
   );
 }
 
+/**
+ * Greets a customer already known by phone (name on file) and asks party
+ * size directly — skips the name/apellido question entirely.
+ */
+export function welcomeBackAskPartySize(customerName: string): string {
+  return (
+    `👋 ¡Hola ${customerName}!\n\n` +
+    `¿Para cuántas personas es la reserva?\n\n` +
+    `Ejemplo: 2, 4 o 6 personas.`
+  );
+}
+
 export function askScheduleChoice(): string {
   return (
     `📅 ¿La reserva es para...?\n\n` +
     `1️⃣ Hoy (turno actual)\n` +
     `2️⃣ Otra fecha\n\n` +
     `Respondé con el *número* de la opción, o directamente decime el día (ej: "el viernes").`
+  );
+}
+
+export function askDayClosedToday(openDays?: string | null): string {
+  if (openDays) {
+    return (
+      `❌ Hoy el local está cerrado.\n\n` +
+      `📅 ¿Qué día preferís?\n` +
+      `Estamos abiertos los: *${openDays}*.\n\n` +
+      `Podés decir "mañana", "el viernes", etc.`
+    );
+  }
+  return (
+    `❌ Hoy el local está cerrado.\n\n` +
+    `📅 ¿Qué día preferís? Podés decir "mañana", "el viernes", etc.`
+  );
+}
+
+const LIST_EMOJIS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣'];
+
+/**
+ * Shown instead of {@link askScheduleChoice} when today is already closed —
+ * skips the "Hoy / Otra fecha" question entirely and jumps straight to
+ * concrete day + hour-range alternatives so the customer never picks an
+ * option that turns out to be unavailable.
+ */
+export function askDayClosedTodayWithSchedule(dayLines: string[]): string {
+  if (dayLines.length === 0) {
+    return (
+      `⛔ Hoy está cerrado y no encontré disponibilidad en los próximos 7 días.\n\n` +
+      `Escribinos más adelante para coordinar tu reserva.`
+    );
+  }
+  const list = dayLines.map((line, i) => `${LIST_EMOJIS[i] ?? `${i + 1}.`} ${line}`).join('\n');
+  return (
+    `⛔ Hoy está cerrado.\n\n` +
+    `📅 ¿Para cuál de estos días querés la reserva?\n\n` +
+    `${list}\n\n` +
+    `Respondé con el día que preferís (ej: "jueves" o "jueves 09:15").`
   );
 }
 
@@ -64,11 +115,12 @@ export function askTodayTimeOpen(closeLabel: string | null): string {
 export function reservationSummary(
   name: string,
   partySize: number,
-  whenLabel: string
+  whenLabel: string,
+  fullName: string = name
 ): string {
   return (
     `📋 Antes de confirmar, verificá que los datos sean correctos:\n\n` +
-    `👤 Nombre: ${name}\n` +
+    `👤 Nombre: ${fullName}\n` +
     `👥 Personas: ${partySize}\n` +
     `📅 Fecha y hora: ${whenLabel}\n\n` +
     `¿Está todo correcto?\n\n` +
@@ -93,12 +145,13 @@ export function reservationConfirmed(
   name: string,
   partySize: number,
   whenLabel: string,
-  displayCode: string
+  displayCode: string,
+  fullName: string = name
 ): string {
   return (
     `✅ ¡Reserva confirmada!\n\n` +
     `Gracias, *${name}*. Tu reserva fue registrada correctamente.\n\n` +
-    `👤 Nombre: ${name}\n` +
+    `👤 Nombre: ${fullName}\n` +
     `👥 Personas: ${partySize}\n` +
     `📅 Fecha y hora: ${whenLabel}\n` +
     `📁 Código de reserva: *${displayCode}*\n\n` +
@@ -112,11 +165,12 @@ export function reservationReceived(
   name: string,
   partySize: number,
   whenLabel: string,
-  displayCode: string
+  displayCode: string,
+  fullName: string = name
 ): string {
   return (
     `⏳ *Reserva RECIBIDA*\n\n` +
-    `👤 Nombre: ${name}\n` +
+    `👤 Nombre: ${fullName}\n` +
     `👥 Personas: ${partySize}\n` +
     `📅 Fecha y hora: ${whenLabel}\n` +
     `📁 Código: *${displayCode}*\n\n` +
@@ -133,15 +187,16 @@ export function editMenu(
   partySize: number,
   whenLabel: string,
   displayCode: string,
-  statusLabel: string
+  statusLabel: string,
+  customerName?: string | null
 ): string {
+  const greeting = customerName
+    ? `👋 ¡Hola ${customerName}! ¿Qué necesitás hoy?\n\n`
+    : '';
   return (
-    `📋 Encontré una reserva activa.\n\n` +
-    `👥 Personas: *${partySize}*\n` +
-    `📅 Fecha y hora: ${whenLabel}\n` +
-    `📁 Código: *${displayCode}*\n` +
-    `📌 Estado: ${statusLabel}\n\n` +
-    `¿Qué querés modificar?\n\n` +
+    `${greeting}📋 Tenés 1 reserva activa:\n` +
+    `• ${partySize} personas, ${whenLabel} (${displayCode}) ${statusLabel}\n\n` +
+    `¿Qué querés hacer?\n\n` +
     `1️⃣ Cantidad de personas\n` +
     `2️⃣ Fecha\n` +
     `3️⃣ Horario\n` +
@@ -179,45 +234,53 @@ export function cancelMenu(partySize: number, whenLabel: string, displayCode: st
   );
 }
 
-export function activeReservationsSummary(reservations: {
-  index: number;
-  partySize: number;
-  whenLabel: string;
-  displayCode: string | null;
-  statusLabel: string;
-}[]): string {
-  const countLabel = reservations.length === 1 ? '1 reserva activa' : `${reservations.length} reservas activas`;
-  const reservationsList = reservations
-    .map((reservation) => {
-      const codeText = reservation.displayCode ? ` (${reservation.displayCode})` : '';
-      return `*${reservation.index}* - ${reservation.partySize} personas, ${reservation.whenLabel}${codeText} — ${reservation.statusLabel}`;
-    })
-    .join('\n');
-
+/**
+ * Direct cancellation confirmation (CAMBIO 2): merges the reservation
+ * summary and the yes/no question into a single message, skipping the
+ * reprogramar/cancelar-definitivamente menu entirely for the CANCELAR
+ * fast path.
+ */
+export function cancelDirectConfirmPrompt(
+  partySize: number,
+  whenLabel: string,
+  displayCode: string
+): string {
   return (
-    `📋 Tenés ${countLabel}:\n\n` +
-    `${reservationsList}`
+    `📋 Encontré tu reserva de *${partySize}* personas para ${whenLabel} (código *${displayCode}*).\n\n` +
+    `¿Cancelamos esta reserva?\n\n` +
+    `1️⃣ Sí, cancelar\n` +
+    `2️⃣ Volver atrás`
   );
 }
 
-export function activeReservationsMenu(reservations: {
-  index: number;
-  partySize: number;
-  whenLabel: string;
-  displayCode: string | null;
-  statusLabel: string;
-}[]): string {
+export function activeReservationsMenu(
+  reservations: {
+    index: number;
+    partySize: number;
+    whenLabel: string;
+    displayCode: string | null;
+    statusLabel: string;
+  }[],
+  action: 'edit' | 'cancel' | 'view' = 'view'
+): string {
   const reservationsList = reservations
     .map((reservation) => {
       const codeText = reservation.displayCode ? ` (${reservation.displayCode})` : '';
       return `*${reservation.index}* - ${reservation.partySize} personas, ${reservation.whenLabel}${codeText} — ${reservation.statusLabel}`;
     })
     .join('\n');
+
+  const prompt =
+    action === 'cancel'
+      ? `Respondé con el *número* de la reserva que querés cancelar.`
+      : action === 'edit'
+        ? `Respondé con el *número* de la reserva que querés modificar.`
+        : `Respondé con el *número* de la reserva para ver opciones de modificación o cancelación.`;
 
   return (
     `📋 Tengo varias reservas activas:\n\n` +
     `${reservationsList}\n\n` +
-    `Respondé con el *número* de la reserva para ver opciones de modificación o cancelación.\n` +
+    `${prompt}\n` +
     `O escribí *RESERVAR* para crear otra reserva.`
   );
 }
@@ -399,11 +462,21 @@ export function postVisitMessage(): string {
 // ============================
 
 export function askName(): string {
-  return `¿Cuál es tu nombre para la reserva?`;
+  return `¿Cuál es tu nombre y apellido para la reserva?`;
 }
 
 export function askNameAgain(): string {
-  return `¿Cuál es tu nombre para continuar con la reserva?`;
+  return `¿Cuál es tu nombre y apellido para continuar con la reserva?`;
+}
+
+/** Asks only for the apellido once the first name is already known. */
+export function askLastName(firstName: string): string {
+  return `Gracias, *${firstName}*. ¿Cuál es tu apellido?`;
+}
+
+/** Re-ask when the apellido reply wasn't understood. */
+export function askLastNameAgain(): string {
+  return `No reconocí el apellido. ¿Me lo repetís, por favor?`;
 }
 
 export function processCancelled(): string {

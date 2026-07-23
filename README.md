@@ -1,6 +1,6 @@
 # 🤖 IA Server - Backend de Inteligencia Artificial para WhatsApp
 
-API REST en Node.js/Express que funciona como backend de inteligencia artificial para un sistema de gestión de listas de espera de restaurantes vía WhatsApp, usando Ollama + Llama 3.2.
+API REST en Node.js/Express que funciona como backend de inteligencia artificial para un sistema de gestión de listas de espera de restaurantes vía WhatsApp, usando OpenRouter (acceso a Claude, GPT, Gemini y otros modelos vía una única API).
 
 ## 📋 Tabla de Contenidos
 
@@ -17,14 +17,14 @@ API REST en Node.js/Express que funciona como backend de inteligencia artificial
 
 ## ✨ Características
 
-- 🤖 **Procesamiento de IA con Ollama**: Usa Llama 3.2 para respuestas naturales
+- 🤖 **Procesamiento de IA con OpenRouter**: Acceso a modelos de última generación (Claude, GPT, Gemini, etc.) vía una única API, con failover automático entre modelos
 - 🎭 **Sistema Multi-Agente**: Agentes especializados para flujos de negocio ([Ver docs/AGENTS.md](docs/AGENTS.md))
 - 💬 **Gestión de Conversaciones**: Mantiene historial de últimos 10 mensajes por conversación
 - 🎯 **Análisis de Intenciones**: Clasifica mensajes en acciones específicas automáticamente
 - ⚡ **Procesamiento por Lotes**: Endpoint batch para múltiples mensajes
 - 🔒 **Seguridad**: Autenticación con API Key, CORS, Helmet, Rate Limiting
 - 📊 **Cache Inteligente**: Redis para conversaciones y contexto
-- 🔄 **Retry Logic**: Reintentos automáticos en fallos de Ollama
+- 🔄 **Retry Logic**: Reintentos automáticos en fallos de OpenRouter, con failover entre modelos
 - 📝 **Logging Estructurado**: Winston para logs detallados
 - ✅ **Validación Robusta**: Zod para validación de esquemas
 - 🚀 **Process Management**: PM2 para producción con cluster mode
@@ -41,8 +41,8 @@ API REST en Node.js/Express que funciona como backend de inteligencia artificial
                     ┌──────────────────────┼──────────────────────┐
                     ↓                      ↓                      ↓
               ┌──────────┐          ┌──────────┐          ┌──────────┐
-              │  Ollama  │          │  Redis   │          │PostgreSQL│
-              │(Llama3.2)│          │ (Cache)  │          │(Opcional)│
+              │OpenRouter│          │  Redis   │          │PostgreSQL│
+              │(multi-LLM│          │ (Cache)  │          │(Opcional)│
               └──────────┘          └──────────┘          └──────────┘
 ```
 
@@ -51,8 +51,8 @@ API REST en Node.js/Express que funciona como backend de inteligencia artificial
 1. **Cliente WhatsApp** envía mensaje → **Next.js**
 2. **Next.js** envía a `/api/chat` con contexto del negocio
 3. **IA Server** recupera historial de Redis
-4. **Ollama** procesa con Llama 3.2 y genera respuesta
-5. Parsea **acciones** estructuradas de la respuesta
+4. **OpenRouter** procesa el mensaje con el modelo configurado (`OPENROUTER_MODEL`) y genera respuesta
+5. Las **acciones** (registrar, cancelar, etc.) llegan como tool calls estructurados y validados por schema, no como texto a parsear
 6. Guarda en **historial** y retorna a Next.js
 7. **Next.js** ejecuta acciones y envía respuesta por WhatsApp
 
@@ -60,7 +60,7 @@ API REST en Node.js/Express que funciona como backend de inteligencia artificial
 
 - **Node.js** 22+ y npm 10+
 - **Redis** 6+ (para cache de conversaciones)
-- **Ollama** con modelo Llama 3.2
+- **Cuenta de OpenRouter** (https://openrouter.ai) con API key y crédito cargado
 - **PM2** (opcional, para producción)
 
 ### Instalación de Dependencias
@@ -77,26 +77,20 @@ sudo apt-get install redis-server
 sudo systemctl enable redis-server
 sudo systemctl start redis-server
 
-# Ollama
-curl -fsSL https://ollama.ai/install.sh | sh
-ollama pull llama3.2
-
 # PM2 (opcional)
 sudo npm install -g pm2
 ```
+
+No hace falta instalar ni servir ningún modelo localmente — OpenRouter es un servicio HTTP externo, solo necesitás la API key (ver sección de Configuración).
 
 #### macOS
 
 ```bash
 # Homebrew
-brew install node redis ollama
+brew install node redis
 
-# Iniciar servicios
+# Iniciar Redis
 brew services start redis
-ollama serve &
-
-# Descargar modelo
-ollama pull llama3.2
 
 # PM2
 npm install -g pm2
@@ -117,13 +111,7 @@ chmod +x setup.sh
 ./setup.sh
 ```
 
-El script verificará:
-- ✅ Node.js 22+
-- ✅ Redis instalado y corriendo
-- ✅ Ollama instalado con modelo llama3.2
-- ✅ Instalación de dependencias npm
-- ✅ Creación de `.env`
-- ✅ Build de TypeScript
+El script verificará Node.js, Redis, conectividad con OpenRouter y las dependencias npm. No requiere instalar ningún modelo de IA localmente.
 
 ### 3. Configurar variables de entorno
 
@@ -143,10 +131,12 @@ PORT=4000
 #   útil para probar sin enviar respuestas a clientes reales
 NODE_ENV=production
 
-# Ollama
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=llama3.2
-OLLAMA_TIMEOUT=30000
+# OpenRouter (https://openrouter.ai)
+OPENROUTER_API_KEY=tu_openrouter_api_key
+OPENROUTER_MODEL=anthropic/claude-3.5-sonnet
+# Opcional: modelos de respaldo separados por coma, probados en orden si el principal falla
+OPENROUTER_FALLBACK_MODELS=
+OPENROUTER_TIMEOUT=30000
 
 # Security - ¡CAMBIAR EN PRODUCCIÓN!
 API_KEY=tu_api_key_secreta_aqui_cambiar_en_produccion
@@ -273,9 +263,9 @@ Health check del servidor (sin autenticación).
 ```json
 {
   "status": "healthy",
-  "ollama": true,
+  "llm": true,
   "redis": true,
-  "model": "llama3.2",
+  "model": "anthropic/claude-3.5-sonnet",
   "uptime": 3600,
   "timestamp": "2026-02-06T10:30:00Z"
 }
@@ -566,7 +556,7 @@ npm run test:coverage
 ### Tests Incluidos
 
 - ✅ **Utils**: Actions parsing, prompts, entities extraction
-- ✅ **Services**: Ollama service con mocks, retry logic
+- ✅ **Services**: OpenRouter service con mocks, retry logic, tool calling
 - ✅ **Integration**: API endpoints con supertest
 
 ### Probar Endpoints Manualmente
@@ -635,21 +625,18 @@ Para probar la IA sin enviar respuestas a clientes reales:
 
 ## 🔧 Troubleshooting
 
-### Ollama no responde
+### OpenRouter no responde / errores de IA
 
 ```bash
-# Verificar si Ollama está corriendo
-curl http://localhost:11434/api/tags
+# Verificar que la API key es válida y hay crédito disponible
+curl https://openrouter.ai/api/v1/models \
+  -H "Authorization: Bearer $OPENROUTER_API_KEY"
 
-# Iniciar Ollama
-ollama serve
-
-# Verificar modelo descargado
-ollama list
-
-# Descargar modelo si falta
-ollama pull llama3.2
+# Ver el estado reportado por el propio server
+curl http://localhost:4000/health
 ```
+
+Causas típicas: `OPENROUTER_API_KEY` vacía o inválida, sin crédito cargado en la cuenta de OpenRouter, o el modelo en `OPENROUTER_MODEL` no existe/fue deprecado (ver catálogo en https://openrouter.ai/models).
 
 ### Redis no conecta
 
@@ -744,13 +731,13 @@ ia-server/
 ├── src/
 │   ├── index.ts                 # Entry point
 │   ├── config/
-│   │   ├── ollama.ts           # Ollama client config
+│   │   ├── openrouter.ts       # OpenRouter client config
 │   │   └── redis.ts            # Redis client config
 │   ├── controllers/
 │   │   ├── chat.controller.ts   # Chat & batch handlers
 │   │   └── health.controller.ts # Health check
 │   ├── services/
-│   │   ├── ollama.service.ts    # Ollama API wrapper
+│   │   ├── openrouter.service.ts # OpenRouter API wrapper
 │   │   ├── conversation.service.ts # Conversation history
 │   │   └── intent.service.ts    # Intent analysis
 │   ├── middleware/

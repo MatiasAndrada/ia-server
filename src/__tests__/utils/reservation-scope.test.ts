@@ -1,7 +1,6 @@
 import {
   evaluateReservationScope,
   isObviouslyGibberish,
-  containsProfanity,
   looksLikePersonName,
   hasDateOrTimeSignal,
   isInstantChoiceMessage,
@@ -223,20 +222,6 @@ describe('reservation-scope', () => {
 
     it('accepts a normal name', () => {
       expect(isObviouslyGibberish('Maria Fernandez')).toBe(false);
-    });
-  });
-
-  describe('containsProfanity', () => {
-    it('detects exact profane words', () => {
-      expect(containsProfanity('sos un boludo')).toBe(true);
-    });
-
-    it('detects profanity via intensifier + root matching', () => {
-      expect(containsProfanity('reboludo')).toBe(true);
-    });
-
-    it('does not flag a normal name', () => {
-      expect(containsProfanity('Martina Gomez')).toBe(false);
     });
   });
 

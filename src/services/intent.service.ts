@@ -1,11 +1,11 @@
-import { ollamaService } from './ollama.service';
+import { openRouterService } from './openrouter.service';
 import { IntentType, IntentResponse, BusinessContext } from '../types';
 import { buildIntentPrompt } from '../utils/prompts';
 import { logger } from '../utils/logger';
 
 export class IntentService {
   /**
-   * Analyze message intent using Ollama
+   * Analyze message intent using the LLM (OpenRouter)
    */
   async analyzeIntent(
     message: string,
@@ -29,7 +29,7 @@ export class IntentService {
         }
       }
 
-      const response = await ollamaService.chat(
+      const response = await openRouterService.chat(
         [{ role: 'user', content: userMessage }],
         systemPrompt
       );
@@ -59,7 +59,7 @@ export class IntentService {
   }
 
   /**
-   * Parse intent response from Ollama
+   * Parse intent response from the LLM
    */
   private parseIntentResponse(response: string): IntentResponse {
     try {

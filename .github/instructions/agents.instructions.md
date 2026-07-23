@@ -13,7 +13,7 @@ export const myAgent: AgentConfig = {
   id: 'my-agent',            // kebab-case, único
   name: 'Nombre Legible',
   description: 'Descripción de una línea',
-  model: 'llama3.2',         // modelo por defecto
+  model: 'openrouter',         // modelo por defecto
   temperature: 0.2,          // ≤0.3 para flujos deterministas
   maxTokens: 250,
   enabled: true,

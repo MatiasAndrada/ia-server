@@ -1,10 +1,38 @@
-import { parseActions, calculateConfidence, extractEntities, cleanResponseText } from '../../utils/actions';
+import {
+  buildActionTool,
+  parseToolCallActions,
+  calculateConfidence,
+  extractEntities,
+  cleanResponseText,
+} from '../../utils/actions';
 
 describe('Actions Utils', () => {
-  describe('parseActions', () => {
-    it('should parse explicit action from response', () => {
-      const response = 'I will register you. [ACTION:REGISTER:{"name":"John","partySize":4}]';
-      const actions = parseActions(response);
+  describe('buildActionTool', () => {
+    it('should expose emit_action with the four known action types in its schema', () => {
+      const tool = buildActionTool();
+
+      expect(tool.type).toBe('function');
+      expect(tool.function.name).toBe('emit_action');
+      expect(tool.function.parameters.properties.type.enum).toEqual([
+        'REGISTER',
+        'CHECK_STATUS',
+        'CANCEL',
+        'INFO_REQUEST',
+      ]);
+    });
+  });
+
+  describe('parseToolCallActions', () => {
+    it('should parse a single tool call into an Action', () => {
+      const toolCalls = [
+        {
+          id: 'call_1',
+          type: 'function' as const,
+          function: { name: 'emit_action', arguments: '{"type":"REGISTER","name":"John","partySize":4}' },
+        },
+      ];
+
+      const actions = parseToolCallActions(toolCalls);
 
       expect(actions).toHaveLength(1);
       expect(actions[0].type).toBe('REGISTER');
@@ -12,38 +40,53 @@ describe('Actions Utils', () => {
       expect(actions[0].confidence).toBe(0.9);
     });
 
-    it('should parse multiple actions', () => {
-      const response = 
-        'Processing... [ACTION:REGISTER:{"name":"John"}] [ACTION:CHECK_STATUS:{"phone":"+123"}]';
-      const actions = parseActions(response);
+    it('should parse multiple tool calls', () => {
+      const toolCalls = [
+        {
+          id: 'call_1',
+          type: 'function' as const,
+          function: { name: 'emit_action', arguments: '{"type":"REGISTER","name":"John"}' },
+        },
+        {
+          id: 'call_2',
+          type: 'function' as const,
+          function: { name: 'emit_action', arguments: '{"type":"CHECK_STATUS"}' },
+        },
+      ];
+
+      const actions = parseToolCallActions(toolCalls);
 
       expect(actions).toHaveLength(2);
       expect(actions[0].type).toBe('REGISTER');
       expect(actions[1].type).toBe('CHECK_STATUS');
     });
 
-    it('should infer REGISTER action from text', () => {
-      const response = 'Claro, te anoto en la lista. ¿Cuántas personas?';
-      const actions = parseActions(response);
+    it('should skip tool calls with an unknown action type', () => {
+      const toolCalls = [
+        {
+          id: 'call_1',
+          type: 'function' as const,
+          function: { name: 'emit_action', arguments: '{"type":"NOT_A_REAL_ACTION"}' },
+        },
+      ];
 
-      expect(actions).toHaveLength(1);
-      expect(actions[0].type).toBe('REGISTER');
-      expect(actions[0].data.inferred).toBe(true);
+      expect(parseToolCallActions(toolCalls)).toHaveLength(0);
     });
 
-    it('should infer CHECK_STATUS action', () => {
-      const response = 'Tu posición en la lista es la siguiente...';
-      const actions = parseActions(response);
+    it('should skip tool calls with malformed JSON arguments instead of throwing', () => {
+      const toolCalls = [
+        {
+          id: 'call_1',
+          type: 'function' as const,
+          function: { name: 'emit_action', arguments: '{not valid json' },
+        },
+      ];
 
-      expect(actions).toHaveLength(1);
-      expect(actions[0].type).toBe('CHECK_STATUS');
+      expect(parseToolCallActions(toolCalls)).toHaveLength(0);
     });
 
-    it('should return empty array for unclear text', () => {
-      const response = 'Hola, ¿cómo estás?';
-      const actions = parseActions(response);
-
-      expect(actions).toHaveLength(0);
+    it('should return empty array when there are no tool calls', () => {
+      expect(parseToolCallActions([])).toHaveLength(0);
     });
   });
 

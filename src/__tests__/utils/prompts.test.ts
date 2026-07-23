@@ -51,13 +51,11 @@ describe('Prompts Utils', () => {
       expect(prompt).toContain('cliente nuevo');
     });
 
-    it('should include action format instructions', () => {
+    it('should instruct the model to use the emit_action tool instead of a text marker', () => {
       const prompt = buildSystemPrompt();
 
-      expect(prompt).toContain('[ACTION:');
-      expect(prompt).toContain('REGISTER');
-      expect(prompt).toContain('CHECK_STATUS');
-      expect(prompt).toContain('CANCEL');
+      expect(prompt).toContain('emit_action');
+      expect(prompt).not.toContain('[ACTION:');
     });
   });
 

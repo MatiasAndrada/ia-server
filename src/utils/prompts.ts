@@ -1,6 +1,19 @@
 import { BusinessContext } from '../types';
 
 /**
+ * Builds a human-readable "address, city" string from raw business columns,
+ * so the agent always quotes the exact data from the `businesses` table
+ * instead of letting the LLM guess or invent a location.
+ */
+export function formatBusinessAddress(
+  address?: string | null,
+  city?: string | null
+): string | undefined {
+  const parts = [address?.trim(), city?.trim()].filter((part): part is string => !!part);
+  return parts.length > 0 ? parts.join(', ') : undefined;
+}
+
+/**
  * Builds a comprehensive system prompt for the AI based on business context
  */
 export function buildSystemPrompt(context?: BusinessContext): string {
@@ -43,22 +56,13 @@ ${customerContext}
 - Usa un tono cercano pero profesional
 - Responde en español
 - Si necesitas información adicional, pregunta claramente
-- Cuando realices una acción (registrar, cancelar, etc.), indícalo claramente
+- Cuando el mensaje del cliente dispare una acción concreta (registrar, consultar estado, cancelar, pedir información), llamá a la herramienta emit_action con los datos correspondientes — no la describas en el texto de tu respuesta
+- Si el turno es solo conversación (saludo, pregunta general sin acción clara), respondé normalmente sin llamar a ninguna herramienta
 
-**FORMATO DE ACCIONES:**
-Cuando debas realizar una acción específica, inclúyela en tu respuesta usando este formato JSON al final:
-[ACTION:tipo_accion:{"campo": "valor"}]
-
-Tipos de acciones disponibles:
-- REGISTER: {"name": "nombre", "partySize": número, "preferences": "texto"}
-- CHECK_STATUS: {"phone": "teléfono"}
-- CANCEL: {"phone": "teléfono", "reason": "motivo"}
-- INFO_REQUEST: {"topic": "tema"}
-
-**EJEMPLO DE RESPUESTA:**
+**EJEMPLO:**
 Cliente: "Hola, quiero anotarme para 4 personas"
 Tu respuesta: "¡Hola! Claro, con gusto te anoto para 4 personas. ¿Me podrías decir tu nombre completo? El tiempo de espera estimado es de ${averageWaitTime} minutos."
-[ACTION:REGISTER:{"partySize": 4, "status": "pending_name"}]
+(y en paralelo, llamada a emit_action con type: "REGISTER", partySize: 4)
 
 Responde siempre de manera natural y amigable, priorizando la experiencia del cliente.`;
 }

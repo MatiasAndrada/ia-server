@@ -1,6 +1,6 @@
 # ia-server — Instrucciones de Workspace
 
-Servidor REST de IA para WhatsApp construido con **Express + TypeScript + Ollama + Supabase + Redis**.
+Servidor REST de IA para WhatsApp construido con **Express + TypeScript + OpenRouter + Supabase + Redis**.
 Arquitectura en capas: `routes → middleware → controllers → services → config`.
 
 ---
@@ -13,7 +13,7 @@ Arquitectura en capas: `routes → middleware → controllers → services → c
 - **`src/middleware/`** — Auth, validación Zod, rate limiting.
 - **`src/agents/`** — Configuraciones de agentes IA (`AgentConfig`). Registro central en `agents/index.ts`.
 - **`src/types/`** — Interfaces TypeScript en `types/index.ts`. Tipos Supabase auto-generados en `types/supabase.ts`.
-- **`src/config/`** — Singletons de clientes (Redis, Supabase, Ollama axios).
+- **`src/config/`** — Singletons de clientes (Redis, Supabase, OpenRouter axios).
 - **`src/utils/`** — Logger Winston, prompt builders, formatters.
 
 ---
@@ -92,10 +92,11 @@ logger.info(`Chat procesado para ${phone} en ${businessId}`);
 
 ## Servicios Externos
 
-### Ollama
-- Usar `OllamaService.chat()` — ya maneja reintentos con backoff exponencial.
-- Modelo por defecto: `llama3.2`. Cada agente puede tener su propio modelo.
+### OpenRouter
+- Usar `openRouterService.chat()` para texto plano, o `openRouterService.chatWithActions()` cuando la respuesta debe incluir tool calls (acciones estructuradas vía `buildActionTool()` / `parseToolCallActions()` en `utils/actions.ts`).
+- Modelo y fallbacks se configuran vía `OPENROUTER_MODEL` / `OPENROUTER_FALLBACK_MODELS` (env), no hardcodeados por agente.
 - Temperatura baja (≤0.3) para respuestas deterministas en flujos de reservas.
+- Nunca usar `[ACTION:tipo:{json}]` como texto embebido en la respuesta — las acciones van por tool calling, no por marcadores de texto.
 
 ### Redis
 - Acceder vía `RedisConfig.getClient()`.
@@ -121,5 +122,5 @@ logger.info(`Chat procesado para ${phone} en ${businessId}`);
 ## Tests
 
 - Framework: Jest + ts-jest. Archivos en `src/__tests__/`.
-- Siempre mockear servicios externos (Redis, Supabase, Ollama) en tests unitarios.
+- Siempre mockear servicios externos (Redis, Supabase, OpenRouter) en tests unitarios.
 - Ejecutar: `npm test`.

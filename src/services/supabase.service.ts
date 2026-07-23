@@ -12,7 +12,7 @@ import {
   BlockedDateEntry,
 } from '../types';
 import { logger } from '../utils/logger';
-import { ollamaService } from './ollama.service';
+import { openRouterService } from './openrouter.service';
 import { describeScheduledAtUtc, nowInBuenosAires } from '../utils/reservation-datetime';
 import * as templates from '../utils/message-templates';
 
@@ -212,13 +212,16 @@ export class SupabaseService {
   static async getOrCreateCustomer(
     name: string,
     phone: string,
-    businessId: string
+    businessId: string,
+    lastName?: string | null
   ): Promise<Customer> {
     try {
       const client = this.getClient();
-      
+
       // Format name with capitalized first letter of each word
       const formattedName = formatName(name);
+      const formattedLastName =
+        lastName && lastName.trim().length > 0 ? formatName(lastName) : null;
 
       // Try to find existing customer for this business
       const { data: existingCustomerData, error: findError } = await client
@@ -239,6 +242,9 @@ export class SupabaseService {
         const updateData: CustomersUpdate = {
           last_seen_at: new Date().toISOString(),
           name: formattedName,
+          // Only overwrite the stored apellido when a new one was provided, so a
+          // later instant reservation without an apellido doesn't wipe it.
+          ...(formattedLastName ? { lastName: formattedLastName } : {}),
         };
 
         const { data: updatedCustomerData, error: updateError } = await client
@@ -260,6 +266,7 @@ export class SupabaseService {
       // Otherwise, create new customer
       const insertData: CustomersInsert = {
         name: formattedName,
+        lastName: formattedLastName,
         phone,
         business_id: businessId,
         last_seen_at: new Date().toISOString(),
@@ -281,6 +288,81 @@ export class SupabaseService {
     } catch (error) {
       logger.error('Supabase: getOrCreateCustomer failed', { error, phone, businessId });
       throw error;
+    }
+  }
+
+  /** Reads a customer by phone/business, or null when none exists yet. */
+  static async getCustomerByPhone(
+    phone: string,
+    businessId: string
+  ): Promise<Customer | null> {
+    try {
+      const client = this.getClient();
+      const { data, error } = await client
+        .from('customers')
+        .select('*')
+        .eq('business_id', businessId)
+        .eq('phone', phone)
+        .maybeSingle();
+      if (error) throw error;
+      return (data as Customer | null) ?? null;
+    } catch (error) {
+      logger.error('Supabase: getCustomerByPhone failed', { error, phone, businessId });
+      return null;
+    }
+  }
+
+  /**
+   * Update a customer's stored name and/or apellido by phone number, so a
+   * natural-language "cambiá mi nombre a ..." request is reflected in future
+   * interactions (customers.name / customers.lastName). Returns the updated
+   * customer, or null when no customer exists yet for that phone/business.
+   */
+  static async updateCustomerNameByPhone(
+    phone: string,
+    businessId: string,
+    updates: { name?: string; lastName?: string }
+  ): Promise<Customer | null> {
+    try {
+      const client = this.getClient();
+
+      const { data: customerData, error: findError } = await client
+        .from('customers')
+        .select('*')
+        .eq('business_id', businessId)
+        .eq('phone', phone)
+        .maybeSingle();
+
+      if (findError) throw findError;
+      const customer = customerData as Customer | null;
+      if (!customer) return null;
+
+      const updateData: CustomersUpdate = {
+        last_seen_at: new Date().toISOString(),
+      };
+      if (updates.name && updates.name.trim().length > 0) {
+        updateData.name = formatName(updates.name);
+      }
+      if (updates.lastName !== undefined) {
+        updateData.lastName =
+          updates.lastName.trim().length > 0 ? formatName(updates.lastName) : null;
+      }
+
+      const { data: updatedData, error: updateError } = await client
+        .from('customers')
+        .update(updateData)
+        .eq('id', customer.id)
+        .select('*')
+        .single();
+
+      if (updateError) throw updateError;
+
+      const updated = updatedData as Customer;
+      logger.info('Customer name updated by phone', { customerId: updated.id, phone });
+      return updated;
+    } catch (error) {
+      logger.error('Supabase: updateCustomerNameByPhone failed', { error, phone, businessId });
+      return null;
     }
   }
 
@@ -306,7 +388,8 @@ export class SupabaseService {
       const customer = await this.getOrCreateCustomer(
         request.customerName,
         request.customerPhone,
-        request.businessId
+        request.businessId,
+        request.customerLastName ?? null
       );
       logger.info('✅ Customer ready', { customerId: customer.id, name: customer.name });
 
@@ -763,7 +846,7 @@ export class SupabaseService {
 
   /**
    * Persist a newly-generated AI client-facing message for a blocked date so
-   * subsequent lookups can skip the Ollama call.
+   * subsequent lookups can skip the LLM call.
    */
   static async updateBlockedDateReasonMessage(
     businessId: string,
@@ -792,9 +875,10 @@ export class SupabaseService {
 
   /**
    * Create a business_blocked_dates row. When a `reason` is given, an AI
-   * (Ollama) generated, client-facing `reason_message` is produced and
-   * stored alongside it, so customers get a professional explanation
-   * instead of just the owner's short/informal reason.
+   * (LLM) generated, client-facing `reason_message` is produced in the
+   * background (fire-and-forget) without blocking the API response,
+   * so customers get a professional explanation instead of just the
+   * owner's short/informal reason.
    */
   static async createBlockedDate(
     businessId: string,
@@ -804,16 +888,6 @@ export class SupabaseService {
     try {
       const trimmedReason = reason?.trim() || null;
 
-      let reasonMessage: string | null = null;
-      if (trimmedReason) {
-        const business = await this.getBusinessById(businessId);
-        reasonMessage = await ollamaService.generateBlockedDateReasonMessage(
-          trimmedReason,
-          business?.name,
-          business?.type
-        );
-      }
-
       const client = this.getClient();
       const { data, error } = await client
         .from('business_blocked_dates')
@@ -821,7 +895,7 @@ export class SupabaseService {
           business_id: businessId,
           date,
           reason: trimmedReason,
-          reason_message: reasonMessage,
+          reason_message: null, // Will be generated in background
         })
         .select()
         .single();
@@ -833,14 +907,54 @@ export class SupabaseService {
       logger.info('Supabase: blocked date created', {
         businessId,
         date,
-        hasReasonMessage: !!reasonMessage,
+        hasReason: !!trimmedReason,
       });
+
+      // Generate reason_message in background (fire-and-forget) without blocking the response
+      if (trimmedReason) {
+        this.generateAndSaveBlockedDateReasonMessage(businessId, date, trimmedReason);
+      }
 
       return data as BusinessBlockedDatesRow;
     } catch (error) {
       logger.error('Supabase: createBlockedDate failed', { error, businessId, date });
       return null;
     }
+  }
+
+  /**
+   * Generate the AI reason_message for a blocked date and update it in Supabase.
+   * Runs in the background without awaiting, so it doesn't block API responses.
+   */
+  private static generateAndSaveBlockedDateReasonMessage(
+    businessId: string,
+    date: string,
+    reason: string
+  ): void {
+    // Fire and forget — don't await this, just start it in background
+    (async () => {
+      try {
+        const business = await this.getBusinessById(businessId);
+        const reasonMessage = await openRouterService.generateBlockedDateReasonMessage(
+          reason,
+          business?.name,
+          business?.type
+        );
+
+        await this.updateBlockedDateReasonMessage(businessId, date, reasonMessage);
+
+        logger.info('Blocked date reason_message generated and saved', {
+          businessId,
+          date,
+        });
+      } catch (error) {
+        logger.warn('Failed to generate blocked date reason_message in background', {
+          error: error instanceof Error ? error.message : 'Unknown error',
+          businessId,
+          date,
+        });
+      }
+    })();
   }
 
   /**

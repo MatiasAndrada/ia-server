@@ -1,8 +1,8 @@
 import { Request, Response } from 'express';
 import { HealthResponse } from '../types';
-import { ollamaService } from '../services/ollama.service';
+import { openRouterService } from '../services/openrouter.service';
 import { RedisConfig } from '../config/redis';
-import { OllamaConfig } from '../config/ollama';
+import { OpenRouterConfig } from '../config/openrouter';
 import { logger } from '../utils/logger';
 
 const startTime = Date.now();
@@ -15,9 +15,9 @@ export async function healthHandler(_req: Request, res: Response) {
   try {
     logger.debug('Health check requested');
 
-    // Check Ollama
-    const ollamaHealth = await ollamaService.healthCheck();
-    const ollamaAvailable = ollamaHealth.available;
+    // Check LLM provider (OpenRouter)
+    const llmHealth = await openRouterService.healthCheck();
+    const llmAvailable = llmHealth.available;
 
     // Check Redis
     const redisAvailable = await RedisConfig.healthCheck();
@@ -27,10 +27,10 @@ export async function healthHandler(_req: Request, res: Response) {
 
     // Determine overall status
     let status: 'healthy' | 'degraded' | 'unhealthy';
-    
-    if (ollamaAvailable && redisAvailable) {
+
+    if (llmAvailable && redisAvailable) {
       status = 'healthy';
-    } else if (ollamaAvailable || redisAvailable) {
+    } else if (llmAvailable || redisAvailable) {
       status = 'degraded';
     } else {
       status = 'unhealthy';
@@ -38,9 +38,9 @@ export async function healthHandler(_req: Request, res: Response) {
 
     const response: HealthResponse = {
       status,
-      ollama: ollamaAvailable,
+      llm: llmAvailable,
       redis: redisAvailable,
-      model: OllamaConfig.getModel(),
+      model: OpenRouterConfig.getModel(),
       uptime,
       timestamp: new Date().toISOString(),
     };
@@ -50,7 +50,7 @@ export async function healthHandler(_req: Request, res: Response) {
 
     logger.info('Health check completed', {
       status,
-      ollama: ollamaAvailable,
+      llm: llmAvailable,
       redis: redisAvailable,
       uptime,
     });
@@ -63,7 +63,7 @@ export async function healthHandler(_req: Request, res: Response) {
 
     res.status(503).json({
       status: 'unhealthy',
-      ollama: false,
+      llm: false,
       redis: false,
       model: 'unknown',
       uptime: 0,
@@ -93,6 +93,14 @@ export async function statsHandler(_req: Request, res: Response) {
       conversationStats = await conversationService.getStats();
     }
 
+    // Reservation NLU (LLM extraction) counters — how often the model
+    // successfully read a message vs. the caller fell back to regex.
+    const { reservationNluMetrics } = await import('../services/reservation-nlu.service');
+    const nluTotal =
+      reservationNluMetrics.extracted +
+      reservationNluMetrics.empty +
+      reservationNluMetrics.error;
+
     res.json({
       uptime,
       memory: {
@@ -101,6 +109,12 @@ export async function statsHandler(_req: Request, res: Response) {
         rss: Math.round(memoryUsage.rss / 1024 / 1024) + ' MB',
       },
       conversations: conversationStats,
+      reservationNlu: {
+        ...reservationNluMetrics,
+        total: nluTotal,
+        // Share of extraction attempts that produced usable slots (0..1).
+        extractionRate: nluTotal > 0 ? reservationNluMetrics.extracted / nluTotal : null,
+      },
       timestamp: new Date().toISOString(),
     });
   } catch (error) {

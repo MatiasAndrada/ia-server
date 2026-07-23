@@ -1,5 +1,5 @@
-import { AgentConfig, AgentResponse, ConversationMessage, OllamaGenerationOptions, OllamaMessage } from '../types';
-import { ollamaService } from './ollama.service';
+import { AgentConfig, AgentResponse, ConversationMessage, LlmGenerationOptions, LlmMessage } from '../types';
+import { openRouterService } from './openrouter.service';
 import { RedisConfig } from '../config/redis';
 import { logger } from '../utils/logger';
 import {
@@ -67,7 +67,16 @@ class AgentService {
           currentStep: context?.currentStep,
         });
 
-        if (scopeEvaluation.decision !== 'allow' && scopeEvaluation.message) {
+        // Hard-block only prompt-injection attempts and the out-of-window date
+        // rule (both deterministic, non-negotiable). A generic 'off_topic'
+        // classification (message just didn't match any known reservation
+        // pattern — e.g. "¿para qué servís?") falls through to the LLM below
+        // instead of the canned bounce, so genuine questions get a real answer.
+        const mustHardBlock =
+          scopeEvaluation.decision === 'out_of_window' ||
+          (scopeEvaluation.decision === 'off_topic' && scopeEvaluation.reason === 'prompt_injection');
+
+        if (mustHardBlock && scopeEvaluation.message) {
           if (conversationId) {
             await this.updateConversationHistory(conversationId, message, scopeEvaluation.message);
           }
@@ -99,8 +108,8 @@ class AgentService {
         ? await this.getConversationHistory(conversationId)
         : [];
 
-      // Construir mensajes para Ollama
-      const messages: OllamaMessage[] = [
+      // Construir mensajes para el LLM
+      const messages: LlmMessage[] = [
         // Historial previo
         ...history.map(msg => ({
           role: msg.role as 'user' | 'assistant' | 'system',
@@ -126,6 +135,8 @@ class AgentService {
           if (context.currentStep) contextInfo.push(`Paso: ${context.currentStep}`);
           if (context.draftData?.customerName) contextInfo.push(`Cliente: ${context.draftData.customerName}`);
           if (context.draftData?.partySize) contextInfo.push(`Personas: ${context.draftData.partySize}`);
+          if (context.draftData?.scheduledDate) contextInfo.push(`Fecha elegida: ${context.draftData.scheduledDate}`);
+          if (context.draftData?.scheduledTime) contextInfo.push(`Horario elegido: ${context.draftData.scheduledTime}`);
 
           if (contextInfo.length > 0) {
             systemPrompt += `\n\n## Estado Actual:\n${contextInfo.join(' | ')}`;
@@ -134,13 +145,14 @@ class AgentService {
       }
 
       // Build per-agent generation options
-      const generationOptions: OllamaGenerationOptions = {};
+      const generationOptions: LlmGenerationOptions = {};
       if (agent.temperature !== undefined) generationOptions.temperature = agent.temperature;
-      if (agent.maxTokens !== undefined) generationOptions.num_predict = agent.maxTokens;
-      if (agent.numCtx !== undefined) generationOptions.num_ctx = agent.numCtx;
+      if (agent.maxTokens !== undefined) generationOptions.maxTokens = agent.maxTokens;
+      if (agent.reasoningMaxTokens !== undefined) generationOptions.reasoningMaxTokens = agent.reasoningMaxTokens;
+      // agent.numCtx no aplica a modelos vía OpenRouter (context window fijo por modelo, no configurable por request)
 
-      // Generar respuesta con Ollama
-      const aiResponse = await ollamaService.chat(messages, systemPrompt, generationOptions);
+      // Generar respuesta con el LLM (OpenRouter)
+      const aiResponse = await openRouterService.chat(messages, systemPrompt, generationOptions);
 
       // Inferir acción basada en las keywords del agente
       const inferredAction = agent.actions && agent.actions.length > 0
@@ -325,6 +337,7 @@ class AgentService {
     const replacements: { [key: string]: string } = {
       '{businessName}': context.businessName || 'el local',
       '[NOMBRE_NEGOCIO]': context.businessName || 'el local',
+      '{businessAddress}': context.businessAddress || 'no tengo esa información cargada',
       '{name}': context.draftData?.customerName || 'Cliente',
       '[NOMBRE]': context.draftData?.customerName || 'Cliente',
       '{qty}': context.draftData?.partySize ? String(context.draftData.partySize) : 'la cantidad indicada',

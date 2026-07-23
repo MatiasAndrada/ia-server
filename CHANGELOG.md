@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Replaced the local Ollama (Llama 3.2) inference engine with OpenRouter — no local model, requests now go to `OPENROUTER_MODEL` via the OpenRouter API, with automatic failover across `OPENROUTER_FALLBACK_MODELS`.
+- Actions (`REGISTER`, `CHECK_STATUS`, `CANCEL`, `INFO_REQUEST`) are now emitted via native tool calling with a JSON schema, replacing the old `[ACTION:tipo:{json}]` text-marker convention and its regex/keyword-based fallback parsing.
+- `/health` response field renamed `ollama` → `llm`.
+
 ## [1.0.0] - 2026-02-06
 
 ### Added

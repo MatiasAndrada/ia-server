@@ -133,16 +133,51 @@ export class ReservationService {
     return draft;
   }
 
+  /**
+   * Start a reservation flow for a customer already known by phone (name +
+   * apellido already on file): skips the `name`/`last_name` steps entirely
+   * and drops the customer straight into `party_size`.
+   */
+  static async startReservationForKnownCustomer(
+    conversationId: string,
+    businessId: string,
+    customerName: string,
+    customerLastName?: string | null
+  ): Promise<ReservationDraft> {
+    const draft: ReservationDraft = {
+      conversationId,
+      businessId,
+      step: 'party_size',
+      customerName: formatName(customerName),
+      customerLastName:
+        customerLastName && customerLastName.trim().length > 0
+          ? formatName(customerLastName)
+          : undefined,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    await this.saveDraft(draft);
+    logger.info('Reservation flow started for known customer (name step skipped)', {
+      conversationId,
+      businessId,
+    });
+
+    return draft;
+  }
+
   static async startReservationSelection(
     conversationId: string,
     businessId: string,
-    availableReservationIds: string[]
+    availableReservationIds: string[],
+    pendingSelectionAction: 'edit' | 'cancel' = 'edit'
   ): Promise<ReservationDraft> {
     const draft: ReservationDraft = {
       conversationId,
       businessId,
       step: 'reservation_selection',
       availableReservationIds,
+      pendingSelectionAction,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -152,6 +187,7 @@ export class ReservationService {
       conversationId,
       businessId,
       availableReservationIds,
+      pendingSelectionAction,
     });
     return draft;
   }
@@ -172,8 +208,73 @@ export class ReservationService {
 
     // Format name with capitalized first letter of each word
     draft.customerName = formatName(name);
+    // Ask for the apellido next (see the `last_name` step in WhatsAppHandler).
+    draft.step = 'last_name';
+
+    await this.saveDraft(draft);
+    return draft;
+  }
+
+  /**
+   * Set both the first name and the apellido at once (e.g. the customer wrote
+   * "Juan Pérez" in one message) and advance straight to the party_size step,
+   * skipping the dedicated apellido question.
+   */
+  static async setCustomerNameParts(
+    conversationId: string,
+    name: string,
+    lastName: string
+  ): Promise<ReservationDraft | null> {
+    const draft = await this.getDraft(conversationId);
+    if (!draft) {
+      logger.warn('Draft not found for setting name parts', { conversationId });
+      return null;
+    }
+
+    draft.customerName = formatName(name);
+    draft.customerLastName = formatName(lastName);
     draft.step = 'party_size';
-    
+
+    await this.saveDraft(draft);
+    return draft;
+  }
+
+  /**
+   * Set the apellido after it was asked in the `last_name` step and advance to
+   * the party_size step.
+   */
+  static async setCustomerLastName(
+    conversationId: string,
+    lastName: string
+  ): Promise<ReservationDraft | null> {
+    const draft = await this.getDraft(conversationId);
+    if (!draft) {
+      logger.warn('Draft not found for setting last name', { conversationId });
+      return null;
+    }
+
+    draft.customerLastName = formatName(lastName);
+    draft.step = 'party_size';
+
+    await this.saveDraft(draft);
+    return draft;
+  }
+
+  /**
+   * Update only the apellido without advancing the step (used when the customer
+   * corrects it, mirroring {@link setNameOnly}).
+   */
+  static async setLastNameOnly(
+    conversationId: string,
+    lastName: string
+  ): Promise<ReservationDraft | null> {
+    const draft = await this.getDraft(conversationId);
+    if (!draft) {
+      logger.warn('Draft not found for setLastNameOnly', { conversationId });
+      return null;
+    }
+
+    draft.customerLastName = formatName(lastName);
     await this.saveDraft(draft);
     return draft;
   }
@@ -384,6 +485,7 @@ export class ReservationService {
       const request: CreateReservationRequest = {
         businessId: draft.businessId,
         customerName: draft.customerName,
+        customerLastName: draft.customerLastName ?? null,
         customerPhone,
         partySize: draft.partySize,
         scheduledAt: draft.scheduledAt ?? null,
@@ -804,6 +906,59 @@ export class ReservationService {
 
     await this.saveDraft(draft);
     logger.info('Cancel menu draft started', { conversationId, reservationId });
+    return draft;
+  }
+
+  /**
+   * Start the M3 cancellation flow directly at the confirm step (skips the
+   * intermediate reprogramar/cancelar-definitivamente menu) — used when the
+   * customer's own message already made the cancellation intent explicit
+   * (e.g. typing "CANCELAR").
+   */
+  static async startCancelConfirm(
+    conversationId: string,
+    businessId: string,
+    reservationId: string,
+    existingData: { customerName?: string; partySize?: number; scheduledAt?: string | null }
+  ): Promise<ReservationDraft> {
+    const draft: ReservationDraft = {
+      conversationId,
+      businessId,
+      customerName: existingData.customerName,
+      partySize: existingData.partySize,
+      scheduledAt: existingData.scheduledAt ?? undefined,
+      step: 'cancel_confirm',
+      editMode: true,
+      existingReservationId: reservationId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    await this.saveDraft(draft);
+    logger.info('Cancel confirm draft started (direct)', { conversationId, reservationId });
+    return draft;
+  }
+
+  /**
+   * Start a lightweight draft to capture a natural-language request to change
+   * the stored customer name/apellido (see the `edit_customer_name` step).
+   */
+  static async startCustomerNameEdit(
+    conversationId: string,
+    businessId: string,
+    field: 'full' | 'lastName'
+  ): Promise<ReservationDraft> {
+    const draft: ReservationDraft = {
+      conversationId,
+      businessId,
+      step: 'edit_customer_name',
+      nameEditField: field,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    await this.saveDraft(draft);
+    logger.info('Customer name edit draft started', { conversationId, field });
     return draft;
   }
 

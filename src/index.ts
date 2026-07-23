@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import helmet from 'helmet';
 import cors from 'cors';
 import compression from 'compression';
-import { OllamaConfig } from './config/ollama';
+import { OpenRouterConfig } from './config/openrouter';
 import { RedisConfig } from './config/redis';
 import { SupabaseConfig } from './config/supabase';
 import { BaileysService } from './services/baileys.service';
@@ -58,9 +58,15 @@ function getEnvConfig(): EnvConfig {
   const config: EnvConfig = {
     port: parseInt(process.env.PORT || '4000', 10),
     nodeEnv: process.env.NODE_ENV || 'development',
-    ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
-    ollamaModel: process.env.OLLAMA_MODEL || 'llama3.2',
-    ollamaTimeout: parseInt(process.env.OLLAMA_TIMEOUT || '30000', 10),
+    openRouterApiKey: process.env.OPENROUTER_API_KEY || '',
+    openRouterModel: process.env.OPENROUTER_MODEL || 'openrouter/auto',
+    openRouterFallbackModels: (process.env.OPENROUTER_FALLBACK_MODELS || '')
+      .split(',')
+      .map((m) => m.trim())
+      .filter(Boolean),
+    openRouterTimeout: parseInt(process.env.OPENROUTER_TIMEOUT || '30000', 10),
+    openRouterSiteUrl: process.env.OPENROUTER_SITE_URL,
+    openRouterSiteName: process.env.OPENROUTER_SITE_NAME,
     apiKey: process.env.API_KEY || '',
     allowedOrigins: (process.env.ALLOWED_ORIGINS || '*')
       .split(',')
@@ -78,6 +84,9 @@ function getEnvConfig(): EnvConfig {
   if (!config.apiKey) {
     throw new Error('API_KEY environment variable is required');
   }
+  if (!config.openRouterApiKey) {
+    throw new Error('OPENROUTER_API_KEY environment variable is required');
+  }
 
   return config;
 }
@@ -93,21 +102,21 @@ async function initializeApp() {
     logger.info('Configuration loaded', {
       port: config.port,
       nodeEnv: config.nodeEnv,
-      ollamaBaseUrl: config.ollamaBaseUrl,
-      ollamaModel: config.ollamaModel,
+      openRouterModel: config.openRouterModel,
+      openRouterFallbackModels: config.openRouterFallbackModels,
       allowedOrigins: config.allowedOrigins,
     });
 
-    // Initialize Ollama
-    OllamaConfig.initialize(config);
-    logger.info('Ollama client initialized');
+    // Initialize OpenRouter
+    OpenRouterConfig.initialize(config);
+    logger.info('OpenRouter client initialized');
 
-    // Verify Ollama connection
-    const ollamaHealthy = await OllamaConfig.healthCheck();
-    if (!ollamaHealthy) {
-      logger.warn('Ollama is not responding. Make sure Ollama is running and the model is downloaded.');
+    // Verify OpenRouter connection
+    const openRouterHealthy = await OpenRouterConfig.healthCheck();
+    if (!openRouterHealthy) {
+      logger.warn('OpenRouter is not responding. Check OPENROUTER_API_KEY and network connectivity.');
     } else {
-      logger.info('Ollama connection verified');
+      logger.info('OpenRouter connection verified');
     }
 
     // Initialize Redis
@@ -290,7 +299,7 @@ async function initializeApp() {
       const protocol = config.useHttps ? 'https' : 'http';
       logger.info(`🚀 IA Server running on port ${config.port}`, { protocol });
       logger.info(`📡 Environment: ${config.nodeEnv}`);
-      logger.info(`🤖 Ollama model: ${config.ollamaModel}`);
+      logger.info(`🤖 OpenRouter model: ${config.openRouterModel}`);
       logger.info(`💬 WebSocket server ready`, { secure: config.useHttps });
       logger.info(`✅ Server ready to accept requests`);
     });

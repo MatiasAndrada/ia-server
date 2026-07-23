@@ -43,8 +43,8 @@ interface ScenarioRunContext {
   mocks: MockServices;
   /** All messages the bot sent (in order) */
   botMessages: string[];
-  /** Track whether Ollama was called per turn */
-  ollamaCalled: boolean[];
+  /** Track whether the LLM was called per turn */
+  llmCalled: boolean[];
   /** Track draft state after each turn */
   draftSteps: (string | null)[];
   /** Track reservation creation */
@@ -80,7 +80,7 @@ function setupMocks(scenario: ConversationScenario): ScenarioRunContext {
 
   const handler = new WhatsAppHandler(mocks as any);
   const botMessages: string[] = [];
-  const ollamaCalled: boolean[] = [];
+  const llmCalled: boolean[] = [];
   const draftSteps: (string | null)[] = [];
   const reservationsCreated: boolean[] = [];
 
@@ -160,10 +160,34 @@ function setupMocks(scenario: ConversationScenario): ScenarioRunContext {
     const draft = drafts.get(convId);
     if (draft) {
       draft.customerName = name;
-      draft.step = 'party_size';
+      // New behavior: a first name alone advances to the apellido step (#9).
+      draft.step = 'last_name';
     }
     return draft;
   });
+
+  jest.spyOn(ReservationService, 'setCustomerNameParts').mockImplementation(
+    async (convId: string, name: string, lastName: string) => {
+      const draft = drafts.get(convId);
+      if (draft) {
+        draft.customerName = name;
+        draft.customerLastName = lastName;
+        draft.step = 'party_size';
+      }
+      return draft;
+    }
+  );
+
+  jest.spyOn(ReservationService, 'setCustomerLastName').mockImplementation(
+    async (convId: string, lastName: string) => {
+      const draft = drafts.get(convId);
+      if (draft) {
+        draft.customerLastName = lastName;
+        draft.step = 'party_size';
+      }
+      return draft;
+    }
+  );
 
   jest.spyOn(ReservationService, 'setNameOnly').mockImplementation(async (convId: string, name: string) => {
     const draft = drafts.get(convId);
@@ -243,14 +267,14 @@ function setupMocks(scenario: ConversationScenario): ScenarioRunContext {
     histories.delete(convId);
   });
 
-  // Wrap generateResponse to track ACTUAL Ollama usage.
+  // Wrap generateResponse to track ACTUAL LLM usage.
   // The mock replicates the real agent's deterministic scope guards so that
-  // greetings/opt-ins return an intro without counting as Ollama, while
-  // messages that would truly reach Ollama are tracked.
+  // greetings/opt-ins return an intro without counting as an LLM call, while
+  // messages that would truly reach the LLM are tracked.
   jest.spyOn(agentService, 'generateResponse').mockImplementation(
     async (_msg, agent, convId, ctx) => {
       if (agent.id === 'waitlist') {
-        // Replicate deterministic intro for greetings / opt-in (no Ollama)
+        // Replicate deterministic intro for greetings / opt-in (no LLM call)
         if (!ctx?.currentStep && isGreetingOrReservationOptInMessage(_msg)) {
           const introMessage = buildReservationIntroMessage(ctx?.businessName);
           return {
@@ -262,7 +286,7 @@ function setupMocks(scenario: ConversationScenario): ScenarioRunContext {
           };
         }
 
-        // Replicate deterministic scope guard (no Ollama)
+        // Replicate deterministic scope guard (no LLM call)
         const scopeResult = evaluateReservationScope(_msg, {
           businessName: ctx?.businessName,
           currentStep: ctx?.currentStep,
@@ -278,8 +302,8 @@ function setupMocks(scenario: ConversationScenario): ScenarioRunContext {
         }
       }
 
-      // If we reach here, the real agent would call Ollama
-      ollamaCalled.push(true);
+      // If we reach here, the real agent would call the LLM
+      llmCalled.push(true);
       return {
         response: '¿Cuál es tu nombre para continuar con la reserva?',
         action: 'CREATE_RESERVATION',
@@ -294,7 +318,7 @@ function setupMocks(scenario: ConversationScenario): ScenarioRunContext {
     handler,
     mocks,
     botMessages,
-    ollamaCalled,
+    llmCalled,
     draftSteps,
     reservationsCreated,
   };
@@ -310,7 +334,7 @@ async function runScenario(scenario: ConversationScenario): Promise<void> {
   for (let i = 0; i < scenario.turns.length; i++) {
     const turn = scenario.turns[i];
     const msgCountBefore = ctx.botMessages.length;
-    const ollamaCountBefore = ctx.ollamaCalled.length;
+    const llmCallCountBefore = ctx.llmCalled.length;
     const reservationCountBefore = ctx.reservationsCreated.length;
 
     // Simulate sending the message (already merged — debounce is tested separately)
@@ -318,7 +342,7 @@ async function runScenario(scenario: ConversationScenario): Promise<void> {
     await (ctx.handler as any)._processMessage(msg);
 
     const botResponse = ctx.botMessages.slice(msgCountBefore).join('\n');
-    const ollamaCalledThisTurn = ctx.ollamaCalled.length > ollamaCountBefore;
+    const llmCalledThisTurn = ctx.llmCalled.length > llmCallCountBefore;
     const reservationCreatedThisTurn = ctx.reservationsCreated.length > reservationCountBefore;
 
     const turnLabel = `[${scenario.id}] turn ${i + 1} ("${turn.user.substring(0, 40)}")`;
@@ -351,12 +375,12 @@ async function runScenario(scenario: ConversationScenario): Promise<void> {
       }
     }
 
-    if (turn.expect.noOllama === true) {
+    if (turn.expect.noLlmCall === true) {
       expect({
         scenario: turnLabel,
-        expected: 'no Ollama call',
-        ollamaCalled: ollamaCalledThisTurn,
-        pass: !ollamaCalledThisTurn,
+        expected: 'no LLM call',
+        llmCalled: llmCalledThisTurn,
+        pass: !llmCalledThisTurn,
       }).toEqual(
         expect.objectContaining({ pass: true })
       );

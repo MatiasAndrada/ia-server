@@ -1,7 +1,7 @@
 {
   "name": "ia-server",
   "version": "1.0.0",
-  "description": "API REST de IA para sistema de gestión de listas de espera vía WhatsApp usando Ollama + Llama 3.2",
+  "description": "API REST de IA para sistema de gestión de listas de espera vía WhatsApp usando OpenRouter",
   "main": "dist/index.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
@@ -27,8 +27,8 @@
   },
   "keywords": [
     "ia",
-    "ollama",
-    "llama",
+    "openrouter",
+    "llm",
     "whatsapp",
     "waitlist",
     "restaurant",

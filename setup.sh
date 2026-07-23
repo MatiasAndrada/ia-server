@@ -58,30 +58,18 @@ else
     fi
 fi
 
-# Check if Ollama is installed
-echo "🤖 Checking Ollama..."
-if ! command -v ollama &> /dev/null; then
-    echo -e "${RED}❌ Ollama is not installed${NC}"
-    echo "Install Ollama from: https://ollama.ai/"
-    exit 1
+# Check OpenRouter reachability (no local install needed — it's an external API)
+echo "🤖 Checking OpenRouter..."
+if curl -s -o /dev/null -w "%{http_code}" https://openrouter.ai/api/v1/models | grep -q "200"; then
+    echo -e "${GREEN}✅ OpenRouter API is reachable${NC}"
+else
+    echo -e "${YELLOW}⚠️  Could not reach OpenRouter API (check your network connection)${NC}"
 fi
 
-echo -e "${GREEN}✅ Ollama found${NC}"
-
-# Check if Ollama is running
-if ! curl -s http://localhost:11434/api/tags &> /dev/null; then
-    echo -e "${YELLOW}⚠️  Ollama server is not running${NC}"
-    echo "Start Ollama with: ollama serve"
+if [ -f .env ] && grep -q "^OPENROUTER_API_KEY=.\+" .env; then
+    echo -e "${GREEN}✅ OPENROUTER_API_KEY is set in .env${NC}"
 else
-    echo -e "${GREEN}✅ Ollama server is running${NC}"
-    
-    # Check if llama3.2 model is downloaded
-    if ollama list | grep -q "llama3.2"; then
-        echo -e "${GREEN}✅ llama3.2 model is downloaded${NC}"
-    else
-        echo -e "${YELLOW}⚠️  llama3.2 model not found${NC}"
-        echo "Download it with: ollama pull llama3.2"
-    fi
+    echo -e "${YELLOW}⚠️  OPENROUTER_API_KEY is not set — get one at https://openrouter.ai${NC}"
 fi
 
 # Create logs directory
@@ -127,7 +115,7 @@ echo ""
 echo "Next steps:"
 echo "1. Edit .env file and set your API_KEY"
 echo "2. Make sure Redis is running: redis-server"
-echo "3. Make sure Ollama is running with llama3.2 model"
+echo "3. Make sure OPENROUTER_API_KEY is set in .env (get one at https://openrouter.ai)"
 echo "4. Start in development mode: npm run dev"
 echo "   OR"
 echo "   Start with PM2: npm run pm2:start"

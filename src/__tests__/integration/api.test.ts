@@ -5,18 +5,18 @@ import { healthHandler } from '../../controllers/health.controller';
 import { validate, chatSchema } from '../../middleware/validation.middleware';
 
 // Mock services
-jest.mock('../../services/ollama.service');
+jest.mock('../../services/openrouter.service');
 jest.mock('../../services/conversation.service');
 jest.mock('../../services/intent.service');
 jest.mock('../../config/redis');
-jest.mock('../../config/ollama');
+jest.mock('../../config/openrouter');
 jest.mock('../../utils/logger');
 
-import { ollamaService } from '../../services/ollama.service';
+import { openRouterService } from '../../services/openrouter.service';
 import { conversationService } from '../../services/conversation.service';
 import { intentService } from '../../services/intent.service';
 import { RedisConfig } from '../../config/redis';
-import { OllamaConfig } from '../../config/ollama';
+import { OpenRouterConfig } from '../../config/openrouter';
 
 describe('API Integration Tests', () => {
   let app: Express;
@@ -36,14 +36,21 @@ describe('API Integration Tests', () => {
     // Default mock implementations
     (conversationService.getHistory as jest.Mock).mockResolvedValue([]);
     (conversationService.addMessage as jest.Mock).mockResolvedValue(undefined);
-    (OllamaConfig.getModel as jest.Mock).mockReturnValue('llama3.2');
+    (OpenRouterConfig.getModel as jest.Mock).mockReturnValue('anthropic/claude-3.5-sonnet');
   });
 
   describe('POST /api/chat', () => {
     it('should process chat request successfully', async () => {
-      (ollamaService.chat as jest.Mock).mockResolvedValue(
-        'Hola! Te puedo ayudar. [ACTION:REGISTER:{"status":"ready"}]'
-      );
+      (openRouterService.chatWithActions as jest.Mock).mockResolvedValue({
+        content: 'Hola! Te puedo ayudar.',
+        toolCalls: [
+          {
+            id: 'call_1',
+            type: 'function',
+            function: { name: 'emit_action', arguments: '{"type":"REGISTER","status":"ready"}' },
+          },
+        ],
+      });
 
       const response = await request(app)
         .post('/api/chat')
@@ -105,7 +112,7 @@ describe('API Integration Tests', () => {
     });
 
     it('should handle service errors gracefully', async () => {
-      (ollamaService.chat as jest.Mock).mockRejectedValue(
+      (openRouterService.chatWithActions as jest.Mock).mockRejectedValue(
         new Error('Service error')
       );
 
@@ -159,9 +166,9 @@ describe('API Integration Tests', () => {
 
   describe('GET /health', () => {
     it('should return healthy status', async () => {
-      (ollamaService.healthCheck as jest.Mock).mockResolvedValue({
+      (openRouterService.healthCheck as jest.Mock).mockResolvedValue({
         available: true,
-        model: 'llama3.2',
+        model: 'anthropic/claude-3.5-sonnet',
       });
       (RedisConfig.healthCheck as jest.Mock).mockResolvedValue(true);
 
@@ -169,16 +176,16 @@ describe('API Integration Tests', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.status).toBe('healthy');
-      expect(response.body.ollama).toBe(true);
+      expect(response.body.llm).toBe(true);
       expect(response.body.redis).toBe(true);
-      expect(response.body.model).toBe('llama3.2');
+      expect(response.body.model).toBe('anthropic/claude-3.5-sonnet');
       expect(response.body).toHaveProperty('uptime');
     });
 
     it('should return degraded status when Redis is down', async () => {
-      (ollamaService.healthCheck as jest.Mock).mockResolvedValue({
+      (openRouterService.healthCheck as jest.Mock).mockResolvedValue({
         available: true,
-        model: 'llama3.2',
+        model: 'anthropic/claude-3.5-sonnet',
       });
       (RedisConfig.healthCheck as jest.Mock).mockResolvedValue(false);
 
@@ -190,9 +197,9 @@ describe('API Integration Tests', () => {
     });
 
     it('should return unhealthy when both services are down', async () => {
-      (ollamaService.healthCheck as jest.Mock).mockResolvedValue({
+      (openRouterService.healthCheck as jest.Mock).mockResolvedValue({
         available: false,
-        model: 'llama3.2',
+        model: 'anthropic/claude-3.5-sonnet',
       });
       (RedisConfig.healthCheck as jest.Mock).mockResolvedValue(false);
 
