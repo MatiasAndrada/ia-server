@@ -350,11 +350,19 @@ export interface ReservationDraft {
   conversationId: string;
   businessId: string;
   customerName?: string;
-  /** Apellido — collected in the `last_name` step; combined with customerName for the reservation detail. */
+  /**
+   * Apellido — optional. Set when the customer gives it together with their
+   * name (e.g. "Matías Andrada") in the `name` step; left unset when they
+   * only give a first name. Combined with customerName for the reservation
+   * detail, but greetings/prompts always address the customer by first name.
+   */
   customerLastName?: string;
   partySize?: number;
   step:
     | 'name'
+    // Legacy: the `name` step no longer transitions here (apellido is never
+    // asked separately). Kept only so drafts already at this step when this
+    // shipped can still complete instead of getting stuck mid-flow.
     | 'last_name'
     | 'party_size'
     | 'schedule_choice'

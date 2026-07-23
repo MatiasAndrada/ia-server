@@ -120,7 +120,7 @@ export type Database = {
           last_seen_at: string
           created_at: string
           business_id: string
-          lastName: string
+          lastName: string | null
         }
         Insert: {
           id?: string
@@ -130,7 +130,7 @@ export type Database = {
           last_seen_at?: string
           created_at?: string
           business_id: string
-          lastName: string
+          lastName?: string | null
         }
         Update: {
           id?: string
@@ -140,7 +140,7 @@ export type Database = {
           last_seen_at?: string
           created_at?: string
           business_id?: string
-          lastName?: string
+          lastName?: string | null
         }
         Relationships: []
       }
@@ -194,8 +194,8 @@ export type Database = {
           cancelled_at: string | null | null
           estimated_wait_minutes: string | null | null
           source: string
-          confirmed_at: string
-          scheduled_at: string
+          confirmed_at: string | null
+          scheduled_at: string | null
         }
         Insert: {
           id?: string
@@ -213,8 +213,8 @@ export type Database = {
           cancelled_at?: string | null | null
           estimated_wait_minutes?: string | null | null
           source: string
-          confirmed_at?: string
-          scheduled_at?: string
+          confirmed_at?: string | null
+          scheduled_at?: string | null
         }
         Update: {
           id?: string
@@ -232,8 +232,8 @@ export type Database = {
           cancelled_at?: string | null | null
           estimated_wait_minutes?: string | null | null
           source?: string
-          confirmed_at?: string
-          scheduled_at?: string
+          confirmed_at?: string | null
+          scheduled_at?: string | null
         }
         Relationships: []
       }
@@ -242,25 +242,25 @@ export type Database = {
           id: string
           business_id: string
           date: string
-          reason: string
+          reason: string | null
+          reason_message: string | null
           created_at: string
-          reason_message: string
         }
         Insert: {
           id?: string
           business_id: string
           date: string
-          reason: string
+          reason?: string | null
+          reason_message?: string | null
           created_at?: string
-          reason_message: string
         }
         Update: {
           id?: string
           business_id?: string
           date?: string
-          reason?: string
+          reason?: string | null
+          reason_message?: string | null
           created_at?: string
-          reason_message?: string
         }
         Relationships: []
       }
