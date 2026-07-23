@@ -637,6 +637,40 @@ describe('WhatsAppHandler reservation overlap policy', () => {
     );
   });
 
+  it('bounces a bare noise message (e.g. "1") with the canned off-topic message instead of calling the agent, even with no draft — regression: a stray "1" right after a reservation was confirmed made the LLM hallucinate "¿De qué mes?"', async () => {
+    jest
+      .spyOn(ReservationService, 'getDraft')
+      .mockResolvedValue(null);
+
+    jest
+      .spyOn(SupabaseService, 'getBusinessById')
+      .mockResolvedValue({
+        id: 'business-1',
+        name: 'Restaurante Test',
+        whatsapp_session_id: 'session-test-1',
+      } as any);
+
+    jest
+      .spyOn(SupabaseService, 'getActiveReservationByPhone')
+      .mockResolvedValue(null);
+
+    const generateResponseSpy = jest.spyOn(agentService, 'generateResponse');
+
+    await (handler as any)._processMessage({
+      from: '5496666666666@s.whatsapp.net',
+      businessId: 'business-1',
+      message: '1',
+      fromMe: false,
+    });
+
+    expect(generateResponseSpy).not.toHaveBeenCalled();
+    expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+      'business-1',
+      '5496666666666@s.whatsapp.net',
+      'Hola 😊 Solo puedo ayudarte con consultas relacionadas a reservas para “Restaurante Test” en el turno actual. ¿Querés hacer una reserva?'
+    );
+  });
+
   it('still hard-blocks a prompt-injection attempt without calling the agent, even with no draft', async () => {
     jest
       .spyOn(ReservationService, 'getDraft')
@@ -1382,8 +1416,8 @@ describe('WhatsAppHandler reservation overlap policy', () => {
 
       const [, , sentMessage] = mockBaileysService.sendMessage.mock.calls[0];
       expect(sentMessage).toContain('Hoy está cerrado');
-      expect(sentMessage).toContain('viernes 03/07');
-      expect(sentMessage).toContain('sábado 04/07');
+      expect(sentMessage).toContain('Viernes 03/07');
+      expect(sentMessage).toContain('Sábado 04/07');
       expect(sentMessage).not.toContain('¿La reserva es para...?');
     });
 
@@ -1434,7 +1468,7 @@ describe('WhatsAppHandler reservation overlap policy', () => {
 
       const [, , sentMessage] = mockBaileysService.sendMessage.mock.calls[0];
       expect(sentMessage).toContain('Hoy está cerrado');
-      expect(sentMessage).toContain('viernes 03/07');
+      expect(sentMessage).toContain('Viernes 03/07');
       expect(sentMessage).not.toContain('¿La reserva es para...?');
     });
 
@@ -1680,6 +1714,85 @@ describe('WhatsAppHandler reservation overlap policy', () => {
         'business-1',
         '5491234567890@s.whatsapp.net',
         expect.stringContaining('cerrado los viernes')
+      );
+    });
+
+    it('asks whether the customer means today or next week when naming today\'s own weekday while the business is still open', async () => {
+      jest.spyOn(SupabaseService, 'getBusinessById').mockResolvedValue({
+        id: 'business-1',
+        name: 'Restaurante Test',
+        weekly_hours: { thu: { closed: false, shifts: [{ open: '09:00', close: '22:00' }] } },
+      } as any);
+
+      const saveDraftSpy = jest.spyOn(ReservationService, 'saveDraft').mockResolvedValue(undefined as any);
+
+      // NOW_BA (outer beforeEach) is Thursday 2026-07-02 12:00 — well before the
+      // 22:00 close, so naming "el jueves" is genuinely ambiguous.
+      const handled = await (handler as any).processDraftStep(
+        scheduleChoiceDraft({ step: 'date' }),
+        'el jueves',
+        'conv-sched',
+        'business-1',
+        '5491234567890@s.whatsapp.net'
+      );
+
+      expect(handled).toBe(true);
+      expect(saveDraftSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pendingWeekdayDisambiguation: expect.objectContaining({
+            todayDateKey: '2026-07-02',
+            nextDateKey: '2026-07-09',
+          }),
+        })
+      );
+      expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+        'business-1',
+        '5491234567890@s.whatsapp.net',
+        expect.stringContaining('¿Te referís a *hoy jueves 02/07* o al *jueves 09/07* que viene?')
+      );
+    });
+
+    it('skips the "hoy o la semana que viene" question and resolves straight to next week when today\'s own weekday is named after closing time — regression', async () => {
+      jest.spyOn(SupabaseService, 'getBusinessById').mockResolvedValue({
+        id: 'business-1',
+        name: 'Restaurante Test',
+        weekly_hours: {
+          thu: { closed: false, shifts: [{ open: '09:00', close: '18:00' }] },
+        },
+      } as any);
+      jest.spyOn(SupabaseService, 'getBlockedDates').mockResolvedValue(new Map());
+
+      // 23:50 BA — well past the thu shift's 18:00 close, so there is no
+      // bookable slot left today and "el jueves" can only mean next week.
+      const lateNowBA = new Date('2026-07-02T23:50:00.000Z');
+      jest.spyOn(ReservationDatetime, 'nowInBuenosAires').mockReturnValue(lateNowBA);
+
+      const setScheduledDateSpy = jest
+        .spyOn(ReservationService, 'setScheduledDate')
+        .mockResolvedValue(scheduleChoiceDraft({ step: 'time' }) as any);
+
+      const handled = await (handler as any).processDraftStep(
+        scheduleChoiceDraft({ step: 'date' }),
+        'el jueves',
+        'conv-sched',
+        'business-1',
+        '5491234567890@s.whatsapp.net'
+      );
+
+      expect(handled).toBe(true);
+      expect(setScheduledDateSpy).toHaveBeenCalledWith(
+        'conv-sched',
+        expect.objectContaining({ isToday: false, matchedWeekdayName: true })
+      );
+      expect(mockBaileysService.sendMessage).not.toHaveBeenCalledWith(
+        'business-1',
+        '5491234567890@s.whatsapp.net',
+        expect.stringContaining('¿Te referís a')
+      );
+      expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+        'business-1',
+        '5491234567890@s.whatsapp.net',
+        expect.stringContaining('jueves 09/07')
       );
     });
 
@@ -2168,6 +2281,46 @@ describe('WhatsAppHandler reservation overlap policy', () => {
         expect(saveDraftSpy).not.toHaveBeenCalled();
       }
     );
+
+    it('answers with real weekly hours (not the LLM off-topic bounce) when asked for other days\' schedules at the "time" step — regression', async () => {
+      // Real conversation: customer picked Saturday, didn't like the offered
+      // hours, and asked "¿Los horarios de los otros días?" instead of giving
+      // an hour. That used to get scope-blocked as off-topic and handed to the
+      // LLM fallback, which has no access to weekly_hours and falsely claimed
+      // it didn't have the information — trapping the customer on 'time'.
+      jest.spyOn(SupabaseService, 'getBusinessById').mockResolvedValue({
+        id: 'business-1',
+        name: 'Restaurante Test',
+        weekly_hours: {
+          sat: { closed: false, shifts: [{ open: '09:15', close: '11:45' }, { open: '16:15', close: '21:45' }] },
+          sun: { closed: false, shifts: [{ open: '12:00', close: '16:00' }] },
+        },
+      } as any);
+      const agentGenerateSpy = jest.spyOn(agentService, 'generateResponse');
+      const saveDraftSpy = jest.spyOn(ReservationService, 'saveDraft').mockResolvedValue(undefined as any);
+
+      const handled = await (handler as any).processDraftStep(
+        scheduleChoiceDraft({ step: 'time', scheduledDate: '2026-07-25', partySize: 4 }),
+        'Los horarios de los otros días?',
+        'conv-sched',
+        'business-1',
+        '5491234567890@s.whatsapp.net'
+      );
+
+      expect(handled).toBe(true);
+      expect(agentGenerateSpy).not.toHaveBeenCalled();
+      expect(saveDraftSpy).not.toHaveBeenCalled();
+      expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+        'business-1',
+        '5491234567890@s.whatsapp.net',
+        expect.stringContaining('Domingo 05/07')
+      );
+      expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+        'business-1',
+        '5491234567890@s.whatsapp.net',
+        expect.stringContaining('¿A qué hora te gustaría reservar para el sábado 25/07')
+      );
+    });
 
     it('finishes directly when the "date" step answer also includes a time, skipping the redundant "¿A qué hora?" ask', async () => {
       jest.spyOn(SupabaseService, 'getBusinessById').mockResolvedValue({

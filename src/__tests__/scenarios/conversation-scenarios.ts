@@ -82,14 +82,7 @@ const happyPathScenarios: ConversationScenario[] = [
       {
         user: 'Martín',
         expect: {
-          // Single first name → the bot now asks for the apellido (req #9).
-          contains: ['apellido'],
-          draftStep: 'last_name',
-        },
-      },
-      {
-        user: 'Gómez',
-        expect: {
+          // Apellido is optional — a bare first name goes straight to party_size.
           contains: ['Martín', 'cuántas personas'],
           draftStep: 'party_size',
         },

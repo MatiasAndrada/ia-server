@@ -45,18 +45,19 @@ describe('Reservation Flow Integration Tests', () => {
   });
 
   describe('Step 2: Collect Customer Name', () => {
-    it('should save the first name and advance to the last_name step', async () => {
+    it('should save the first name only and advance directly to party_size (apellido is optional)', async () => {
       const result = await ReservationService.setCustomerName(
         TEST_CONVERSATION_ID,
         'Juan'
       );
 
       expect(result).toBeDefined();
-      expect(result?.step).toBe('last_name');
+      expect(result?.step).toBe('party_size');
 
       const draft = await ReservationService.getDraft(TEST_CONVERSATION_ID);
       expect(draft?.customerName).toBe('Juan');
-      expect(draft?.step).toBe('last_name');
+      expect(draft?.customerLastName).toBeUndefined();
+      expect(draft?.step).toBe('party_size');
     });
 
     it('should handle empty name input without throwing', async () => {
@@ -64,9 +65,10 @@ describe('Reservation Flow Integration Tests', () => {
       expect(result).toBeDefined();
     });
 
-    it('should save the apellido and advance to party_size', async () => {
-      const result = await ReservationService.setCustomerLastName(
+    it('should save name and apellido together in one step and advance to party_size', async () => {
+      const result = await ReservationService.setCustomerNameParts(
         TEST_CONVERSATION_ID,
+        'Juan',
         'Pérez'
       );
 

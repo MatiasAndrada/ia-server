@@ -160,8 +160,8 @@ function setupMocks(scenario: ConversationScenario): ScenarioRunContext {
     const draft = drafts.get(convId);
     if (draft) {
       draft.customerName = name;
-      // New behavior: a first name alone advances to the apellido step (#9).
-      draft.step = 'last_name';
+      // Apellido is optional and is never asked for separately — advance straight to party_size.
+      draft.step = 'party_size';
     }
     return draft;
   });
