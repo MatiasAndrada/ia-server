@@ -932,29 +932,36 @@ export class SupabaseService {
     reason: string
   ): void {
     // Fire and forget — don't await this, just start it in background
-    (async () => {
+    // Use setTimeout to ensure this runs asynchronously
+    setImmediate(async () => {
       try {
-        const business = await this.getBusinessById(businessId);
+        logger.info('🔄 Starting background blocked date reason message generation', {
+          businessId,
+          date,
+        });
+
+        const business = await SupabaseService.getBusinessById(businessId);
         const reasonMessage = await openRouterService.generateBlockedDateReasonMessage(
           reason,
           business?.name,
           business?.type
         );
 
-        await this.updateBlockedDateReasonMessage(businessId, date, reasonMessage);
+        await SupabaseService.updateBlockedDateReasonMessage(businessId, date, reasonMessage);
 
-        logger.info('Blocked date reason_message generated and saved', {
+        logger.info('✅ Blocked date reason_message generated and saved successfully', {
           businessId,
           date,
+          messageLength: reasonMessage.length,
         });
       } catch (error) {
-        logger.warn('Failed to generate blocked date reason_message in background', {
+        logger.warn('❌ Failed to generate blocked date reason_message in background', {
           error: error instanceof Error ? error.message : 'Unknown error',
           businessId,
           date,
         });
       }
-    })();
+    });
   }
 
   /**

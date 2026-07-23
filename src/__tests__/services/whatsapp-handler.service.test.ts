@@ -120,6 +120,7 @@ describe('WhatsAppHandler reservation overlap policy', () => {
       });
 
     await (handler as any).handleCreateReservation(
+      'Quiero reservar una mesa',
       'conv-4',
       'business-1',
       '5492222222222@s.whatsapp.net'
@@ -144,6 +145,7 @@ describe('WhatsAppHandler reservation overlap policy', () => {
       });
 
     await (handler as any).handleCreateReservation(
+      'Quiero reservar una mesa',
       'conv-5',
       'business-1',
       '5493333333333@s.whatsapp.net'
@@ -151,6 +153,67 @@ describe('WhatsAppHandler reservation overlap policy', () => {
 
     expect(startReservationSpy).toHaveBeenCalledTimes(1);
     expect(startReservationSpy).toHaveBeenCalledWith('conv-5', 'business-1');
+  });
+
+  it('captures the party size embedded in the opening message for a known customer and moves straight into the schedule flow (regression: "Quiero reservas para hoy 4 personas" was corrupting the party size to a later bare-number hour reply)', async () => {
+    // Wednesday 2026-07-22, 12:00 BA — well within the "today" shift, so the
+    // deterministic day/time flow (not a freeform agent guess) drives the reply.
+    const NOW_BA = new Date('2026-07-22T12:00:00.000Z');
+    jest.spyOn(ReservationDatetime, 'nowInBuenosAires').mockReturnValue(NOW_BA);
+
+    jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue({
+      name: 'Matías',
+      lastName: 'Andrada',
+    } as any);
+
+    const startReservationForKnownCustomerSpy = jest
+      .spyOn(ReservationService, 'startReservationForKnownCustomer')
+      .mockResolvedValue({
+        conversationId: 'conv-known',
+        businessId: 'business-1',
+        step: 'party_size',
+        customerName: 'Matías',
+        customerLastName: 'Andrada',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      } as any);
+
+    const setPartySizeSpy = jest.spyOn(ReservationService, 'setPartySize').mockResolvedValue({} as any);
+
+    jest.spyOn(SupabaseService, 'getBusinessById').mockResolvedValue({
+      id: 'business-1',
+      name: 'Restaurante Test',
+      weekly_hours: { wed: { closed: false, shifts: [{ open: '09:00', close: '23:00' }] } },
+    } as any);
+
+    const setScheduledDateSpy = jest.spyOn(ReservationService, 'setScheduledDate').mockResolvedValue({} as any);
+    const moveToScheduleChoiceSpy = jest.spyOn(ReservationService, 'moveToScheduleChoice');
+
+    const customMessageSent = await (handler as any).handleCreateReservation(
+      'Quiero reservas para hoy 4 personas',
+      'conv-known',
+      'business-1',
+      '5491234567890@s.whatsapp.net'
+    );
+
+    expect(customMessageSent).toBe(true);
+    expect(startReservationForKnownCustomerSpy).toHaveBeenCalledWith('conv-known', 'business-1', 'Matías', 'Andrada');
+    // The party size (4) must be saved from the opening message itself...
+    expect(setPartySizeSpy).toHaveBeenCalledWith('conv-known', 4);
+    // ...and "hoy" must be resolved into a real scheduled date (draft moves to
+    // the `time` step), instead of leaving the draft parked at `party_size`
+    // where a later bare-number reply like "21" would be misread as a new
+    // party size.
+    expect(setScheduledDateSpy).toHaveBeenCalledWith(
+      'conv-known',
+      expect.objectContaining({ baDate: expect.any(Date) })
+    );
+    expect(moveToScheduleChoiceSpy).not.toHaveBeenCalled();
+    expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+      'business-1',
+      '5491234567890@s.whatsapp.net',
+      expect.stringContaining('¿A qué hora')
+    );
   });
 
   it('greeting with active reservation includes reminder that new reservations are blocked', async () => {

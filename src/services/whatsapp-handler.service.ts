@@ -745,8 +745,7 @@ export class WhatsAppHandler {
       // Process explicit actions
       switch (action) {
         case 'CREATE_RESERVATION':
-          await this.handleCreateReservation(conversationId, businessId, jid);
-          break;
+          return await this.handleCreateReservation(messageText, conversationId, businessId, jid);
 
         case 'CHECK_STATUS':
           await this.handleCheckStatus(businessId, jid, conversationId);
@@ -4735,11 +4734,16 @@ export class WhatsAppHandler {
   /**
    * 🎯 ACTION: Create Reservation - Start the multi-step flow
    */
+  /**
+   * Returns true when a deterministic message was already sent (the agent's
+   * own freeform reply must be skipped in that case).
+   */
   private async handleCreateReservation(
+    messageText: string,
     conversationId: string,
     businessId: string,
     jid: string
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       const phone = this.normalizeWhatsAppNumber(jid);
       logger.info('🎯 Starting CREATE_RESERVATION action', { conversationId, businessId, phone });
@@ -4761,8 +4765,29 @@ export class WhatsAppHandler {
         conversationId,
         draftStep: draft.step,
       });
+
+      // For known customers (name already on file, draft starts at
+      // `party_size`) the opening message may already carry the party size
+      // (and even a day/time, e.g. "reserva para hoy 4 personas a las 21").
+      // Capture it now and advance the draft through the real schedule logic
+      // instead of leaving it parked at `party_size` while an ungrounded
+      // freeform reply goes out — that mismatch is what let a later
+      // bare-number answer (meant as the hour) get misread as a party-size
+      // correction. New customers still need the `name` step first, so this
+      // fast path is skipped for them.
+      if (knownCustomer?.name) {
+        const partySize = this.extractPartySize(messageText);
+        if (partySize && partySize > 0 && partySize <= 50) {
+          await ReservationService.setPartySize(conversationId, partySize);
+          await this.resolveEmbeddedScheduleOrPromptChoice(conversationId, businessId, jid, messageText);
+          return true;
+        }
+      }
+
+      return false;
     } catch (error) {
       logger.error('❌ Error handling create reservation', { error, conversationId });
+      return false;
     }
   }
 
