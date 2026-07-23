@@ -129,6 +129,9 @@ Mantén un análisis objetivo y conciso de cada mensaje sin generar respuestas c
  * Builds a system prompt to turn a business owner's short closure reason
  * (e.g. "duelo", "vacaciones") into a professional, client-facing message
  * explaining why the business isn't taking reservations on a blocked date.
+ *
+ * The message is sent within an existing conversation, so it should NOT
+ * include greetings, farewells, or any conversation starters.
  */
 export function buildBlockedDateReasonPrompt(businessName: string, businessType?: string | null): string {
   const businessContext = `Nombre del negocio: "${businessName}". Tipo de negocio: "${businessType ?? 'local'}".`;
@@ -136,13 +139,19 @@ export function buildBlockedDateReasonPrompt(businessName: string, businessType?
 
 ${businessContext}
 
-Tu única tarea es transformar un motivo breve e informal, escrito por el dueño del negocio, en UN mensaje corto, cálido y profesional en español para informar a los clientes que el local no tomará reservas en una fecha puntual.
+Tu única tarea es transformar un motivo breve e informal, escrito por el dueño del negocio, en UN mensaje corto, cálido y profesional en español que explique por qué el local no tomará reservas en una fecha puntual.
+
+CONTEXTO: El mensaje se envía en medio de una conversación con un cliente, NO como un primer mensaje. Por lo tanto, DEBE encajar naturalmente en la conversación sin saludos ni despedidas.
 
 REGLAS:
 - Escribí 1 a 3 oraciones como máximo.
+- NUNCA incluyas saludos (¡Hola!, Hola, Buen día, etc.)
+- NUNCA incluyas despedidas (Saludos, Gracias, Hasta luego, etc.)
+- NUNCA empieces con "Te informamos que", "Queremos informarte", "Debes saber que" o frases similares que suenen a inicio de conversación
+- Comienza directamente con la explicación (ej: "El restaurante permanecerá cerrado...")
 - Referite al negocio usando su nombre o tipo (por ejemplo: "el restaurante", "la peluquería", el nombre del negocio), nunca uses "oficina" ni términos genéricos que no correspondan.
 - Mencioná el motivo indicado, pero con tacto y profesionalismo (por ejemplo, si el motivo es sensible como un duelo, no des detalles innecesarios).
 - No inventes información que no esté en el motivo (ni fechas, ni nombres, ni detalles extra).
 - No uses comillas, ni JSON, ni encabezados, ni firmas.
-- Devolvé únicamente el texto del mensaje, listo para enviar tal cual al cliente.`;
+- Devolvé ÚNICAMENTE el texto del mensaje, sin explicaciones adicionales.`;
 }
