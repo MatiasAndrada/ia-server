@@ -47,7 +47,13 @@ export class BaileysService {
   private outboundEchoGuard: Map<string, number> = new Map();
   private whatsAppHandler: WhatsAppHandler;
   private readonly AUTH_DIR = path.join(process.cwd(), 'auth_sessions');
-  private readonly MAX_RECONNECT_ATTEMPTS = 3;
+  // Backoff exponencial con jitter para reconexión: nunca abandona la sesión
+  // ante errores transitorios (428/408/503/515), solo crece el delay entre
+  // intentos hasta un techo. Solo se deja de reintentar ante logout real (401)
+  // o conflicto de sesión (440), donde reintentar no sirve de nada.
+  private readonly RECONNECT_BASE_DELAY_MS = 2000;
+  private readonly RECONNECT_MAX_DELAY_MS = 60000;
+  private readonly RECONNECT_JITTER_RATIO = 0.2;
   private readonly INBOUND_DEDUP_TTL_SECONDS = 600;
   private readonly OUTBOUND_ECHO_TTL_MS = 5 * 60 * 1000;
   private readonly START_SESSION_LOCK_TTL_SECONDS = Number(
@@ -381,6 +387,10 @@ export class BaileysService {
         auth: state,
         version: waVersion,
         browser: Browsers?.ubuntu('Chrome'),
+        // Ping más frecuente que el default (30s) para que NATs/proxies
+        // intermedios no den de baja la conexión por inactividad y la
+        // marquen como cerrada del lado de WhatsApp (statusCode 428/408).
+        keepAliveIntervalMs: 15000,
         // printQRInTerminal deprecated en Baileys 7
         // Ahora manejamos el QR manualmente en connection.update
         logger: {
@@ -505,6 +515,17 @@ export class BaileysService {
   }
 
   /**
+   * Exponential backoff con jitter, acotado por RECONNECT_MAX_DELAY_MS.
+   * attempts=0 -> ~2s, 1 -> ~4s, 2 -> ~8s ... hasta el techo de 60s.
+   */
+  private getReconnectDelayMs(attempts: number): number {
+    const exponential = this.RECONNECT_BASE_DELAY_MS * Math.pow(2, attempts);
+    const capped = Math.min(exponential, this.RECONNECT_MAX_DELAY_MS);
+    const jitter = capped * this.RECONNECT_JITTER_RATIO * (Math.random() * 2 - 1);
+    return Math.max(this.RECONNECT_BASE_DELAY_MS, Math.round(capped + jitter));
+  }
+
+  /**
    * Handle connection updates
    */
   private async handleConnectionUpdate(businessId: string, update: any): Promise<void> {
@@ -561,30 +582,33 @@ export class BaileysService {
       // Remove from sessions
       this.sessions.delete(businessId);
 
-      // Reconnect if not logged out
+      // Reconnect if not logged out. No hay techo de intentos: errores
+      // transitorios (428/408/503/515, caídas de red, servidor sin espacio
+      // en disco, etc.) eventualmente se resuelven solos, y la sesión no
+      // debe quedar muerta esperando que alguien la reinicie a mano.
       if (shouldReconnect) {
         const attempts = this.reconnectAttempts.get(businessId) || 0;
-        
-        if (attempts >= this.MAX_RECONNECT_ATTEMPTS) {
-          logger.error('Max reconnection attempts reached', { businessId, attempts });
-          this.reconnectAttempts.delete(businessId);
-          this.sessionStates.delete(businessId);
-          await this.updateSessionStatus(businessId, 'error', `Max reconnection attempts (${this.MAX_RECONNECT_ATTEMPTS}) reached`);
-          return;
-        }
-        
         this.reconnectAttempts.set(businessId, attempts + 1);
-        logger.info('Reconnecting in 3 seconds...', { businessId, attempt: attempts + 1 });
-        
+
+        const delay = this.getReconnectDelayMs(attempts);
+        logger.info('Reconnecting with backoff...', {
+          businessId,
+          attempt: attempts + 1,
+          delayMs: delay,
+        });
+
         setTimeout(() => {
           // Clean up before reconnecting
           this.sessions.delete(businessId);
-          
+
           this.startSession(businessId).catch(async (err) => {
-            logger.error('Reconnection failed', { err, businessId });
-            await this.updateSessionStatus(businessId, 'error', 'Reconnection failed');
+            logger.error('Reconnection attempt failed, will keep retrying with backoff', {
+              err,
+              businessId,
+            });
+            await this.updateSessionStatus(businessId, 'error', 'Reconnection attempt failed, retrying');
           });
-        }, 3000);
+        }, delay);
       } else {
         // Logged out, remove session data from memory
         this.sessionStates.delete(businessId);
