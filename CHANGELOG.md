@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] - 2026-06-05
 
 ### Changed
 - Replaced the local Ollama (Llama 3.2) inference engine with OpenRouter — no local model, requests now go to `OPENROUTER_MODEL` via the OpenRouter API, with automatic failover across `OPENROUTER_FALLBACK_MODELS`.
