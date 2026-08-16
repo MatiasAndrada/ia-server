@@ -17,8 +17,11 @@ API REST en Node.js/Express que funciona como backend de inteligencia artificial
 
 ## ✨ Características
 
+- 📲 **WhatsApp directo**: conexión multi-sesión por negocio vía Baileys (QR, start/stop), sin depender de un proveedor externo de WhatsApp Business API — ver [docs/ENDPOINTS.md](docs/ENDPOINTS.md)
+- 📅 **Reservas conversacionales**: flujo multi-paso (personas, día, horario, confirmación, edición, cancelación) manejado de forma determinística en `WhatsAppHandler`, con fechas bloqueadas por negocio y una reserva activa por cliente
+- 🌐 **Multi-idioma (ES/EN/PT)**: detección automática por mensaje y cambio explícito en cualquier momento de la conversación (`src/i18n`)
 - 🤖 **Procesamiento de IA con OpenRouter**: Acceso a modelos de última generación (Claude, GPT, Gemini, etc.) vía una única API, con failover automático entre modelos
-- 🎭 **Sistema Multi-Agente**: Agentes especializados para flujos de negocio ([Ver docs/AGENTS.md](docs/AGENTS.md))
+- 🎭 **Sistema Multi-Agente**: agente conversacional de respaldo para conversación libre fuera del flujo de reserva ([Ver docs/AGENTS.md](docs/AGENTS.md))
 - 💬 **Gestión de Conversaciones**: Mantiene historial de últimos 10 mensajes por conversación
 - 🎯 **Análisis de Intenciones**: Clasifica mensajes en acciones específicas automáticamente
 - ⚡ **Procesamiento por Lotes**: Endpoint batch para múltiples mensajes
@@ -32,29 +35,33 @@ API REST en Node.js/Express que funciona como backend de inteligencia artificial
 
 ## 🏗️ Arquitectura
 
+El servidor se conecta directamente a WhatsApp (vía Baileys) con una sesión propia por negocio; no depende de un frontend intermedio para recibir mensajes. Un panel externo (opcional) puede usar la API HTTP para gestionar sesiones, enviar mensajes o consumir la ruta legacy `/api/chat`.
+
 ```
-┌─────────────┐      HTTP/REST      ┌──────────────┐
-│   Next.js   │ ←─────────────────→ │  IA Server   │
-│  (WhatsApp) │                     │  (Express)   │
-└─────────────┘                     └──────┬───────┘
-                                           │
+              WhatsApp (Baileys — una sesión por businessId)
+                              ↕
+┌──────────────┐   HTTP/REST   ┌──────────────┐
+│  Panel Admin │ ←───────────→ │  IA Server   │
+│  (opcional)  │               │  (Express)   │
+└──────────────┘               └──────┬───────┘
+                                       │
                     ┌──────────────────────┼──────────────────────┐
                     ↓                      ↓                      ↓
               ┌──────────┐          ┌──────────┐          ┌──────────┐
-              │OpenRouter│          │  Redis   │          │PostgreSQL│
-              │(multi-LLM│          │ (Cache)  │          │(Opcional)│
+              │OpenRouter│          │  Redis   │          │ Supabase │
+              │(multi-LLM│          │ (Cache,  │          │(negocios,│
+              │ vía API) │          │  locks)  │          │reservas…)│
               └──────────┘          └──────────┘          └──────────┘
 ```
 
-### Flujo de Procesamiento
+### Flujo de Procesamiento (WhatsApp directo — camino principal)
 
-1. **Cliente WhatsApp** envía mensaje → **Next.js**
-2. **Next.js** envía a `/api/chat` con contexto del negocio
-3. **IA Server** recupera historial de Redis
-4. **OpenRouter** procesa el mensaje con el modelo configurado (`OPENROUTER_MODEL`) y genera respuesta
-5. Las **acciones** (registrar, cancelar, etc.) llegan como tool calls estructurados y validados por schema, no como texto a parsear
-6. Guarda en **historial** y retorna a Next.js
-7. **Next.js** ejecuta acciones y envía respuesta por WhatsApp
+1. El cliente escribe por **WhatsApp** a un número conectado vía Baileys (uno por negocio)
+2. `WhatsAppHandler` resuelve el **idioma** de la conversación (auto-detección o elección explícita) y el **paso actual** de la reserva, si hay una en curso
+3. Según el paso y el mensaje, el flujo avanza de forma **determinística** (día, horario, personas, confirmación, edición, cancelación); recurre al LLM (OpenRouter) puntualmente para comprensión de lenguaje natural o para conversación libre fuera de flujo
+4. Guarda el estado en **Redis/Supabase** y responde por WhatsApp
+
+> `POST /api/chat` y las rutas bajo `/api/agents` se mantienen por compatibilidad para integraciones externas que ya reciben el mensaje por otro canal — ver [docs/ENDPOINTS.md](docs/ENDPOINTS.md) para el detalle de ambos caminos (WhatsApp directo y HTTP).
 
 ## 📦 Requisitos Previos
 
@@ -729,35 +736,37 @@ redis-cli
 ```
 ia-server/
 ├── src/
-│   ├── index.ts                 # Entry point
-│   ├── config/
-│   │   ├── openrouter.ts       # OpenRouter client config
-│   │   └── redis.ts            # Redis client config
-│   ├── controllers/
-│   │   ├── chat.controller.ts   # Chat & batch handlers
-│   │   └── health.controller.ts # Health check
+│   ├── index.ts                        # Entry point (HTTP + sesiones de WhatsApp)
+│   ├── config/                         # Clientes de OpenRouter, Redis, Supabase
+│   ├── controllers/                    # chat, agent, reservation, blocked-date, session, messages, health
 │   ├── services/
-│   │   ├── openrouter.service.ts # OpenRouter API wrapper
-│   │   ├── conversation.service.ts # Conversation history
-│   │   └── intent.service.ts    # Intent analysis
-│   ├── middleware/
-│   │   ├── auth.middleware.ts   # API key auth
-│   │   ├── rateLimit.middleware.ts # Rate limiting
-│   │   └── validation.middleware.ts # Zod schemas
-│   ├── utils/
-│   │   ├── prompts.ts          # System prompts
-│   │   ├── logger.ts           # Winston logger
-│   │   └── actions.ts          # Action parsing
-│   ├── types/
-│   │   └── index.ts            # TypeScript types
-│   └── __tests__/              # Jest tests
-├── logs/                        # Log files
-├── dist/                        # Compiled JS
-├── .env                         # Environment variables
-├── ecosystem.config.js          # PM2 config
-├── setup.sh                     # Setup script
-├── deploy.sh                    # Deployment script
-└── README.md                    # Este archivo
+│   │   ├── whatsapp-handler.service.ts     # Flujo conversacional determinístico (reserva, idioma, cancelación…)
+│   │   ├── baileys.service.ts              # Conexión directa a WhatsApp (multi-sesión por negocio)
+│   │   ├── reservation.service.ts          # Ciclo de vida de la reserva (draft → confirmada)
+│   │   ├── reservation-nlu.service.ts      # Extracción de datos de reserva en lenguaje natural
+│   │   ├── reservation-planner.service.ts  # Descompone mensajes con varias acciones
+│   │   ├── realtime-sync.service.ts        # Sync en tiempo real con Supabase (fechas bloqueadas, etc.)
+│   │   ├── openrouter.service.ts           # OpenRouter API wrapper
+│   │   ├── conversation.service.ts         # Historial de conversación
+│   │   ├── intent.service.ts               # Análisis de intención (ruta legacy /api/chat)
+│   │   ├── post-visit.service.ts           # Seguimiento post-visita
+│   │   └── supabase.service.ts             # Acceso a datos (negocios, clientes, reservas, mesas)
+│   ├── agents/                         # Config del agente conversacional de respaldo
+│   ├── i18n/                           # Detección/selección de idioma + catálogos es/en/pt
+│   ├── middleware/                     # Auth, rate limiting, validación (Zod)
+│   ├── routes/                         # Sessions API y Messages API de WhatsApp
+│   ├── utils/                          # Prompts, plantillas de mensajes, fechas/horarios, logger
+│   ├── types/                          # Tipos de TypeScript (incl. generados desde Supabase)
+│   └── __tests__/                      # Jest: unit, integration, escenarios de conversación
+├── scripts/                            # Simulador de chat, utilidades de setup/tipos
+├── logs/                                # Log files
+├── dist/                                # Compiled JS
+├── docs/                                # AGENTS.md, ENDPOINTS.md, TYPES_GENERATION.md
+├── .env                                 # Environment variables
+├── ecosystem.config.js                  # PM2 config
+├── setup.sh                             # Setup script
+├── deploy.sh                            # Deployment script
+└── README.md                            # Este archivo
 ```
 
 ## 📚 Documentación Adicional
