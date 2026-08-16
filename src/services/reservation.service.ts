@@ -112,10 +112,11 @@ export class ReservationService {
    */
   static async startReservation(
     conversationId: string,
-    businessId: string
+    businessId: string,
+    awaitingLanguageChoice: boolean = false
   ): Promise<ReservationDraft> {
       logger.info('Starting reservation flow', { businessId, conversationId });
-    
+
     const draft: ReservationDraft = {
       conversationId,
       businessId,
@@ -124,13 +125,30 @@ export class ReservationService {
       updatedAt: Date.now(),
     };
 
+    if (awaitingLanguageChoice) {
+      draft.awaitingLanguageChoice = true;
+    }
+
     await this.saveDraft(draft);
-    logger.info('Reservation flow started', { 
-      conversationId, 
-      businessId
+    logger.info('Reservation flow started', {
+      conversationId,
+      businessId,
+      awaitingLanguageChoice,
     });
-    
+
     return draft;
+  }
+
+  /**
+   * Clears the transient language-menu flag once the customer either picked a
+   * language or answered with something else entirely (the non-blocking path).
+   */
+  static async clearLanguageChoicePending(conversationId: string): Promise<void> {
+    const draft = await this.getDraft(conversationId);
+    if (!draft?.awaitingLanguageChoice) return;
+
+    delete draft.awaitingLanguageChoice;
+    await this.saveDraft(draft);
   }
 
   /**

@@ -1,6 +1,8 @@
 import { SupabaseConfig } from '../config/supabase';
 import { RedisConfig } from '../config/redis';
 import { logger } from '../utils/logger';
+import { runWithLanguage } from '../i18n';
+import { resolveLanguage } from '../i18n/language-store';
 import type { Database } from '../types/supabase';
 import * as templates from '../utils/message-templates';
 import { PostVisitService } from './post-visit.service';
@@ -276,30 +278,33 @@ export class RealtimeSyncService {
         return;
       }
 
-      let notificationMessage: string;
+      // Este sender corre FUERA del turno de conversación (lo dispara un cambio
+      // en la DB), así que no hay idioma en el AsyncLocalStorage: se resuelve
+      // desde la preferencia guardada del cliente y se envuelve la construcción
+      // del mensaje para que los templates salgan en su idioma.
+      const { language } = await resolveLanguage(entry.business_id, customer.phone);
+
+      let notificationMessage = '';
+      await runWithLanguage(language, async () => {
       if (entry.status === 'SEATED') {
         // M11 — bienvenida al restaurante, y programa M12 (mensaje post-visita)
         notificationMessage = templates.welcomeAtRestaurant();
         await PostVisitService.schedulePostVisit(entry.id, entry.business_id);
       } else if (entry.status === 'CONFIRMED' || entry.status === 'NOTIFIED') {
-        notificationMessage =
-          `✅ ¡Tu reserva está CONFIRMADA!\n\n` +
-          `👤 Nombre: ${customer.name}\n` +
-          `👥 Personas: ${entry.party_size}\n` +
-          `📁 Código de reserva: *${entry.display_code}*\n\n` +
-          `✨ Te avisaremos cuando falten 20 minutos para que puedas ocupar tu mesa.\n` +
-          `Apreciamos tu puntualidad.\n\n` +
-          `_Si necesitas cancelar, respondé CANCELAR._`;
+        notificationMessage = templates.reservationConfirmedNotice(
+          customer.name,
+          entry.party_size,
+          entry.display_code
+        );
       } else {
         // WAITING — requiere confirmación manual del operador
-        notificationMessage =
-          `✅ ¡Tu reserva ha sido registrada!\n\n` +
-          `👤 Nombre: ${customer.name}\n` +
-          `👥 Personas: ${entry.party_size}\n` +
-          `📁 Código de reserva: *${entry.display_code}*\n\n` +
-          `⏰ Te notificaremos cuando confirmen tu reserva.\n\n` +
-          `_Si necesitas cancelar, respondé CANCELAR._`;
+        notificationMessage = templates.reservationRegisteredNotice(
+          customer.name,
+          entry.party_size,
+          entry.display_code
+        );
       }
+      });
 
       let recipientJid = customer.phone;
       try {
@@ -671,30 +676,31 @@ export class RealtimeSyncService {
         phone: customer.phone,
       });
 
-      // Build message based on new status
-      let notificationMessage: string;
+      // Este sender corre FUERA del turno de conversación (lo dispara un cambio
+      // en la DB), así que no hay idioma en el AsyncLocalStorage: se resuelve
+      // desde la preferencia guardada del cliente y se envuelve la construcción
+      // del mensaje para que los templates salgan en su idioma.
+      const { language } = await resolveLanguage(newEntry.business_id, customer.phone);
 
+      // Build message based on new status
+      let notificationMessage = '';
+      await runWithLanguage(language, async () => {
       if (isSeated) {
         // M11 — bienvenida al restaurante + programa el mensaje post-visita (M12)
         notificationMessage = templates.welcomeAtRestaurant();
         await PostVisitService.schedulePostVisit(newEntry.id, newEntry.business_id);
       } else if (isNotified) {
         // Paso 6: Mesa disponible (NOTIFIED)
-        notificationMessage =
-          `🚀 ¡Es tu momento!\n` +
-          `Tu mesa está disponible.\n` +
-          `Podés ocuparla dentro de los próximos 20 minutos.\n` +
-          `Luego de ese tiempo, la reserva podría liberarse.`;
+        notificationMessage = templates.tableReadyNotice();
       } else {
         // Paso 5: Reserva CONFIRMADA (CONFIRMED o NOTIFIED legacy)
-        notificationMessage =
-          `✅ ¡Tu reserva está CONFIRMADA!\n\n` +
-          `👤 Nombre: ${customer.name}\n` +
-          `👥 Personas: ${newEntry.party_size}\n` +
-          `📁 Código de reserva: *${newEntry.display_code}*\n\n` +
-          `✨ Te avisaremos cuando falten 20 minutos para que puedas ocupar tu mesa.\n` +
-          `Apreciamos tu puntualidad.`;
+        notificationMessage = templates.reservationConfirmedNotice(
+          customer.name,
+          newEntry.party_size,
+          newEntry.display_code
+        );
       }
+      });
 
       logger.info('📝 [REALTIME] Notification message built', {
         messageLength: notificationMessage.length,

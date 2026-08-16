@@ -97,6 +97,21 @@ function setupMocks(scenario: ConversationScenario): ScenarioRunContext {
     whatsapp_session_id: 'session-active',
   } as any);
 
+  // These scenarios exercise the reservation flow in Spanish, not the language
+  // onboarding: model a customer who already settled on Spanish so the welcome
+  // language menu isn't offered. `name` stays null so the name step still runs.
+  // (The language menu itself is covered by src/__tests__/i18n/.)
+  jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue({
+    id: 'customer-test',
+    phone: PHONE,
+    business_id: BUSINESS_ID,
+    name: null,
+    lastName: null,
+    preferred_language: 'es',
+  } as any);
+  jest.spyOn(SupabaseService, 'getCustomerLanguage').mockResolvedValue('es');
+  jest.spyOn(SupabaseService, 'updateCustomerLanguage').mockResolvedValue(true);
+
   // Active reservation for the scenario
   const activeReservationData = scenario.activeReservation
     ? {

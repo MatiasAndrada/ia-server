@@ -19,6 +19,7 @@
     "test:coverage": "jest --coverage",
     "test:manual": "ts-node src/__tests__/manual/test-real-business.ts",
     "test:reservation": "jest reservation-flow",
+    "chat:simulate": "ts-node scripts/chat-simulator.ts",
     "test:integration": "jest --testPathPattern=integration",
     "whatsapp:connect": "node whatsapp-client.js",
     "whatsapp:clean": "rm -rf auth_sessions/*",

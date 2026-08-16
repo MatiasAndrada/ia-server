@@ -1677,15 +1677,16 @@ const mixedInputScenarios: ConversationScenario[] = [
   },
   {
     id: 'mx-10',
-    description: 'Mensaje en inglés',
+    description: 'Mensaje en inglés — ahora es un idioma soportado, no off-topic',
     category: 'mixed_input',
     turns: [
       {
+        // Antes de i18n el bot era monolingüe y este mensaje se rebotaba como
+        // off-topic sin llamar al LLM. Con inglés soportado eso sería un bug:
+        // el pedido es una reserva legítima y debe entrar al flujo.
         user: 'I want to book a table for 4 people',
         expect: {
-          // Should handle or off-topic, NOT hallucinate in English
-          isOffTopic: true,
-          noLlmCall: true,
+          isOffTopic: false,
         },
       },
     ],

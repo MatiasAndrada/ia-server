@@ -7,6 +7,7 @@ import {
   evaluateReservationScope,
   isGreetingOrReservationOptInMessage,
 } from '../utils/reservation-scope';
+import { buildLanguageInstruction } from '../utils/prompts';
 
 /**
  * Servicio para manejar interacciones con agentes de IA
@@ -143,6 +144,11 @@ class AgentService {
           }
         }
       }
+
+      // La instrucción de idioma va AL FINAL para que pese más que el tono
+      // rioplatense escrito en el prompt del agente. Se aplica a cualquier
+      // agente registrado, no solo al de reservas.
+      systemPrompt += `\n\n## LANGUAGE\n${buildLanguageInstruction()}`;
 
       // Build per-agent generation options
       const generationOptions: LlmGenerationOptions = {};

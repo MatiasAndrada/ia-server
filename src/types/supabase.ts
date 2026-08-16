@@ -121,6 +121,7 @@ export type Database = {
           created_at: string
           business_id: string
           lastName: string | null
+          preferred_language: string | null
         }
         Insert: {
           id?: string
@@ -131,6 +132,7 @@ export type Database = {
           created_at?: string
           business_id: string
           lastName?: string | null
+          preferred_language?: string | null
         }
         Update: {
           id?: string
@@ -141,6 +143,7 @@ export type Database = {
           created_at?: string
           business_id?: string
           lastName?: string | null
+          preferred_language?: string | null
         }
         Relationships: []
       }
