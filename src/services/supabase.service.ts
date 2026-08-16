@@ -123,9 +123,6 @@ export class SupabaseService {
    */
   static async getTablesByBusiness(businessId: string): Promise<Table[]> {
     try {
-      console.log('\n🪑 [DEBUG] getTablesByBusiness called');
-      console.log('📍 Business ID:', businessId);
-      
       const client = this.getClient();
       const { data: tablesData, error } = await client
         .from('tables')
@@ -135,24 +132,11 @@ export class SupabaseService {
         .eq('is_occupied', false)
         .order('name', { ascending: true });
 
-      console.log('🔍 [DEBUG] Tables query result:', {
-        hasError: !!error,
-        dataCount: tablesData?.length || 0,
-      });
-
       if (error) {
-        console.error('❌ [DEBUG] Error fetching tables:', error);
         throw error;
       }
 
       const tables = (tablesData as Table[] | null) ?? [];
-      
-      console.log('✅ [DEBUG] Tables returned:', tables.map(t => ({
-        id: t.id,
-        name: t.name,
-        capacity: t.capacity,
-        business_id: t.business_id
-      })));
 
       logger.info('Tables fetched', {
         businessId,
@@ -171,9 +155,6 @@ export class SupabaseService {
    */
   static async getActiveTablesByBusiness(businessId: string): Promise<Table[]> {
     try {
-      console.log('\n🪑 [DEBUG] getActiveTablesByBusiness called');
-      console.log('📍 Business ID:', businessId);
-
       const client = this.getClient();
       const { data: tablesData, error } = await client
         .from('tables')
@@ -182,13 +163,7 @@ export class SupabaseService {
         .eq('is_active', true)
         .order('name', { ascending: true });
 
-      console.log('🔍 [DEBUG] Active tables query result:', {
-        hasError: !!error,
-        dataCount: tablesData?.length || 0,
-      });
-
       if (error) {
-        console.error('❌ [DEBUG] Error fetching active tables:', error);
         throw error;
       }
 
@@ -889,9 +864,6 @@ export class SupabaseService {
         .from('business_blocked_dates')
         .select('date, reason, reason_message')
         .eq('business_id', businessId);
-      console.log('🔍 [DEBUG] getBlockedDates query result:', {
-        data, error
-      });
       if (error) {
         throw error;
       }
