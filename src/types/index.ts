@@ -393,6 +393,14 @@ export interface ReservationDraft {
   // party_size step: true right after asking "¿Cuál es tu nombre correcto?" — the
   // next reply should be treated as the name itself, not as a party size answer.
   awaitingNameCorrection?: boolean;
+  /**
+   * Set together with `step: 'name'` right after sending the language menu.
+   * Deliberately a transient flag and NOT a step of its own: the selection is
+   * non-blocking, so if the next reply isn't a language choice it falls through
+   * to the normal name parsing and the flow continues uninterrupted. Same
+   * pattern as `awaitingNameCorrection` at the `party_size` step.
+   */
+  awaitingLanguageChoice?: boolean;
   // Set when the customer names a weekday that resolves to TODAY (e.g. "el
   // jueves" said on a Thursday) — genuinely ambiguous between "today" and
   // "next week". Holds both candidate dates (and any time already given in

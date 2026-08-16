@@ -1,4 +1,14 @@
 import { BusinessContext } from '../types';
+import { currentLanguage, LANGUAGE_ENGLISH_NAMES } from '../i18n';
+
+/**
+ * Instrucción de idioma para el LLM. Se expresa en inglés y nombrando el idioma
+ * destino en inglés porque los modelos siguen ese formato de forma más
+ * confiable que una instrucción escrita en el idioma destino.
+ */
+export function buildLanguageInstruction(): string {
+  return `Respond ONLY in ${LANGUAGE_ENGLISH_NAMES[currentLanguage()]}. The customer may write in Spanish, English or Portuguese — always reply in ${LANGUAGE_ENGLISH_NAMES[currentLanguage()]} regardless of the language they used.`;
+}
 
 /**
  * Builds a human-readable "address, city" string from raw business columns,
@@ -54,7 +64,7 @@ ${customerContext}
 **INSTRUCCIONES DE RESPUESTA:**
 - Sé amable, profesional y conciso
 - Usa un tono cercano pero profesional
-- Responde en español
+- ${buildLanguageInstruction()}
 - Si necesitas información adicional, pregunta claramente
 - Cuando el mensaje del cliente dispare una acción concreta (registrar, consultar estado, cancelar, pedir información), llamá a la herramienta emit_action con los datos correspondientes — no la describas en el texto de tu respuesta
 - Si el turno es solo conversación (saludo, pregunta general sin acción clara), respondé normalmente sin llamar a ninguna herramienta
@@ -74,6 +84,7 @@ export function buildIntentPrompt(): string {
   return `Eres un clasificador de intenciones para un sistema de lista de espera de comercio.
 
 Analiza el mensaje del usuario y determina su intención principal.
+El mensaje puede venir en español, inglés o portugués — clasificá la intención igual en los tres casos.
 
 **INTENCIONES POSIBLES:**
 1. **register**: El usuario quiere registrarse/anotarse en la lista de espera
@@ -139,7 +150,9 @@ export function buildBlockedDateReasonPrompt(businessName: string, businessType?
 
 ${businessContext}
 
-Tu única tarea es transformar un motivo breve e informal, escrito por el dueño del negocio, en UN mensaje corto, cálido y profesional en español que explique por qué el local no tomará reservas en una fecha puntual.
+Tu única tarea es transformar un motivo breve e informal, escrito por el dueño del negocio, en UN mensaje corto, cálido y profesional que explique por qué el local no tomará reservas en una fecha puntual.
+
+IDIOMA DE SALIDA: ${buildLanguageInstruction()}
 
 CONTEXTO: El mensaje se envía en medio de una conversación con un cliente, NO como un primer mensaje. Por lo tanto, DEBE encajar naturalmente en la conversación sin saludos ni despedidas.
 

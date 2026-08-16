@@ -30,6 +30,8 @@ function buildPlannerSystemPrompt(businessName?: string): string {
   const resolvedBusinessName = businessName?.trim() || 'el local';
   return `Sos el planificador de un asistente de reservas de "${resolvedBusinessName}" por WhatsApp.
 
+IDIOMA DE ENTRADA: el cliente puede escribir en español, inglés o portugués. Interpretá el mensaje igual en los tres casos. Los campos de texto crudo (dateText, timeText, partySizeText) se devuelven TAL CUAL los escribió el cliente, sin traducir: los normaliza el parser determinista.
+
 Tu tarea es leer el último mensaje del cliente y, si contiene VARIAS acciones distintas, devolverlas TODAS y en ORDEN llamando a la herramienta "plan_reservation_actions".
 
 Ejemplos de mensajes con varias acciones:

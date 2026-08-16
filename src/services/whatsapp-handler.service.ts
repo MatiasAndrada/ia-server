@@ -6,8 +6,21 @@ import { SupabaseService } from './supabase.service';
 import { SupabaseConfig } from '../config/supabase';
 import { RedisConfig } from '../config/redis';
 import { agentRegistry } from '../agents';
-import { BaileysMessage, BlockedDateEntry, Customer, ReservationDraft, WaitlistEntry, WeeklyHours } from '../types';
+import { BaileysMessage, BlockedDateEntry, Business, Customer, ReservationDraft, WaitlistEntry, WeeklyHours } from '../types';
 import { logger } from '../utils/logger';
+import { runWithLanguage, currentLanguage, SupportedLanguage } from '../i18n';
+import {
+  cacheDetectedLanguage,
+  persistLanguage,
+  resolveLanguage,
+} from '../i18n/language-store';
+import {
+  detectLanguage,
+  detectLanguageChangeRequest,
+  parseLanguageMenuChoice,
+  DETECTION_THRESHOLD,
+} from '../i18n/detect';
+import { isMultilingualGreeting } from '../i18n/keywords';
 import { extractReservationUpdate, ReservationSlots } from './reservation-nlu.service';
 import { planReservationActions, countActionableIntents, PlannedAction } from './reservation-planner.service';
 import {
@@ -199,6 +212,14 @@ export class WhatsAppHandler {
   /**
    * Internal processor — receives one (possibly merged) message per invocation.
    */
+  /**
+   * Resolves the conversation language and runs the whole turn inside that
+   * language context, so every `templates.*` call downstream emits in the
+   * customer's language without any of the ~200 call sites knowing about it.
+   *
+   * Language resolution happens BEFORE the inactive-service check on purpose —
+   * that fallback message is customer-facing too.
+   */
   private async _processMessage(message: BaileysMessage): Promise<void> {
     try {
       const { from, message: messageText, businessId, fromMe } = message;
@@ -242,12 +263,135 @@ export class WhatsAppHandler {
         return;
       }
 
+      const { language, isExplicit } = await this.resolveConversationLanguage(
+        businessId,
+        phone,
+        messageText,
+        businessStatus.language
+      );
+
+      await runWithLanguage(language, () =>
+        this._processMessageLocalized(message, businessStatus, phone, conversationId, isExplicit)
+      );
+    } catch (error) {
+      logger.error('Error resolving conversation language', {
+        error,
+        businessId: message.businessId,
+      });
+    }
+  }
+
+  /**
+   * Redis → customers.preferred_language → auto-detection → businesses.language.
+   *
+   * Auto-detection only runs when the customer never made an explicit choice,
+   * and its result is cached but NOT written to the DB: it's our inference, not
+   * their decision, so `preferred_language` stays NULL and the language menu is
+   * still offered. `isExplicit` is returned alongside the language so the
+   * caller can decide whether to still offer that menu this turn (see
+   * `offerLanguageMenuOnFirstContact`).
+   */
+  private async resolveConversationLanguage(
+    businessId: string,
+    phone: string,
+    messageText: string,
+    businessLanguage?: string | null
+  ): Promise<{ language: SupportedLanguage; isExplicit: boolean }> {
+    const resolved = await resolveLanguage(businessId, phone, businessLanguage);
+
+    if (resolved.isExplicit) {
+      logger.debug('Language resolved', {
+        phone,
+        businessId,
+        language: resolved.language,
+        source: resolved.source,
+      });
+      return { language: resolved.language, isExplicit: true };
+    }
+
+    const detected = detectLanguage(messageText);
+    if (detected && detected.confidence >= DETECTION_THRESHOLD) {
+      logger.info('Language auto-detected', {
+        phone,
+        businessId,
+        language: detected.language,
+        confidence: detected.confidence,
+        previous: resolved.language,
+      });
+      await cacheDetectedLanguage(businessId, phone, detected.language);
+      return { language: detected.language, isExplicit: false };
+    }
+
+    logger.debug('Language resolved', {
+      phone,
+      businessId,
+      language: resolved.language,
+      source: resolved.source,
+    });
+    return { language: resolved.language, isExplicit: false };
+  }
+
+  /**
+   * Offers the language menu on the very first message from a brand-new
+   * customer, REGARDLESS of what that message says — not only a bare greeting.
+   *
+   * Why this exists: `handleGreeting` already offers the menu, but only fires
+   * when `isGreetingMessage` matches the WHOLE message. A first message that
+   * combines greeting + intent ("hi, table for 4" — the literal example from
+   * the original spec) is not a bare greeting, so it used to reach
+   * `handlePrefilledReservationRequest` first, which tried to parse "hi" as
+   * part of a name before the customer ever got to pick a language. Found via
+   * manual testing with scripts/chat-simulator.ts.
+   *
+   * Only acts on customers with NO name on file — an existing customer who
+   * simply never made an explicit language choice (e.g. created before this
+   * feature shipped) is intentionally left to the normal known-customer path,
+   * matching the earlier product decision to never re-show the menu to
+   * returning customers.
+   *
+   * Returns true when it sent the menu — caller must stop processing this turn.
+   */
+  private async offerLanguageMenuOnFirstContact(
+    businessId: string,
+    jid: string,
+    phone: string,
+    conversationId: string
+  ): Promise<boolean> {
+    const knownCustomer = await SupabaseService.getCustomerByPhone(phone, businessId);
+    if (knownCustomer?.name) {
+      return false;
+    }
+
+    const business = await SupabaseService.getBusinessById(businessId);
+    await ReservationService.startReservation(conversationId, businessId, true);
+    await this.sendWhatsAppMessage(
+      businessId,
+      jid,
+      templates.languageWelcomeMenu(business?.name || 'el local', business?.city)
+    );
+    logger.info('Language menu sent on first contact (non-greeting message)', {
+      conversationId,
+      businessId,
+    });
+    return true;
+  }
+
+  private async _processMessageLocalized(
+    message: BaileysMessage,
+    businessStatus: Business,
+    phone: string,
+    conversationId: string,
+    languageChosenExplicitly: boolean
+  ): Promise<void> {
+    try {
+      const { from, message: messageText, businessId } = message;
+
       const isActive =
         businessStatus.whatsapp_session_id !== null && businessStatus.whatsapp_session_id !== undefined;
       if (!isActive) {
         const shouldNotifyUnavailable = await this.shouldSendInactiveFallback(businessId, phone);
         if (shouldNotifyUnavailable) {
-          await this.sendWhatsAppMessage(businessId, from, INACTIVE_FALLBACK_MESSAGE);
+          await this.sendWhatsAppMessage(businessId, from, templates.inactiveFallback());
         } else {
           logger.info('Inactive service fallback suppressed by throttle', {
             businessId,
@@ -267,6 +411,22 @@ export class WhatsAppHandler {
 
       // Check if there's an active reservation draft
       let draft = await ReservationService.getDraft(conversationId);
+
+      // --- Language change (any step, any moment) ---
+      // Placed before every other check so it works mid-flow, and deliberately
+      // NOT routed through handleGreeting: switching language must preserve the
+      // draft (party size, date already given), unlike a greeting which resets it.
+      const languageChangeHandled = await this.handleLanguageChangeRequest(
+        messageText,
+        businessId,
+        from,
+        phone,
+        conversationId,
+        draft
+      );
+      if (languageChangeHandled) {
+        return;
+      }
 
       // --- Early exit keyword check (any step) ---
       // The M3 cancel flow's own steps consume answers that contain words like
@@ -478,6 +638,18 @@ export class WhatsAppHandler {
       }
 
       if (!draft) {
+        if (!languageChosenExplicitly) {
+          const languageMenuOffered = await this.offerLanguageMenuOnFirstContact(
+            businessId,
+            from,
+            phone,
+            conversationId
+          );
+          if (languageMenuOffered) {
+            return;
+          }
+        }
+
         const prefilledReservationHandled = await this.handlePrefilledReservationRequest(
           messageText,
           conversationId,
@@ -981,14 +1153,14 @@ export class WhatsAppHandler {
               await this.sendWhatsAppMessage(
                 businessId,
                 jid,
-                '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+                templates.tooManyInvalidAttempts()
               );
             } else {
               await ReservationService.saveDraft(draft);
               await this.sendWhatsAppMessage(
                 businessId,
                 jid,
-                'No reconocí eso como un nombre. ¿Cuál es tu nombre para continuar con la reserva?'
+                templates.invalidNameRetry()
               );
             }
             return true;
@@ -1036,7 +1208,7 @@ export class WhatsAppHandler {
             await this.sendWhatsAppMessage(
               businessId,
               jid,
-              '¿Cuál es tu nombre correcto para continuar con la reserva?'
+              templates.askCorrectName()
             );
             return true;
           }
@@ -1157,7 +1329,7 @@ export class WhatsAppHandler {
                   await this.sendWhatsAppMessage(
                     businessId,
                     jid,
-                    '❌ El local está cerrado en este momento y no encontré disponibilidad en los próximos 7 días.'
+                    templates.closedNoAvailability()
                   );
                   await ReservationService.deleteDraft(conversationId);
                   return true;
@@ -1184,7 +1356,7 @@ export class WhatsAppHandler {
                   await this.sendWhatsAppMessage(
                     businessId,
                     jid,
-                    '❌ El local está cerrado en este momento y no encontré disponibilidad en los próximos 7 días.'
+                    templates.closedNoAvailability()
                   );
                   await ReservationService.deleteDraft(conversationId);
                   return true;
@@ -1194,7 +1366,7 @@ export class WhatsAppHandler {
                 await this.sendWhatsAppMessage(
                   businessId,
                   jid,
-                  `❌ El local está cerrado en este momento.\n\nEl próximo horario disponible es el *${nextSlot.label}*.\n\n¿Reservamos para esa hora? Respondé *sí* o *no*.`
+                  templates.closedSuggestNextSlot(nextSlot.label)
                 );
                 return true;
               }
@@ -1247,7 +1419,7 @@ export class WhatsAppHandler {
               await this.sendWhatsAppMessage(
                 businessId,
                 jid,
-                'Por ahora solo puedo tomar reservas dentro de los próximos 7 días. ¿Para qué día de esa semana la querés?'
+                templates.outOfWindowAskDay()
               );
               return true;
             }
@@ -1368,13 +1540,13 @@ export class WhatsAppHandler {
             await this.sendWhatsAppMessage(
               businessId,
               jid,
-              '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+              templates.tooManyInvalidAttempts()
             );
           } else {
             await this.sendWhatsAppMessage(
               businessId,
               jid,
-              '❌ Respondé *1* para ahora o *2* para elegir día y horario.'
+              templates.scheduleChoiceInvalid()
             );
           }
           return true;
@@ -1429,7 +1601,7 @@ export class WhatsAppHandler {
               await this.sendWhatsAppMessage(
                 businessId,
                 jid,
-                '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+                templates.tooManyInvalidAttempts()
               );
             } else {
               // Proactively suggest the soonest available slot so the customer can
@@ -1444,8 +1616,8 @@ export class WhatsAppHandler {
                 await this.sendWhatsAppMessage(
                   businessId,
                   jid,
-                  'Por ahora solo puedo tomar reservas dentro de los próximos 7 días. ' +
-                  await this.buildAskDayMessage(businessId, weeklyHoursForDate)
+                  templates.outOfWindowPrefix() +
+                  (await this.buildAskDayMessage(businessId, weeklyHoursForDate))
                 );
               } else {
                 await this.sendWhatsAppMessage(businessId, jid, await this.buildAskDayMessage(businessId, weeklyHoursForDate));
@@ -1463,7 +1635,7 @@ export class WhatsAppHandler {
                 await this.sendWhatsAppMessage(
                   businessId,
                   jid,
-                  '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+                  templates.tooManyInvalidAttempts()
                 );
                 return true;
               }
@@ -1614,7 +1786,7 @@ export class WhatsAppHandler {
               await this.sendWhatsAppMessage(
                 businessId,
                 jid,
-                'Por ahora solo puedo tomar reservas dentro de los próximos 7 días. ¿Para qué día de esa semana la querés?'
+                templates.outOfWindowAskDay()
               );
               return true;
             }
@@ -1688,7 +1860,7 @@ export class WhatsAppHandler {
               await this.sendWhatsAppMessage(
                 businessId,
                 jid,
-                '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+                templates.tooManyInvalidAttempts()
               );
             } else if (scheduledDate) {
               // Suggest the first available slot on the chosen day so the customer can confirm with "sí".
@@ -1713,7 +1885,7 @@ export class WhatsAppHandler {
                   await this.sendWhatsAppMessage(
                     businessId,
                     jid,
-                    `No entendí el horario. El primer turno disponible ese día es a las *${slotTime}*.\n\n¿Reservamos para esa hora? Respondé *sí* o *no*.`
+                    templates.didntUnderstandTimeSuggest(slotTime)
                   );
                   return true;
                 }
@@ -1806,7 +1978,7 @@ export class WhatsAppHandler {
                   await this.sendWhatsAppMessage(
                     businessId,
                     jid,
-                    `❌ ${hoursCheck.reason} ¿Para qué otro día y hora lo querés?`
+                    templates.hoursRejectedAskOther(hoursCheck.reason)
                   );
                   return true;
                 }
@@ -1833,7 +2005,7 @@ export class WhatsAppHandler {
                 await this.sendWhatsAppMessage(
                   businessId,
                   jid,
-                  `¿Confirmamos la reserva para el *${label}*?${carriedTimeHoursNote}\n\nRespondé *sí* o *no*.`
+                  templates.confirmSlotPrompt(label, carriedTimeHoursNote)
                 );
                 return true;
               }
@@ -1937,7 +2109,7 @@ export class WhatsAppHandler {
             await this.sendWhatsAppMessage(
               businessId,
               jid,
-              '¿Para cuántas personas querés cambiar la reserva?\n\nEjemplo: 2, 4 o 6 personas.'
+              templates.askNewPartySize()
             );
             return true;
           } else if (choice === 2) {
@@ -2126,7 +2298,7 @@ export class WhatsAppHandler {
               await this.sendWhatsAppMessage(
                 businessId,
                 jid,
-                'No reconocí ese nombre. ¿Me lo repetís, por favor?'
+                templates.invalidLastNameRetry()
               );
             }
             return true;
@@ -2141,7 +2313,7 @@ export class WhatsAppHandler {
             await this.sendWhatsAppMessage(
               businessId,
               jid,
-              'Todavía no tengo tus datos guardados. Cuando hagas una reserva se guardará tu nombre. 😊'
+              templates.noStoredCustomerData()
             );
             return true;
           }
@@ -2150,7 +2322,7 @@ export class WhatsAppHandler {
           await this.sendWhatsAppMessage(
             businessId,
             jid,
-            `✅ Listo, actualicé tu nombre. Ahora figurás como *${fullName}*.`
+            templates.customerNameUpdated(fullName)
           );
           return true;
         }
@@ -2339,7 +2511,7 @@ export class WhatsAppHandler {
     await this.sendWhatsAppMessage(
       businessId,
       jid,
-      `¿Te referís a *hoy ${weekdayLabel}* o al *${nextLabel}* que viene?\n\nRespondé *1* para hoy o *2* para la semana que viene.`
+      templates.weekdayAmbiguityPrompt(weekdayLabel, nextLabel)
     );
     return true;
   }
@@ -2372,14 +2544,14 @@ export class WhatsAppHandler {
         await this.sendWhatsAppMessage(
           businessId,
           jid,
-          '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+          templates.tooManyInvalidAttempts()
         );
       } else {
         await ReservationService.saveDraft(draft);
         await this.sendWhatsAppMessage(
           businessId,
           jid,
-          `No te entendí. Respondé *1* para hoy o *2* para el ${pending.weekdayLabel.split(' ')[0]} que viene.`
+          templates.weekdayAmbiguityInvalid(pending.weekdayLabel.split(' ')[0])
         );
       }
       return true;
@@ -2500,7 +2672,7 @@ export class WhatsAppHandler {
     await this.sendWhatsAppMessage(
       businessId,
       jid,
-      `Por ahora solo puedo tomar reservas para *esta semana y la que viene*, así que no puedo agendar para el *${mismatch.weekdayLabel} ${mismatch.requestedDayNumber}*.\n\n¿Querés que sea para el *${nearestLabel}* (el próximo ${mismatch.weekdayLabel}) en su lugar?\n\nRespondé *sí* o *no*.`
+      templates.weekdayDayMismatchPrompt(mismatch.weekdayLabel, mismatch.requestedDayNumber, nearestLabel)
     );
     return true;
   }
@@ -2533,14 +2705,14 @@ export class WhatsAppHandler {
         await this.sendWhatsAppMessage(
           businessId,
           jid,
-          '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+          templates.tooManyInvalidAttempts()
         );
       } else {
         await ReservationService.saveDraft(draft);
         await this.sendWhatsAppMessage(
           businessId,
           jid,
-          `No te entendí. Respondé *sí* para el ${pending.nearestLabel} o *no* para elegir otro día.`
+          templates.weekdayDayMismatchInvalid(pending.nearestLabel)
         );
       }
       return true;
@@ -2644,7 +2816,7 @@ export class WhatsAppHandler {
         await this.sendWhatsAppMessage(
           businessId,
           jid,
-          '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+          templates.tooManyInvalidAttempts()
         );
       } else {
         // Re-ask including the closing time context already known from pending.
@@ -2870,7 +3042,7 @@ export class WhatsAppHandler {
         await this.sendWhatsAppMessage(
           businessId,
           jid,
-          `Ese horario ya pasó para hoy. ¿Podemos reservar para mañana a las *${timeLabel}* (${tomorrowLabel})?\n\nRespondé *sí* o *no*.`
+          templates.timeAlreadyPassedSuggestTomorrow(timeLabel, tomorrowLabel)
         );
         return true;
       }
@@ -2883,7 +3055,7 @@ export class WhatsAppHandler {
         await this.sendWhatsAppMessage(
           businessId,
           jid,
-          '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+          templates.tooManyInvalidAttempts()
         );
         return false;
       }
@@ -2891,7 +3063,7 @@ export class WhatsAppHandler {
       await this.sendWhatsAppMessage(
         businessId,
         jid,
-        '❌ Ese horario ya pasó. Decime otro horario, o otro día si preferís.'
+        templates.timeAlreadyPassed()
       );
       return true;
     }
@@ -2918,7 +3090,7 @@ export class WhatsAppHandler {
         await this.sendWhatsAppMessage(
           businessId,
           jid,
-          '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+          templates.tooManyInvalidAttempts()
         );
         return false;
       }
@@ -2948,7 +3120,7 @@ export class WhatsAppHandler {
         await this.sendWhatsAppMessage(
           businessId,
           jid,
-          '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+          templates.tooManyInvalidAttempts()
         );
         return false;
       }
@@ -2973,7 +3145,7 @@ export class WhatsAppHandler {
           await this.sendWhatsAppMessage(
             businessId,
             jid,
-            `❌ ${hoursCheck.reason}\n\nEl próximo horario disponible ese día es a las *${slotTime}*. ¿Reservamos para esa hora? Respondé *sí* o *no*.`
+            templates.hoursRejectedSuggestSlot(hoursCheck.reason, slotTime)
           );
           return false;
         }
@@ -2997,7 +3169,7 @@ export class WhatsAppHandler {
           await this.sendWhatsAppMessage(
             businessId,
             jid,
-            '❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.'
+            templates.tooManyInvalidAttempts()
           );
           return false;
         }
@@ -3005,7 +3177,7 @@ export class WhatsAppHandler {
         await this.sendWhatsAppMessage(
           businessId,
           jid,
-          `❌ ${hoursCheck.reason} No hay más turnos disponibles ese día. ¿Querés elegir otro horario o día?`
+          templates.hoursRejectedNoMoreSlots(hoursCheck.reason)
         );
         return true;
       }
@@ -3544,6 +3716,20 @@ export class WhatsAppHandler {
       /\bhacer\s+una\s+reserva\b/,
       /\bmesa\s+para\b/,
       /\bquiero\s+una\s+mesa\b/,
+      // Inglés
+      /^book$/,
+      /\banother\s+(booking|reservation)\b/,
+      /\bnew\s+(booking|reservation)\b/,
+      /\b(want|need|like)\s+to\s+book\b/,
+      /\bmake\s+a\s+(booking|reservation)\b/,
+      /\btable\s+for\b/,
+      // Portugués
+      /^reservar$/,
+      /\boutra\s+reserva\b/,
+      /\bnova\s+reserva\b/,
+      /\bquero\s+reservar\b/,
+      /\bfazer\s+uma\s+reserva\b/,
+      /\bmesa\s+para\b/,
     ];
 
     return explicitPatterns.some((pattern) => pattern.test(normalized));
@@ -3591,6 +3777,16 @@ export class WhatsAppHandler {
       /^genial\s+gracias$/,
       /^ok\s+gracias$/,
       /^dale\s+gracias$/,
+      // Inglés
+      /^thank\s+you\s+(so\s+)?(very\s+)?much$/,
+      /^(many\s+)?thanks(\s+a\s+lot)?$/,
+      /^thx$/,
+      /^(ok|okay)\s+thank(s|\s+you)$/,
+      // Portugués
+      /^(muito\s+)?obrigad[oa]$/,
+      /^obrigad[oa]\s+por\s+tudo$/,
+      /^valeu$/,
+      /^(ok|beleza)\s+obrigad[oa]$/,
     ];
 
     return gratitudePatterns.some((pattern) => pattern.test(normalized));
@@ -3616,6 +3812,14 @@ export class WhatsAppHandler {
       /^excelente$/,
       /^joya$/,
       /^barbaro$/,
+      // Inglés
+      /^(sure|alright|allright)$/,
+      /^(great|awesome|cool|nice|excellent)$/,
+      /^(got\s+it|understood|sounds\s+good)$/,
+      // Portugués
+      /^(beleza|blz)$/,
+      /^(certo|ta\s+bom|tudo\s+bem)$/,
+      /^(otimo|show|massa)$/,
     ];
 
     return acknowledgementPatterns.some((pattern) => pattern.test(normalized));
@@ -3675,7 +3879,14 @@ export class WhatsAppHandler {
   private isCancellationIntent(text: string): boolean {
     const lower = this.normalizeCourtesyText(text);
     // "cancelar"/"anular" always signal cancellation on their own.
-    if (/\bcancela/.test(lower) || /\banula/.test(lower)) return true;
+    // "cancelar" es idéntico en ES y PT; "cancel" cubre el inglés.
+    if (/\bcancela/.test(lower) || /\banula/.test(lower) || /\bcancel\b/.test(lower)) return true;
+    // Inglés: "delete/remove/drop my booking"
+    if (/\b(delet|remov|drop)/.test(lower) && /\b(booking|reservation|table)\b/.test(lower)) {
+      return true;
+    }
+    // Portugués: "desmarcar", "desistir"
+    if (/\b(desmarc|desist)/.test(lower)) return true;
     // "borrar/eliminar/sacar/quitar" only count when clearly about the
     // reservation — matched as word-boundary stems (covers "sacá"/"saca"/
     // "sacar", "eliminá"/"elimina"/"eliminar", etc.) and without requiring an
@@ -3696,6 +3907,12 @@ export class WhatsAppHandler {
       'inicio', 'menu', 'volver', 'atras', 'restart',
       'no quiero', 'dejalo', 'olvidalo', 'olvidame', 'olvida',
       'no importa', 'no gracias', 'dejame', 'no hacer',
+      // Inglés
+      'exit', 'quit', 'nevermind', 'never mind', 'forget it', 'go back', 'back',
+      'no thanks', 'no thank you',
+      // Portugués
+      'sair', 'esquece', 'esquece isso', 'deixa', 'deixa pra la', 'voltar',
+      'nao quero', 'nao obrigado', 'nao obrigada',
     ];
     return keywords.some(kw => {
       // Word-boundary aware: the keyword must appear as a standalone token
@@ -3705,11 +3922,10 @@ export class WhatsAppHandler {
   }
 
   private isGreetingMessage(text: string): boolean {
-    const normalized = this.normalizeCourtesyText(text);
-    // Allows one or more greeting units strung together (e.g. "hola buenos
-    // dias", "hola que tal") — a compound greeting is still just a greeting.
-    const unit = '(?:hola{1,6}|holis|hello|hi|hey|buenas|buenos dias|buenas tardes|buenas noches|buen dia|que tal|quetal)';
-    return new RegExp(`^${unit}(?: ${unit})*$`).test(normalized);
+    // Multilingual by union (ES/EN/PT) — see src/i18n/keywords.ts. A tourist
+    // greets in their own language before ever seeing the language menu, so
+    // this matcher must recognise "hi" and "oi" as readily as "hola".
+    return isMultilingualGreeting(this.normalizeCourtesyText(text));
   }
 
   private isActiveReservationsInquiryMessage(text: string): boolean {
@@ -3746,7 +3962,7 @@ export class WhatsAppHandler {
         await this.sendWhatsAppMessage(
           businessId,
           jid,
-          'No tenés reservas activas en este momento. Si querés, podés crear una nueva reserva escribiendo *RESERVAR*.'
+          templates.noActiveReservationsInquiry()
         );
         logger.info('No active reservations to report', { conversationId });
         return true;
@@ -3894,6 +4110,9 @@ export class WhatsAppHandler {
     unknownCustomerMessage: string
   ): Promise<void> {
     const knownCustomer = await SupabaseService.getCustomerByPhone(phone, businessId);
+    // A stored preference means the customer already picked a language once —
+    // don't re-ask, just greet in it and mention how to switch.
+    const hasChosenLanguage = !!knownCustomer?.preferred_language;
 
     if (knownCustomer?.name) {
       await ReservationService.startReservationForKnownCustomer(
@@ -3902,15 +4121,33 @@ export class WhatsAppHandler {
         knownCustomer.name,
         knownCustomer.lastName
       );
-      await this.sendWhatsAppMessage(
-        businessId,
-        jid,
-        templates.welcomeBackAskPartySize(knownCustomer.name)
-      );
+      // The change-hint always shows for known customers, even ones without an
+      // explicit preferred_language (e.g. existing customers from before this
+      // feature shipped) — they're already replying in an auto-detected
+      // language this turn (see resolveConversationLanguage), so they still
+      // need to know how to switch it if it's wrong.
+      const greeting = `${templates.welcomeBackAskPartySize(knownCustomer.name)}\n\n${templates.languageChangeHint()}`;
+      await this.sendWhatsAppMessage(businessId, jid, greeting);
       logger.info('Reservation flow started for known customer — name step skipped', {
         conversationId,
         businessId,
+        hasChosenLanguage,
       });
+      return;
+    }
+
+    // First contact: offer the language menu instead of jumping straight to the
+    // name question. Non-blocking — the draft still moves to `name`, so if the
+    // customer ignores the menu and answers with their name, the flow continues.
+    if (!hasChosenLanguage) {
+      const business = await SupabaseService.getBusinessById(businessId);
+      await ReservationService.startReservation(conversationId, businessId, true);
+      await this.sendWhatsAppMessage(
+        businessId,
+        jid,
+        templates.languageWelcomeMenu(business?.name || 'el local', business?.city)
+      );
+      logger.info('Language menu sent on first contact', { conversationId, businessId });
       return;
     }
 
@@ -4204,6 +4441,12 @@ export class WhatsAppHandler {
       /\bcambiar\s+(mi\s+)?reserva\b/,
       /\bcambiarla\b/,
       /\beditar\s+(mi\s+)?reserva\b/,
+      // Inglés
+      /\b(change|modify|edit|update)\s+(my\s+)?(booking|reservation)\b/,
+      /\breschedule\b/,
+      // Portugués
+      /\b(alterar|mudar|modificar|editar)\s+(minha\s+)?reserva\b/,
+      /\bremarcar\b/,
     ];
 
     return patterns.some((pattern) => pattern.test(normalized));
@@ -4291,7 +4534,7 @@ export class WhatsAppHandler {
         await this.sendWhatsAppMessage(
           businessId,
           jid,
-          'Todavía no tengo tus datos guardados. Cuando hagas una reserva se guardará tu nombre. 😊'
+          templates.noStoredCustomerData()
         );
         return true;
       }
@@ -4300,12 +4543,171 @@ export class WhatsAppHandler {
       await this.sendWhatsAppMessage(
         businessId,
         jid,
-        `✅ Listo, actualicé tu nombre. Ahora figurás como *${fullName}*.`
+        templates.customerNameUpdated(fullName)
       );
       return true;
     } catch (error) {
       logger.error('Error handling name change intent', { error, conversationId, businessId });
       return false;
+    }
+  }
+
+  /**
+   * Handles an explicit language-change request at any point of the flow.
+   *
+   * Returns true when it handled the message (caller must return immediately).
+   * The draft is left untouched on purpose: switching language must not lose
+   * the party size, date or time already collected — so instead of restarting,
+   * it re-emits the pending question in the new language via
+   * {@link replayCurrentStepPrompt}.
+   *
+   * `detectLanguageChangeRequest` is deliberately strict (flag emoji, bare
+   * language name, or change-verb + language) so that merely mentioning a
+   * language while booking never triggers a switch.
+   */
+  private async handleLanguageChangeRequest(
+    messageText: string,
+    businessId: string,
+    jid: string,
+    phone: string,
+    conversationId: string,
+    draft: ReservationDraft | null
+  ): Promise<boolean> {
+    // Reply to the welcome language menu. Handled HERE rather than in the
+    // `name` step because a bare "2" is not a name, not reservation-related and
+    // not an opt-in — evaluateReservationScope would bounce it as off-topic
+    // long before processDraftStep ever ran.
+    if (draft?.awaitingLanguageChoice) {
+      const choice = parseLanguageMenuChoice(messageText);
+
+      delete draft.awaitingLanguageChoice;
+      await ReservationService.saveDraft(draft);
+
+      if (!choice) {
+        // Not a language choice — the customer went straight to answering with
+        // their name. Fall through to the normal flow: that's what makes the
+        // menu non-blocking.
+        return false;
+      }
+
+      await persistLanguage(businessId, phone, choice.language);
+      logger.info('Language selected from welcome menu', {
+        conversationId,
+        businessId,
+        language: choice.language,
+        source: choice.source,
+      });
+
+      await runWithLanguage(choice.language, async () => {
+        await this.sendWhatsAppMessage(businessId, jid, templates.askName());
+      });
+      return true;
+    }
+
+    const request = detectLanguageChangeRequest(messageText);
+    if (!request) {
+      return false;
+    }
+
+    const previous = currentLanguage();
+    await persistLanguage(businessId, phone, request.language);
+
+    logger.info('Language changed by customer request', {
+      conversationId,
+      businessId,
+      phone,
+      from: previous,
+      to: request.language,
+      source: request.source,
+      step: draft?.step ?? null,
+    });
+
+    // Everything from here on must already speak the NEW language, so the
+    // remainder of this turn runs in a fresh context instead of the one the
+    // message arrived with.
+    await runWithLanguage(request.language, async () => {
+      await this.sendWhatsAppMessage(businessId, jid, templates.languageChanged());
+
+      if (draft && draft.step !== 'completed') {
+        const prompt = await this.replayCurrentStepPrompt(draft, businessId);
+        if (prompt) {
+          await this.sendWhatsAppMessage(businessId, jid, prompt);
+        }
+      }
+    });
+
+    return true;
+  }
+
+  /**
+   * Rebuilds the question the customer is currently being asked, so a language
+   * switch doesn't leave them staring at a confirmation with no idea what the
+   * bot was waiting for.
+   *
+   * Returns null for steps whose prompt can't be reconstructed from the draft
+   * alone (they need the persisted reservation, or a slot suggestion computed
+   * earlier in the turn). In those cases the customer only gets the "language
+   * changed" confirmation and their next message is handled normally — degraded
+   * but never wrong.
+   */
+  private async replayCurrentStepPrompt(
+    draft: ReservationDraft,
+    businessId: string
+  ): Promise<string | null> {
+    switch (draft.step) {
+      case 'name':
+        return templates.askName();
+
+      case 'last_name':
+        return draft.customerName
+          ? templates.askLastName(draft.customerName)
+          : templates.askName();
+
+      case 'party_size':
+        return draft.customerName
+          ? templates.askPartySize(draft.customerName)
+          : templates.askPartySizeShort();
+
+      case 'schedule_choice':
+        return templates.askScheduleChoice();
+
+      case 'date':
+        return await this.buildAskDayMessage(businessId);
+
+      case 'time': {
+        if (!draft.scheduledDate) {
+          return await this.buildAskDayMessage(businessId);
+        }
+        const dayLabel = describeBaDateKey(draft.scheduledDate, nowInBuenosAires());
+        return await this.buildAskTimeMessage(businessId, draft.scheduledDate, dayLabel);
+      }
+
+      case 'confirm_summary': {
+        const whenLabel = draft.scheduledAt
+          ? describeScheduledAtUtc(draft.scheduledAt, nowInBuenosAires())
+          : templates.instantTurnLabel();
+        return templates.reservationSummary(
+          draft.customerName || 'Cliente',
+          draft.partySize || 0,
+          whenLabel,
+          this.buildFullName(draft.customerName, draft.customerLastName) ||
+            draft.customerName ||
+            'Cliente'
+        );
+      }
+
+      case 'summary_edit_menu':
+        return templates.summaryEditMenu();
+
+      case 'cancel_confirm':
+        return templates.cancelConfirmPrompt();
+
+      // edit_menu, cancel_menu, reservation_selection and confirm_slot depend on
+      // state that isn't in the draft (the stored reservation, the list of
+      // active reservations, the suggested slot). Re-deriving it here would
+      // duplicate their handlers; the confirmation alone is enough.
+      default:
+        return null;
     }
   }
 

@@ -1,11 +1,16 @@
 import { normalizeReservationScopeText } from './reservation-scope';
+import {
+  weekdayName,
+  todayLabel,
+  closedOnWeekday,
+  bookableHoursOnWeekday,
+} from '../i18n/calendar-labels';
 import type { WeeklyHours, WeeklyHoursDayKey, WeeklyHoursShift } from '../types';
 
 /** Buenos Aires has no DST — fixed UTC-3 offset. */
 export const BA_OFFSET_MS = 3 * 60 * 60 * 1000;
 
 const WEEKDAY_KEYS = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
-const WEEKDAY_LABELS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 const REQUESTED_DAY_WINDOW = 7; // today + next 6 days
 
 export interface ParsedDay {
@@ -69,7 +74,7 @@ export function addBaDays(baDate: Date, days: number): Date {
 }
 
 export function formatDayLabel(baDate: Date, isToday: boolean): string {
-  const dayName = isToday ? 'hoy' : WEEKDAY_LABELS[baDate.getUTCDay()];
+  const dayName = isToday ? todayLabel() : weekdayName(baDate.getUTCDay());
   const dd = String(baDate.getUTCDate()).padStart(2, '0');
   const mm = String(baDate.getUTCMonth() + 1).padStart(2, '0');
   return `${dayName} ${dd}/${mm}`;
@@ -156,7 +161,7 @@ export function findWeekdayDayNumberMismatch(
 
   return {
     requestedDayNumber,
-    weekdayLabel: WEEKDAY_LABELS[parsedDay.baDate.getUTCDay()],
+    weekdayLabel: weekdayName(parsedDay.baDate.getUTCDay()),
   };
 }
 
@@ -204,14 +209,23 @@ export function parseTimeOfDay(text: string): ParsedTime | null {
     return clampTime(hour, minute);
   }
 
+  // Estas tres ramas aplican el calificador de franja horaria igual que el
+  // resto: "9 y media de la noche" son las 21:30, no las 9:30. (Antes lo
+  // omitian, asi que devolvian la hora de la mañana.)
   match = normalized.match(/\b(\d{1,2})\s*y\s*media\b/);
-  if (match) return clampTime(parseInt(match[1], 10), 30);
+  if (match) {
+    return clampTime(applyTimeOfDayQualifier(normalized, parseInt(match[1], 10)), 30);
+  }
 
   match = normalized.match(/\b(\d{1,2})\s*y\s*cuarto\b/);
-  if (match) return clampTime(parseInt(match[1], 10), 15);
+  if (match) {
+    return clampTime(applyTimeOfDayQualifier(normalized, parseInt(match[1], 10)), 15);
+  }
 
   match = normalized.match(/\b(\d{1,2})\s*menos\s*(?:cuarto|quince)\b/);
-  if (match) return clampTime(parseInt(match[1], 10) - 1, 45);
+  if (match) {
+    return clampTime(applyTimeOfDayQualifier(normalized, parseInt(match[1], 10)) - 1, 45);
+  }
 
   match = normalized.match(/(?<![:.])\b([01]?\d|2[0-3])\s?(?:hs|horas)\b/);
   if (match) return clampTime(parseInt(match[1], 10), 0);
@@ -293,7 +307,6 @@ export function describeScheduledAtUtc(utcISO: string, nowBA: Date): string {
 // ─── Business hours validation ───────────────────────────────────────────────
 
 const DOW_TO_KEY: WeeklyHoursDayKey[] = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
-const DOW_LABELS_ES = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 
 function minutesOfDay(hhmm: string): number {
   const [h, m] = hhmm.split(':').map(Number);
@@ -337,7 +350,7 @@ export function formatOpenDays(weeklyHours: WeeklyHours): string {
       const entry = weeklyHours[DOW_TO_KEY[i]];
       return entry && !entry.closed && entry.shifts.length > 0;
     })
-    .map(i => DOW_LABELS_ES[i]);
+    .map(i => weekdayName(i));
   return openDays.join(', ');
 }
 
@@ -367,7 +380,7 @@ export function formatBookableDays(
   const orderedIndices = [1, 2, 3, 4, 5, 6, 0];
   return orderedIndices
     .filter(i => bookableDow.has(i))
-    .map(i => DOW_LABELS_ES[i])
+    .map(i => weekdayName(i))
     .join(', ');
 }
 
@@ -721,7 +734,7 @@ export function isDayOpen(
   const dayKey = DOW_TO_KEY[dow];
   const entry = weeklyHours[dayKey];
   if (!entry || entry.closed || entry.shifts.length === 0) {
-    return { open: false, reason: `El local está cerrado los ${DOW_LABELS_ES[dow]}.` };
+    return { open: false, reason: closedOnWeekday(dow) };
   }
   return { open: true };
 }
@@ -770,13 +783,13 @@ export function checkBusinessHours(
   }
 
   if (!dayEntry || dayEntry.closed || dayEntry.shifts.length === 0) {
-    return { allowed: false, reason: `El local está cerrado los ${DOW_LABELS_ES[dow]}.` };
+    return { allowed: false, reason: closedOnWeekday(dow) };
   }
 
   const hoursDesc = formatDayHours(dayKey, weeklyHours, openingMarginMinutes, closingMarginMinutes);
   return {
     allowed: false,
-    reason: `El ${DOW_LABELS_ES[dow]} se puede reservar de ${hoursDesc}. Por favor elegí un horario dentro de ese rango.`,
+    reason: bookableHoursOnWeekday(dow, hoursDesc),
   };
 }
 

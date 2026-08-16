@@ -1,4 +1,7 @@
 import { ReservationDraft } from '../types';
+import { isMultilingualGreeting } from '../i18n/keywords';
+import { catalog } from '../i18n/catalogs';
+import { normalizeTemporalTokens } from '../i18n/date-normalization';
 
 export type ReservationScopeDecision = 'allow' | 'off_topic' | 'out_of_window';
 
@@ -27,19 +30,20 @@ export interface ReservationScopeEvaluation {
 
 const DEFAULT_BUSINESS_NAME = 'el comercio';
 
+// Los textos viven en el catálogo (src/i18n/catalogs) y salen en el idioma
+// activo del turno. Si estos tres mensajes quedaran hardcodeados, un cliente
+// rebotado por el guard recibiría español aunque el resto del bot le hable en
+// su idioma — que es justo cuando peor cae.
 export function buildReservationIntroMessage(businessName?: string): string {
-  const resolvedBusinessName = resolveBusinessName(businessName);
-  return `¡Hola! 👋 Soy el asistente de ${resolvedBusinessName} y estoy para generar reservas. ¿Cuál es tu nombre?`;
+  return catalog().reservationIntro(resolveBusinessName(businessName));
 }
 
 export function buildReservationOffTopicMessage(businessName?: string): string {
-  const resolvedBusinessName = resolveBusinessName(businessName);
-  return `Hola 😊 Solo puedo ayudarte con consultas relacionadas a reservas para “${resolvedBusinessName}” en el turno actual. ¿Querés hacer una reserva?`;
+  return catalog().reservationOffTopic(resolveBusinessName(businessName));
 }
 
 export function buildReservationOutOfWindowMessage(businessName?: string): string {
-  const resolvedBusinessName = resolveBusinessName(businessName);
-  return `Hola 😊 En “${resolvedBusinessName}” por ahora solo puedo tomar reservas dentro de los próximos 7 días. ¿Querés elegir un día más cercano?`;
+  return catalog().reservationOutOfWindow(resolveBusinessName(businessName));
 }
 
 export function evaluateReservationScope(
@@ -312,25 +316,29 @@ function resolveBusinessName(businessName?: string): string {
 }
 
 export function normalizeReservationScopeText(text: string): string {
-  return text
+  const normalized = text
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[¡!¿?.,;()]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+
+  // Traduce referencias temporales de ingles/portugues al canonico espanol
+  // ("tomorrow"/"amanha" -> "manana") ANTES de que las vean los parsers.
+  // parseRelativeDay, parseTimeOfDay y hasDateOrTimeSignal pasan todos por
+  // aca, asi que heredan el soporte multilingue sin modificarse. Es idempotente
+  // sobre texto en espanol. Ver src/i18n/date-normalization.ts.
+  return normalizeTemporalTokens(normalized);
 }
 
-// Covers Argentine informal variants (holaa, ola typo, ey, yoo), standard Spanish and English.
-const GREETING_UNIT =
-  '(?:hola{1,6}|holis|holiwis|ola|hello|hi|hey|ey+|buenas|buenos\\s+dias|buenas\\s+tardes|buenas\\s+noches|buen\\s+dia|que\\s+tal|saludos|yoo+)';
-// Allows one or more greeting units strung together (e.g. "hola buenos dias",
-// "hola que tal") — a compound greeting is still just a greeting, not an
-// off-topic message.
-const GREETING_MESSAGE_RE = new RegExp(`^${GREETING_UNIT}(?:\\s+${GREETING_UNIT})*$`);
+// Multilingual by union (ES/EN/PT), including Argentine informal variants
+// (holaa, ola typo, ey, yoo) and Brazilian ones (oi, opa, eai) — see
+// src/i18n/keywords.ts. A tourist greets in their own language before ever
+// choosing one, so the scope guard must not bounce "hi" or "oi" as off-topic.
 
 function isGreetingMessage(normalizedMessage: string): boolean {
-  return GREETING_MESSAGE_RE.test(normalizedMessage);
+  return isMultilingualGreeting(normalizedMessage);
 }
 
 function isReservationOptInMessage(normalizedMessage: string): boolean {
@@ -445,6 +453,31 @@ function isReservationRelatedMessage(normalizedMessage: string): boolean {
     /\binscrib/,            // inscribirme, inscribirse
     /\bhacer(?:la|lo)\b/,  // "quiero hacerla" = hacer la reserva
     /\banotarm?e\b/,        // variante explícita de anotame
+
+    // --- Inglés ---
+    // `\breserv` arriba ya cubre "reservation"/"reserve"; `\bcancel` cubre "cancel".
+    /\bbook(?:ing|ed)?\b/,
+    /\btables?\b/,
+    /\bseats?\b/,
+    /\bparty\s+of\b/,
+    /\bpeople\b/,
+    /\bwaiting\s+list\b/,
+    /\bwait(?:ing)?\s+time\b/,
+    /\bavailab/,            // available, availability
+    /\bhow\s+long\b/,
+    /\bwe\s+are\s+\d+\b/,
+    /\bfor\s+\d+\b/,
+
+    // --- Portugués ---
+    // `\breserv` cubre "reserva"/"reservar"; `\bmesa` y `\bcancel` son idénticos al español.
+    /\bpessoas?\b/,
+    /\blugares?\b/,
+    /\bfila\s+de\s+espera\b/,
+    /\btempo\s+de\s+espera\b/,
+    /\bdisponib/,           // disponibilidade, disponível
+    /\bsomos\s+\d+\b/,      // igual que en español
+    /\bmarcar\b/,           // "marcar uma mesa"
+    /\bagendar\b/,          // ya cubierto por \bagend, se deja explícito por claridad
   ];
 
   return reservationPatterns.some((pattern) => pattern.test(normalizedMessage));

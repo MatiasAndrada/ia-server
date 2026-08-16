@@ -22,6 +22,7 @@ const DEFAULT_GENERATION_OPTIONS: LlmGenerationOptions = {
 export interface ChatWithActionsResult {
   content: string;
   toolCalls: LlmToolCall[];
+  model: string;
 }
 
 export class OpenRouterService {
@@ -70,6 +71,7 @@ export class OpenRouterService {
           length: result.content.length,
           toolCallCount: result.toolCalls.length,
           attempt,
+          model: result.model,
         });
 
         return result;
@@ -92,7 +94,7 @@ export class OpenRouterService {
 
     // Never let an AI outage break the request — degrade to a fallback
     // response with no tool calls, same resilience contract as before.
-    return { content: buildFallbackResponse(), toolCalls: [] };
+    return { content: buildFallbackResponse(), toolCalls: [], model: 'none' };
   }
 
   /**
@@ -178,9 +180,17 @@ export class OpenRouterService {
         });
       }
 
+      if (response.data.model !== model) {
+        logger.warn('OpenRouter served a fallback model instead of the primary model', {
+          requested: model,
+          served: response.data.model,
+        });
+      }
+
       return {
         content: choice.message.content ?? '',
         toolCalls: choice.message.tool_calls ?? [],
+        model: response.data.model,
       };
     } catch (error) {
       if (error instanceof AxiosError) {

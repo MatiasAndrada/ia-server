@@ -22,6 +22,19 @@ describe('WhatsAppHandler reservation overlap policy', () => {
     // spy/mock state so value queues and pending implementations do not leak.
     jest.spyOn(SupabaseService, 'getBlockedDates').mockResolvedValue(new Map());
 
+    // These tests cover reservation-flow mechanics, not language onboarding:
+    // default to a customer who already settled on Spanish so the welcome
+    // language menu isn't offered and the M1 messages are asserted directly.
+    // `name: null` keeps the name step in play; individual tests override this
+    // spy when they need a customer with a name on file.
+    jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue({
+      name: null,
+      lastName: null,
+      preferred_language: 'es',
+    } as any);
+    jest.spyOn(SupabaseService, 'getCustomerLanguage').mockResolvedValue('es');
+    jest.spyOn(SupabaseService, 'updateCustomerLanguage').mockResolvedValue(true);
+
     mockBaileysService = {
       sendMessage: jest.fn().mockResolvedValue(true),
       getSelfJid: jest.fn().mockReturnValue(''),

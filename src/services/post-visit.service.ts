@@ -1,7 +1,8 @@
 import { RedisConfig } from '../config/redis';
 import { SupabaseConfig } from '../config/supabase';
 import { logger } from '../utils/logger';
-import * as templates from '../utils/message-templates';
+import { getTemplates } from '../i18n';
+import { resolveLanguage } from '../i18n/language-store';
 import type { Database } from '../types/supabase';
 
 type CustomersRow = Database['public']['Tables']['customers']['Row'];
@@ -179,9 +180,14 @@ export class PostVisitService {
       /* usar phone como fallback */
     }
 
+    // Igual que realtime-sync: este scanner corre fuera del turno de
+    // conversación, así que el idioma se resuelve desde la preferencia guardada.
+    const { language } = await resolveLanguage(businessId, customer.phone);
+    const message = getTemplates(language).postVisitMessage();
+
     const { BaileysService } = await import('./baileys.service');
     const baileys = BaileysService.getInstance();
-    const sent = await baileys.sendMessage(businessId, recipientJid, templates.postVisitMessage());
+    const sent = await baileys.sendMessage(businessId, recipientJid, message);
 
     if (sent) {
       await client.setEx(`${this.SENT_KEY_PREFIX}${entryId}`, this.SENT_TTL_SECONDS, '1');

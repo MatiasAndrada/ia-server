@@ -47,6 +47,8 @@ function buildExtractionSystemPrompt(
 
   return `Sos el módulo de comprensión de lenguaje de un asistente de reservas de "${resolvedBusinessName}" por WhatsApp.
 
+IDIOMA DE ENTRADA: el cliente puede escribir en español, inglés o portugués. Interpretá el mensaje igual en los tres casos. Los campos de texto crudo (dateText, timeText, partySizeText) se devuelven TAL CUAL los escribió el cliente, sin traducir: los normaliza el parser determinista.
+
 Tu única tarea es leer el último mensaje del cliente y llamar a la herramienta "update_reservation" con los datos que ese mensaje efectivamente menciona. No inventes datos ausentes, no calcules fechas (devolvé el texto crudo), y no confirmes ni valides nada — de eso se encarga otro sistema.
 
 Estado actual de la conversación:

@@ -46,43 +46,43 @@ Si el mensaje no trata sobre reservas de {businessName}, respondé con amabilida
     {
       type: 'CREATE_RESERVATION',
       priority: 1,
-      keywords: ['reserv', 'mesa', 'agendar', 'apartar', 'quiero una mesa'],
+      keywords: ['reserv', 'mesa', 'agendar', 'apartar', 'quiero una mesa', 'book', 'table', 'quero'],
       description: 'Crear nueva reserva'
     },
     {
       type: 'UPDATE_RESERVATION',
       priority: 2,
-      keywords: ['cambiar', 'modificar', 'actualizar', 'cambio', 'más personas', 'menos personas'],
+      keywords: ['cambiar', 'modificar', 'actualizar', 'cambio', 'más personas', 'menos personas', 'change', 'modify', 'update', 'reschedule', 'alterar', 'mudar', 'remarcar'],
       description: 'Modificar reserva existente'
     },
     {
       type: 'LIST_RESERVATIONS',
       priority: 3,
-      keywords: ['mis reservas', 'mis turnos', 'qué reservas tengo', 'revisar mis reservas', 'ver mis reservas'],
+      keywords: ['mis reservas', 'mis turnos', 'qué reservas tengo', 'revisar mis reservas', 'ver mis reservas', 'my bookings', 'my reservations', 'minhas reservas'],
       description: 'Listar reservas del cliente'
     },
     {
       type: 'CHECK_STATUS',
       priority: 4,
-      keywords: ['estado', 'posición', 'turno', 'cuánto falta', 'cuándo me toca'],
+      keywords: ['estado', 'posición', 'turno', 'cuánto falta', 'cuándo me toca', 'status', 'how long', 'my turn', 'quanto falta'],
       description: 'Consultar estado en lista'
     },
     {
       type: 'GET_WAIT_TIME',
       priority: 5,
-      keywords: ['tiempo de espera', 'cuánto demoran', 'cuánto tarda', 'hay espera'],
+      keywords: ['tiempo de espera', 'cuánto demoran', 'cuánto tarda', 'hay espera', 'wait time', 'waiting time', 'tempo de espera'],
       description: 'Consultar tiempo de espera estimado'
     },
     {
       type: 'NOTIFY_DELAY',
       priority: 6,
-      keywords: ['llego tarde', 'me retraso', 'voy tarde', 'me demoro'],
+      keywords: ['llego tarde', 'me retraso', 'voy tarde', 'me demoro', 'running late', 'i am late', 'vou atrasar', 'estou atrasado'],
       description: 'Notificar retraso'
     },
     {
       type: 'CANCEL',
       priority: 7,
-      keywords: ['cancelar', 'no voy', 'descartar', 'anular'],
+      keywords: ['cancelar', 'no voy', 'descartar', 'anular', 'cancel', 'not coming', 'desmarcar', 'desistir'],
       description: 'Cancelar reserva'
     },
   ]

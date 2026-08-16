@@ -313,6 +313,70 @@ export class SupabaseService {
   }
 
   /**
+   * Reads the customer's stored language preference (customers.preferred_language).
+   *
+   * Returns null both when the customer doesn't exist and when they exist but
+   * never chose a language — the caller treats both the same way (fall through
+   * to auto-detection). That is why the column is nullable with no default: a
+   * DEFAULT 'es' would be indistinguishable from an explicit Spanish choice and
+   * would silently disable auto-detection for every existing customer.
+   */
+  static async getCustomerLanguage(phone: string, businessId: string): Promise<string | null> {
+    try {
+      const client = this.getClient();
+      const { data, error } = await client
+        .from('customers')
+        .select('preferred_language')
+        .eq('business_id', businessId)
+        .eq('phone', phone)
+        .maybeSingle();
+      if (error) throw error;
+      return (data as { preferred_language: string | null } | null)?.preferred_language ?? null;
+    } catch (error) {
+      logger.error('Supabase: getCustomerLanguage failed', { error, phone, businessId });
+      return null;
+    }
+  }
+
+  /**
+   * Persists the customer's language choice. Best-effort: a failure here must
+   * never break the conversation, since the Redis cache already holds the
+   * language for the active session.
+   */
+  static async updateCustomerLanguage(
+    phone: string,
+    businessId: string,
+    language: string
+  ): Promise<boolean> {
+    try {
+      const client = this.getClient();
+      const updateData: CustomersUpdate = {
+        preferred_language: language,
+        last_seen_at: new Date().toISOString(),
+      };
+
+      const { error } = await client
+        .from('customers')
+        .update(updateData)
+        .eq('business_id', businessId)
+        .eq('phone', phone);
+
+      if (error) throw error;
+
+      logger.info('Customer language preference saved', { phone, businessId, language });
+      return true;
+    } catch (error) {
+      logger.error('Supabase: updateCustomerLanguage failed', {
+        error,
+        phone,
+        businessId,
+        language,
+      });
+      return false;
+    }
+  }
+
+  /**
    * Update a customer's stored name and/or apellido by phone number, so a
    * natural-language "cambiá mi nombre a ..." request is reflected in future
    * interactions (customers.name / customers.lastName). Returns the updated

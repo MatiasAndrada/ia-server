@@ -1,29 +1,53 @@
 /**
  * Plantillas centralizadas de mensajes del asistente (Manual Conversacional Nubotik).
- * Cada plantilla corresponde a un módulo del manual (M1..M12); los mensajes de
- * guard/errores que no figuran en el manual también viven acá para que todos los
- * textos salientes tengan un único punto de edición.
+ *
+ * Este archivo ya NO contiene los textos: son dispatchers de una línea sobre el
+ * catálogo del idioma activo (ver src/i18n/). Los textos en español viven en
+ * src/i18n/catalogs/es.ts, y sus traducciones en en.ts / pt.ts.
+ *
+ * Se mantiene la misma superficie de API (mismos nombres, mismas firmas) para
+ * que los ~200 call sites del handler no necesiten cambiar: el idioma se resuelve
+ * por AsyncLocalStorage, no por parámetro. Fuera de un runWithLanguage() el
+ * catálogo activo es el español, así que los tests y las rutas REST existentes
+ * se comportan igual que antes.
+ *
+ * Para emitir en un idioma explícito (senders de background que corren fuera de
+ * un turno de conversación), usar getTemplates(lang) de src/i18n directamente.
  */
+
+import { catalog } from '../i18n/catalogs';
+
+// ============================
+// M0 — Selección de idioma
+// ============================
+
+export function languageWelcomeMenu(businessName: string, city?: string | null): string {
+  return catalog().languageWelcomeMenu(businessName, city);
+}
+
+export function languageChanged(): string {
+  return catalog().languageChanged();
+}
+
+export function languageChangeHint(): string {
+  return catalog().languageChangeHint();
+}
+
+/** Etiqueta de "reserva para el turno en curso" (sin fecha/hora puntual). */
+export function instantTurnLabel(): string {
+  return catalog().instantTurnLabel();
+}
 
 // ============================
 // M1 — Nueva reserva
 // ============================
 
 export function welcomeMessage(businessName: string): string {
-  return (
-    `👋 ¡Hola!\n` +
-    `Soy el asistente de reservas de *${businessName}*.\n` +
-    `Voy a ayudarte a reservar tu mesa en pocos segundos.\n\n` +
-    `¿Cómo te llamás? Decime tu *nombre y apellido*.`
-  );
+  return catalog().welcomeMessage(businessName);
 }
 
 export function askPartySize(name: string): string {
-  return (
-    `✅ Perfecto, *${name}*.\n\n` +
-    `¿Para cuántas personas es la reserva?\n\n` +
-    `Ejemplo: 2, 4 o 6 personas.`
-  );
+  return catalog().askPartySize(name);
 }
 
 /**
@@ -31,35 +55,15 @@ export function askPartySize(name: string): string {
  * size directly — skips the name/apellido question entirely.
  */
 export function welcomeBackAskPartySize(customerName: string): string {
-  return (
-    `👋 ¡Hola ${customerName}!\n\n` +
-    `¿Para cuántas personas es la reserva?\n\n` +
-    `Ejemplo: 2, 4 o 6 personas.`
-  );
+  return catalog().welcomeBackAskPartySize(customerName);
 }
 
 export function askScheduleChoice(): string {
-  return (
-    `📅 ¿La reserva es para...?\n\n` +
-    `1️⃣ Hoy (turno actual)\n` +
-    `2️⃣ Otra fecha\n\n` +
-    `Respondé con el *número* de la opción, o directamente decime el día (ej: "el viernes").`
-  );
+  return catalog().askScheduleChoice();
 }
 
 export function askDayClosedToday(openDays?: string | null): string {
-  if (openDays) {
-    return (
-      `❌ Hoy el local está cerrado.\n\n` +
-      `📅 ¿Qué día preferís?\n` +
-      `Estamos abiertos los: *${openDays}*.\n\n` +
-      `Podés decir "mañana", "el viernes", etc.`
-    );
-  }
-  return (
-    `❌ Hoy el local está cerrado.\n\n` +
-    `📅 ¿Qué día preferís? Podés decir "mañana", "el viernes", etc.`
-  );
+  return catalog().askDayClosedToday(openDays);
 }
 
 /**
@@ -69,30 +73,11 @@ export function askDayClosedToday(openDays?: string | null): string {
  * option that turns out to be unavailable.
  */
 export function askDayClosedTodayWithSchedule(dayLines: string[]): string {
-  if (dayLines.length === 0) {
-    return (
-      `⛔ Hoy está cerrado y no encontré disponibilidad en los próximos 7 días.\n\n` +
-      `Escribinos más adelante para coordinar tu reserva.`
-    );
-  }
-  const list = dayLines.join('\n');
-  return (
-    `⛔ Hoy está cerrado.\n\n` +
-    `📅 ¿Para cuál de estos días querés la reserva?\n\n` +
-    `${list}\n\n` +
-    `Respondé con el día que preferís (ej: "jueves" o "jueves 09:15").`
-  );
+  return catalog().askDayClosedTodayWithSchedule(dayLines);
 }
 
 export function askDay(openDays?: string | null): string {
-  if (openDays) {
-    return (
-      `📅 ¿Qué día preferís?\n` +
-      `Estamos abiertos los: *${openDays}*.\n\n` +
-      `Podés decir "mañana", "el viernes", etc.`
-    );
-  }
-  return `📅 ¿Qué día preferís? Podés decir "mañana", "el viernes", etc.`;
+  return catalog().askDay(openDays);
 }
 
 /**
@@ -101,25 +86,16 @@ export function askDay(openDays?: string | null): string {
  * that information (see reservation-scope.ts's isAskingOtherDaysScheduleMessage).
  */
 export function otherDaysSchedule(dayLines: string[]): string {
-  if (dayLines.length === 0) {
-    return '📅 Por ahora no tengo más días con disponibilidad para mostrarte.';
-  }
-  const list = dayLines.map((line) => `• ${line}`).join('\n');
-  return `📅 Estos son los horarios de los próximos días:\n\n${list}`;
+  return catalog().otherDaysSchedule(dayLines);
 }
 
 export function askTime(dayLabel: string, hoursRange?: string | null): string {
-  const hoursNote = hoursRange ? ` (horario: *${hoursRange}*)` : '';
-  return `🕐 ¿A qué hora te gustaría reservar para el ${dayLabel}${hoursNote}?`;
+  return catalog().askTime(dayLabel, hoursRange);
 }
 
 /** Asked when the customer chooses "hoy" and the business is open right now — before jumping to an instant reservation. */
 export function askTodayTimeOpen(closeLabel: string | null): string {
-  const closingNote = closeLabel ? ` (el local está abierto hasta las *${closeLabel}*)` : '';
-  return (
-    `🕐 ¿A qué hora te gustaría la reserva de hoy?${closingNote}\n\n` +
-    `Escribí el horario (ej: "21:00" o "9 y media"), o respondé *ahora* si la querés para el turno actual.`
-  );
+  return catalog().askTodayTimeOpen(closeLabel);
 }
 
 /** Resumen previo a la confirmación (M1 — "Resumen y confirmación"). */
@@ -129,26 +105,12 @@ export function reservationSummary(
   whenLabel: string,
   fullName: string = name
 ): string {
-  return (
-    `📋 Antes de confirmar, verificá que los datos sean correctos:\n\n` +
-    `👤 Nombre: ${fullName}\n` +
-    `👥 Personas: ${partySize}\n` +
-    `📅 Fecha y hora: ${whenLabel}\n\n` +
-    `¿Está todo correcto?\n\n` +
-    `1️⃣ Confirmar reserva\n` +
-    `2️⃣ Modificar la reserva`
-  );
+  return catalog().reservationSummary(name, partySize, whenLabel, fullName);
 }
 
 /** Submenú de modificación dentro del resumen (estilo M2, sobre el borrador). */
 export function summaryEditMenu(): string {
-  return (
-    `¿Qué querés modificar?\n\n` +
-    `1️⃣ Cantidad de personas\n` +
-    `2️⃣ Fecha\n` +
-    `3️⃣ Horario\n\n` +
-    `Respondé con el *número* de la opción.`
-  );
+  return catalog().summaryEditMenu();
 }
 
 /** Confirmación final de reserva (M1 — "Reserva confirmada"). */
@@ -159,16 +121,7 @@ export function reservationConfirmed(
   displayCode: string,
   fullName: string = name
 ): string {
-  return (
-    `✅ ¡Reserva confirmada!\n\n` +
-    `Gracias, *${name}*. Tu reserva fue registrada correctamente.\n\n` +
-    `👤 Nombre: ${fullName}\n` +
-    `👥 Personas: ${partySize}\n` +
-    `📅 Fecha y hora: ${whenLabel}\n` +
-    `📁 Código de reserva: *${displayCode}*\n\n` +
-    `✨ ¡Te esperamos! Esperamos que disfrutes una excelente experiencia.\n\n` +
-    `Si necesitás cancelar, simplemente escribí: *CANCELAR*`
-  );
+  return catalog().reservationConfirmed(name, partySize, whenLabel, displayCode, fullName);
 }
 
 /** Reserva registrada pero pendiente de confirmación del local (fuera del manual). */
@@ -179,15 +132,7 @@ export function reservationReceived(
   displayCode: string,
   fullName: string = name
 ): string {
-  return (
-    `⏳ *Reserva RECIBIDA*\n\n` +
-    `👤 Nombre: ${fullName}\n` +
-    `👥 Personas: ${partySize}\n` +
-    `📅 Fecha y hora: ${whenLabel}\n` +
-    `📁 Código: *${displayCode}*\n\n` +
-    `⏰ Te notificaremos cuando confirmen tu reserva.\n\n` +
-    `Si necesitás cancelar, simplemente escribí: *CANCELAR*`
-  );
+  return catalog().reservationReceived(name, partySize, whenLabel, displayCode, fullName);
 }
 
 // ============================
@@ -201,32 +146,19 @@ export function editMenu(
   statusLabel: string,
   customerName?: string | null
 ): string {
-  const greeting = customerName
-    ? `👋 ¡Hola ${customerName}! ¿Qué necesitás hoy?\n\n`
-    : '';
-  return (
-    `${greeting}📋 Tenés 1 reserva activa:\n` +
-    `• ${partySize} personas, ${whenLabel} (${displayCode}) ${statusLabel}\n\n` +
-    `¿Qué querés hacer?\n\n` +
-    `1️⃣ Cantidad de personas\n` +
-    `2️⃣ Fecha\n` +
-    `3️⃣ Horario\n` +
-    `4️⃣ Crear otra reserva\n\n` +
-    `Respondé con el *número* de la opción.\n\n` +
-    `_Para cancelar tu reserva escribí *CANCELAR*._`
-  );
+  return catalog().editMenu(partySize, whenLabel, displayCode, statusLabel, customerName);
 }
 
 export function editMenuInvalidChoice(): string {
-  return `❌ Por favor respondé con *1*, *2*, *3* o *4* según la opción que elegiste.`;
+  return catalog().editMenuInvalidChoice();
 }
 
 export function partySizeUpdated(partySize: number): string {
-  return `✅ ¡Listo! Tu reserva fue actualizada a *${partySize}* personas.`;
+  return catalog().partySizeUpdated(partySize);
 }
 
 export function scheduleUpdated(whenLabel: string): string {
-  return `✅ ¡Listo! Tu reserva fue actualizada para el ${whenLabel}.`;
+  return catalog().scheduleUpdated(whenLabel);
 }
 
 // ============================
@@ -234,15 +166,7 @@ export function scheduleUpdated(whenLabel: string): string {
 // ============================
 
 export function cancelMenu(partySize: number, whenLabel: string, displayCode: string): string {
-  return (
-    `📋 Encontré una reserva activa.\n\n` +
-    `👥 Personas: *${partySize}*\n` +
-    `📅 Fecha y hora: ${whenLabel}\n` +
-    `📁 Código: *${displayCode}*\n\n` +
-    `¿Qué te gustaría hacer?\n\n` +
-    `1️⃣ Reprogramar la reserva\n` +
-    `2️⃣ Cancelar definitivamente`
-  );
+  return catalog().cancelMenu(partySize, whenLabel, displayCode);
 }
 
 /**
@@ -256,12 +180,7 @@ export function cancelDirectConfirmPrompt(
   whenLabel: string,
   displayCode: string
 ): string {
-  return (
-    `📋 Encontré tu reserva de *${partySize}* personas para ${whenLabel} (código *${displayCode}*).\n\n` +
-    `¿Cancelamos esta reserva?\n\n` +
-    `1️⃣ Sí, cancelar\n` +
-    `2️⃣ Volver atrás`
-  );
+  return catalog().cancelDirectConfirmPrompt(partySize, whenLabel, displayCode);
 }
 
 export function activeReservationsMenu(
@@ -274,66 +193,39 @@ export function activeReservationsMenu(
   }[],
   action: 'edit' | 'cancel' | 'view' = 'view'
 ): string {
-  const reservationsList = reservations
-    .map((reservation) => {
-      const codeText = reservation.displayCode ? ` (${reservation.displayCode})` : '';
-      return `*${reservation.index}* - ${reservation.partySize} personas, ${reservation.whenLabel}${codeText} — ${reservation.statusLabel}`;
-    })
-    .join('\n');
-
-  const prompt =
-    action === 'cancel'
-      ? `Respondé con el *número* de la reserva que querés cancelar.`
-      : action === 'edit'
-        ? `Respondé con el *número* de la reserva que querés modificar.`
-        : `Respondé con el *número* de la reserva para ver opciones de modificación o cancelación.`;
-
-  return (
-    `📋 Tengo varias reservas activas:\n\n` +
-    `${reservationsList}\n\n` +
-    `${prompt}\n` +
-    `O escribí *RESERVAR* para crear otra reserva.`
-  );
+  return catalog().activeReservationsMenu(reservations, action);
 }
 
 export function activeReservationSelectionInvalid(): string {
-  return `❌ No reconocí esa opción. Respondé con el número de la reserva que querés gestionar o escribí *RESERVAR* para crear otra.`;
+  return catalog().activeReservationSelectionInvalid();
 }
 
 export function cancelMenuInvalidChoice(): string {
-  return `❌ Respondé *1* para reprogramar o *2* para cancelar definitivamente.`;
+  return catalog().cancelMenuInvalidChoice();
 }
 
 export function rescheduleIntro(): string {
-  return `Perfecto 👍\nComencemos por elegir una nueva fecha.`;
+  return catalog().rescheduleIntro();
 }
 
 export function cancelConfirmPrompt(): string {
-  return (
-    `¿Estás seguro de que querés cancelar tu reserva?\n\n` +
-    `1️⃣ Sí, cancelar\n` +
-    `2️⃣ No, conservar la reserva`
-  );
+  return catalog().cancelConfirmPrompt();
 }
 
 export function cancelConfirmInvalidChoice(): string {
-  return `❌ Respondé *1* para cancelar la reserva o *2* para conservarla.`;
+  return catalog().cancelConfirmInvalidChoice();
 }
 
 export function reservationCancelled(): string {
-  return (
-    `✅ Tu reserva fue cancelada correctamente.\n\n` +
-    `Esperamos volver a recibirte muy pronto.\n\n` +
-    `Cuando quieras hacer una nueva reserva, escribí: *RESERVAR*`
-  );
+  return catalog().reservationCancelled();
 }
 
 export function reservationKept(): string {
-  return `👍 ¡Perfecto! Tu reserva sigue activa tal como estaba. ¿Algo más en lo que pueda ayudarte?`;
+  return catalog().reservationKept();
 }
 
 export function cancelFailed(): string {
-  return `❌ No se pudo cancelar la reserva. Por favor contactá directamente al local.`;
+  return catalog().cancelFailed();
 }
 
 export function reservationOverlapConflict(
@@ -342,17 +234,16 @@ export function reservationOverlapConflict(
   conflictingDisplayCode: string | null,
   conflictingStatusLabel: string
 ): string {
-  const displayCodeText = conflictingDisplayCode ? ` (código *${conflictingDisplayCode}*)` : '';
-  return (
-    `⚠️ No puedo crear la reserva para ${requestedWhenLabel} porque se superpone con otra reserva activa para ${conflictingWhenLabel}` +
-    `${displayCodeText} con estado *${conflictingStatusLabel}*.` +
-    `\n\nDebe haber al menos 120 minutos entre reservas para evitar solapamientos.` +
-    `\n\nSi querés, respondé *CANCELAR* para anularla y después crear una nueva.`
+  return catalog().reservationOverlapConflict(
+    requestedWhenLabel,
+    conflictingWhenLabel,
+    conflictingDisplayCode,
+    conflictingStatusLabel
   );
 }
 
 export function noActiveReservation(): string {
-  return `No encontré ninguna reserva activa. ¿Algo más en lo que pueda ayudarte?`;
+  return catalog().noActiveReservation();
 }
 
 // ============================
@@ -360,15 +251,11 @@ export function noActiveReservation(): string {
 // ============================
 
 export function timeNotAvailable(reason: string, nextSlotTime: string): string {
-  return (
-    `Ese horario no se encuentra disponible. ${reason}\n\n` +
-    `🕐 El próximo horario disponible ese día es a las *${nextSlotTime}*.\n\n` +
-    `¿Reservamos para esa hora? Respondé *sí* o *no*.`
-  );
+  return catalog().timeNotAvailable(reason, nextSlotTime);
 }
 
 export function noMoreSlotsToday(reason: string): string {
-  return `Ese horario no se encuentra disponible. ${reason} No hay más turnos disponibles ese día. ¿Querés elegir otro horario o día?`;
+  return catalog().noMoreSlotsToday(reason);
 }
 
 /**
@@ -377,11 +264,7 @@ export function noMoreSlotsToday(reason: string): string {
  * The customer can accept with "sí" or just name another day/time to override.
  */
 export function suggestNextSlot(slotLabel: string, reason?: string | null): string {
-  const prefix = reason ? `❌ ${reason}\n\n` : '';
-  return (
-    `${prefix}El turno disponible más próximo es el *${slotLabel}*.\n\n` +
-    `¿Reservamos para ese momento? Respondé *sí* para confirmarlo, o decime otro día u horario si preferís.`
-  );
+  return catalog().suggestNextSlot(slotLabel, reason);
 }
 
 // ============================
@@ -389,21 +272,11 @@ export function suggestNextSlot(slotLabel: string, reason?: string | null): stri
 // ============================
 
 export function dateBlocked(dayLabel: string, reasonMessage?: string | null): string {
-  if (reasonMessage) {
-    return `❌ ${reasonMessage}\n\n¿Querés elegir otra fecha?`;
-  }
-
-  return (
-    `❌ Lo siento, el *${dayLabel}* el local no está tomando reservas.\n\n` +
-    `¿Querés elegir otra fecha?`
-  );
+  return catalog().dateBlocked(dayLabel, reasonMessage);
 }
 
 export function futureReservationsBlockedToday(): string {
-  return (
-    `❌ Por hoy no estamos tomando reservas para turnos más tarde — solo para el turno que está en curso ahora.\n\n` +
-    `¿Querés unirte a la fila para el turno actual, o reservar para otro día?`
-  );
+  return catalog().futureReservationsBlockedToday();
 }
 
 // ============================
@@ -411,36 +284,55 @@ export function futureReservationsBlockedToday(): string {
 // ============================
 
 export function invalidDate(): string {
-  return `No pude interpretar la fecha ingresada. ¿Podés escribirla nuevamente? Podés decir "hoy", "mañana" o un día de la semana (ej: "el viernes").`;
+  return catalog().invalidDate();
 }
 
 export function invalidTime(): string {
-  return `¿Podrías escribir nuevamente el horario? Por ejemplo: "21:00", "9pm" o "a las 9 y media".`;
+  return catalog().invalidTime();
 }
 
 export function invalidPartySize(): string {
-  return (
-    `La cantidad de personas debe ser un número.\n\n` +
-    `Ejemplo: 2, 4 o 6 personas.\n\n` +
-    `_(Para cancelar escribí *cancelar* o *salir*)_`
-  );
+  return catalog().invalidPartySize();
 }
 
 export function invalidName(): string {
-  return `No reconocí eso como un nombre. ¿Cuál es tu nombre para la reserva?`;
+  return catalog().invalidName();
 }
 
 export function nameChanged(name: string): string {
-  return (
-    `✅ ¡Listo! Cambié tu nombre a *${name}*.\n\n` +
-    `¿Para cuántas personas es la reserva?\n\n` +
-    `Ejemplo: 2, 4 o 6 personas.`
-  );
+  return catalog().nameChanged(name);
 }
 
 /** Party-size prompt without a name prefix (fallback paths). */
 export function askPartySizeShort(): string {
-  return `¿Para cuántas personas es la reserva?\n\nEjemplo: 2, 4 o 6 personas.`;
+  return catalog().askPartySizeShort();
+}
+
+// ============================
+// Notificaciones proactivas (realtime-sync)
+// ============================
+
+/** La reserva pasó a CONFIRMED desde el dashboard. */
+export function reservationConfirmedNotice(
+  name: string,
+  partySize: number,
+  displayCode: string
+): string {
+  return catalog().reservationConfirmedNotice(name, partySize, displayCode);
+}
+
+/** La reserva quedó registrada, pendiente de confirmación del local. */
+export function reservationRegisteredNotice(
+  name: string,
+  partySize: number,
+  displayCode: string
+): string {
+  return catalog().reservationRegisteredNotice(name, partySize, displayCode);
+}
+
+/** La mesa quedó libre (status NOTIFIED). */
+export function tableReadyNotice(): string {
+  return catalog().tableReadyNotice();
 }
 
 // ============================
@@ -448,11 +340,7 @@ export function askPartySizeShort(): string {
 // ============================
 
 export function welcomeAtRestaurant(): string {
-  return (
-    `👋 ¡Bienvenido!\n\n` +
-    `Tu mesa ya está lista.\n` +
-    `Esperamos que disfrutes una excelente experiencia.`
-  );
+  return catalog().welcomeAtRestaurant();
 }
 
 // ============================
@@ -460,12 +348,7 @@ export function welcomeAtRestaurant(): string {
 // ============================
 
 export function postVisitMessage(): string {
-  return (
-    `¡Gracias por visitarnos! 💛\n\n` +
-    `Esperamos que hayas disfrutado tu experiencia.\n\n` +
-    `Nos encantaría conocer tu opinión.\n` +
-    `⭐⭐⭐⭐⭐ Dejanos tu reseña.`
-  );
+  return catalog().postVisitMessage();
 }
 
 // ============================
@@ -473,31 +356,148 @@ export function postVisitMessage(): string {
 // ============================
 
 export function askName(): string {
-  return `¿Cuál es tu nombre y apellido para la reserva?`;
+  return catalog().askName();
 }
 
 export function askNameAgain(): string {
-  return `¿Cuál es tu nombre y apellido para continuar con la reserva?`;
+  return catalog().askNameAgain();
 }
 
 /** Asks only for the apellido once the first name is already known. */
 export function askLastName(firstName: string): string {
-  return `Gracias, *${firstName}*. ¿Cuál es tu apellido?`;
+  return catalog().askLastName(firstName);
 }
 
 /** Re-ask when the apellido reply wasn't understood. */
 export function askLastNameAgain(): string {
-  return `No reconocí el apellido. ¿Me lo repetís, por favor?`;
+  return catalog().askLastNameAgain();
 }
 
 export function processCancelled(): string {
-  return `✅ Proceso cancelado. Podés empezar de nuevo cuando quieras.`;
+  return catalog().processCancelled();
 }
 
 export function tooManyInvalidAttempts(): string {
-  return `❌ Demasiados intentos inválidos. El proceso fue cancelado. Podés empezar de nuevo cuando quieras.`;
+  return catalog().tooManyInvalidAttempts();
 }
 
 export function confirmSummaryInvalidChoice(): string {
-  return `❌ Respondé *1* para confirmar la reserva o *2* para modificarla.`;
+  return catalog().confirmSummaryInvalidChoice();
+}
+
+// ============================
+// Guards de alcance (T1b — consolidados desde reservation-scope.ts)
+// ============================
+
+export function reservationIntro(businessName: string): string {
+  return catalog().reservationIntro(businessName);
+}
+
+export function reservationOffTopic(businessName: string): string {
+  return catalog().reservationOffTopic(businessName);
+}
+
+export function reservationOutOfWindow(businessName: string): string {
+  return catalog().reservationOutOfWindow(businessName);
+}
+
+/** Servicio de WhatsApp desactivado para el negocio. */
+export function inactiveFallback(): string {
+  return catalog().inactiveFallback();
+}
+
+// ============================
+// Guards y prompts de flujo (T1b — consolidados desde whatsapp-handler)
+// ============================
+
+export function invalidNameRetry(): string {
+  return catalog().invalidNameRetry();
+}
+
+export function askCorrectName(): string {
+  return catalog().askCorrectName();
+}
+
+export function invalidLastNameRetry(): string {
+  return catalog().invalidLastNameRetry();
+}
+
+export function noStoredCustomerData(): string {
+  return catalog().noStoredCustomerData();
+}
+
+export function customerNameUpdated(fullName: string): string {
+  return catalog().customerNameUpdated(fullName);
+}
+
+export function closedNoAvailability(): string {
+  return catalog().closedNoAvailability();
+}
+
+export function closedSuggestNextSlot(slotLabel: string): string {
+  return catalog().closedSuggestNextSlot(slotLabel);
+}
+
+export function outOfWindowPrefix(): string {
+  return catalog().outOfWindowPrefix();
+}
+
+export function outOfWindowAskDay(): string {
+  return catalog().outOfWindowAskDay();
+}
+
+export function scheduleChoiceInvalid(): string {
+  return catalog().scheduleChoiceInvalid();
+}
+
+export function didntUnderstandTimeSuggest(slotTime: string): string {
+  return catalog().didntUnderstandTimeSuggest(slotTime);
+}
+
+export function hoursRejectedAskOther(reason: string | undefined): string {
+  return catalog().hoursRejectedAskOther(reason);
+}
+
+export function hoursRejectedSuggestSlot(reason: string | undefined, slotTime: string): string {
+  return catalog().hoursRejectedSuggestSlot(reason, slotTime);
+}
+
+export function hoursRejectedNoMoreSlots(reason: string | undefined): string {
+  return catalog().hoursRejectedNoMoreSlots(reason);
+}
+
+export function confirmSlotPrompt(slotLabel: string, hoursNote: string): string {
+  return catalog().confirmSlotPrompt(slotLabel, hoursNote);
+}
+
+export function askNewPartySize(): string {
+  return catalog().askNewPartySize();
+}
+
+export function weekdayAmbiguityPrompt(weekdayLabel: string, nextLabel: string): string {
+  return catalog().weekdayAmbiguityPrompt(weekdayLabel, nextLabel);
+}
+
+export function weekdayAmbiguityInvalid(weekday: string): string {
+  return catalog().weekdayAmbiguityInvalid(weekday);
+}
+
+export function weekdayDayMismatchPrompt(weekdayLabel: string, requestedDayNumber: number, nearestLabel: string): string {
+  return catalog().weekdayDayMismatchPrompt(weekdayLabel, requestedDayNumber, nearestLabel);
+}
+
+export function weekdayDayMismatchInvalid(nearestLabel: string): string {
+  return catalog().weekdayDayMismatchInvalid(nearestLabel);
+}
+
+export function timeAlreadyPassedSuggestTomorrow(timeLabel: string, tomorrowLabel: string): string {
+  return catalog().timeAlreadyPassedSuggestTomorrow(timeLabel, tomorrowLabel);
+}
+
+export function timeAlreadyPassed(): string {
+  return catalog().timeAlreadyPassed();
+}
+
+export function noActiveReservationsInquiry(): string {
+  return catalog().noActiveReservationsInquiry();
 }
