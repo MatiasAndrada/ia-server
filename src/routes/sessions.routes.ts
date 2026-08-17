@@ -3,7 +3,7 @@ import * as sessionController from '../controllers/session.controller';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { generalRateLimiter } from '../middleware/rateLimit.middleware';
 
-const router = Router();
+const router: Router = Router();
 
 // Apply middleware
 router.use(authMiddleware);
