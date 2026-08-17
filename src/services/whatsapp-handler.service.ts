@@ -66,7 +66,7 @@ import {
   type ParsedDay,
 } from '../utils/reservation-datetime';
 import * as templates from '../utils/message-templates';
-import { formatBusinessAddress } from '../utils/prompts';
+import { formatBusinessAddress, formatWeeklyHoursForPrompt } from '../utils/prompts';
 
 type ActiveReservationSnapshot = {
   status: 'WAITING' | 'CONFIRMED' | 'NOTIFIED';
@@ -332,8 +332,8 @@ export class WhatsAppHandler {
   }
 
   /**
-   * Offers the language menu on the very first message from a brand-new
-   * customer, REGARDLESS of what that message says — not only a bare greeting.
+   * Offers the language menu on the first message from a brand-new customer —
+   * unless that message already carries enough signal to skip it (see below).
    *
    * Why this exists: `handleGreeting` already offers the menu, but only fires
    * when `isGreetingMessage` matches the WHOLE message. A first message that
@@ -342,6 +342,18 @@ export class WhatsAppHandler {
    * `handlePrefilledReservationRequest` first, which tried to parse "hi" as
    * part of a name before the customer ever got to pick a language. Found via
    * manual testing with scripts/chat-simulator.ts.
+   *
+   * That failure mode is now closed at the source — `couldBeAName` rejects any
+   * candidate containing a digit, in any language — so a confidently-detected
+   * message with real content beyond a bare greeting skips the interruption
+   * entirely: we send a short reminder that the language can be changed
+   * instead, and let the rest of the message be processed normally in the
+   * inferred language (already the active context via
+   * `resolveConversationLanguage`/`runWithLanguage`). A bare greeting ("hola",
+   * "hi"...) still shows the full menu, since there's nothing else in the
+   * message to act on anyway, and an ambiguous message (low/no detection
+   * confidence) also still shows it — same "when in doubt, ask" bias as
+   * `detectLanguage` itself.
    *
    * Only acts on customers with NO name on file — an existing customer who
    * simply never made an explicit language choice (e.g. created before this
@@ -355,10 +367,24 @@ export class WhatsAppHandler {
     businessId: string,
     jid: string,
     phone: string,
-    conversationId: string
+    conversationId: string,
+    messageText: string
   ): Promise<boolean> {
     const knownCustomer = await SupabaseService.getCustomerByPhone(phone, businessId);
     if (knownCustomer?.name) {
+      return false;
+    }
+
+    const detected = detectLanguage(messageText);
+    const hasContentBeyondGreeting = !this.isGreetingMessage(messageText);
+    if (detected && detected.confidence >= DETECTION_THRESHOLD && hasContentBeyondGreeting) {
+      logger.info('Language menu skipped — inferred with confidence from first message content', {
+        conversationId,
+        businessId,
+        language: detected.language,
+        confidence: detected.confidence,
+      });
+      await this.sendWhatsAppMessage(businessId, jid, templates.languageChangeHint());
       return false;
     }
 
@@ -622,6 +648,8 @@ export class WhatsAppHandler {
             businessId,
             businessName: businessStatus.name,
             businessAddress: formatBusinessAddress(businessStatus.address, businessStatus.city),
+            businessHours: formatWeeklyHoursForPrompt(businessStatus.weekly_hours as WeeklyHours | null | undefined),
+            businessDescription: businessStatus.description ?? undefined,
             phone,
             hasActiveDraft: !!draft,
             currentStep: draft?.step,
@@ -643,7 +671,8 @@ export class WhatsAppHandler {
             businessId,
             from,
             phone,
-            conversationId
+            conversationId,
+            messageText
           );
           if (languageMenuOffered) {
             return;
@@ -764,6 +793,8 @@ export class WhatsAppHandler {
         businessId,
         businessName,
         businessAddress: formatBusinessAddress(business?.address, business?.city),
+        businessHours: formatWeeklyHoursForPrompt(business?.weekly_hours as WeeklyHours | null | undefined),
+        businessDescription: business?.description ?? undefined,
         phone,
         hasActiveDraft: !!draft,
       };
@@ -3842,6 +3873,12 @@ export class WhatsAppHandler {
   private couldBeAName(text: string): boolean {
     const trimmed = text.trim();
     const words = trimmed.split(/\s+/);
+
+    // A digit anywhere rules out a name in any of the supported languages —
+    // e.g. "table for 4" / "mesa pra 4" — independent of whether the
+    // surrounding reservation phrasing is recognized (those patterns below
+    // are Spanish-leaning and don't catch every EN/PT phrasing).
+    if (/\d/.test(trimmed)) return false;
 
     // Names realistically have 1–4 words (including compound names)
     if (words.length > 4) return false;
