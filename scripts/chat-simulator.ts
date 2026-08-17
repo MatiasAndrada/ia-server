@@ -25,18 +25,24 @@ import * as readline from 'readline';
 import { randomUUID } from 'crypto';
 import { SupabaseConfig } from '../src/config/supabase';
 import { RedisConfig } from '../src/config/redis';
+import { OpenRouterConfig } from '../src/config/openrouter';
 import { WhatsAppHandler } from '../src/services/whatsapp-handler.service';
 import { ReservationService } from '../src/services/reservation.service';
 import { agentService } from '../src/services/agent.service';
 import { SupabaseService } from '../src/services/supabase.service';
 import { clearCachedLanguage } from '../src/i18n/language-store';
-import { BaileysMessage } from '../src/types';
+import { BaileysMessage, EnvConfig } from '../src/types';
 
 const BUSINESS_ID = process.env.TEST_BUSINESS_ID;
 
 if (!BUSINESS_ID) {
   console.error('❌ Configurá TEST_BUSINESS_ID en tu .env con el UUID de un negocio de PRUEBA.');
   console.error('   No uses el business_id real — este script crea reservas de verdad en Supabase.');
+  process.exit(1);
+}
+
+if (!process.env.OPENROUTER_API_KEY) {
+  console.error('❌ Configurá OPENROUTER_API_KEY en tu .env — lo necesita el fallback conversacional del agente.');
   process.exit(1);
 }
 
@@ -79,9 +85,25 @@ async function resetConversation(handler: WhatsAppHandler): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  console.log('📦 Inicializando Supabase y Redis...');
+  console.log('📦 Inicializando Supabase, Redis y OpenRouter...');
   SupabaseConfig.initialize(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
   await RedisConfig.initialize(process.env.REDIS_URL || 'redis://localhost:6379');
+  // Sin esto, cualquier mensaje que caiga en el fallback conversacional del
+  // agente (agentService.generateResponse -> openRouterService.chat) explota
+  // con "OpenRouter client not initialized" — el mismo initialize() que hace
+  // src/index.ts al arrancar el servidor real, acá replicado a mano porque
+  // este script no pasa por ese bootstrap.
+  OpenRouterConfig.initialize({
+    openRouterApiKey: process.env.OPENROUTER_API_KEY as string,
+    openRouterModel: process.env.OPENROUTER_MODEL || 'openrouter/auto',
+    openRouterFallbackModels: (process.env.OPENROUTER_FALLBACK_MODELS || '')
+      .split(',')
+      .map((m) => m.trim())
+      .filter(Boolean),
+    openRouterTimeout: parseInt(process.env.OPENROUTER_TIMEOUT || '30000', 10),
+    openRouterSiteUrl: process.env.OPENROUTER_SITE_URL,
+    openRouterSiteName: process.env.OPENROUTER_SITE_NAME,
+  } as EnvConfig);
 
   const business = await SupabaseService.getBusinessById(BUSINESS_ID as string);
   if (!business) {
