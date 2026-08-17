@@ -1,5 +1,5 @@
-import { buildSystemPrompt, buildIntentPrompt, buildFallbackResponse } from '../../utils/prompts';
-import { BusinessContext } from '../../types';
+import { buildSystemPrompt, buildIntentPrompt, buildFallbackResponse, formatWeeklyHoursForPrompt } from '../../utils/prompts';
+import { BusinessContext, WeeklyHours } from '../../types';
 
 describe('Prompts Utils', () => {
   describe('buildSystemPrompt', () => {
@@ -87,6 +87,37 @@ describe('Prompts Utils', () => {
       expect(prompt).toContain('name');
       expect(prompt).toContain('partySize');
       expect(prompt).toContain('preferences');
+    });
+  });
+
+  describe('formatWeeklyHoursForPrompt', () => {
+    it('returns undefined when there are no hours configured', () => {
+      expect(formatWeeklyHoursForPrompt(null)).toBeUndefined();
+      expect(formatWeeklyHoursForPrompt(undefined)).toBeUndefined();
+      expect(formatWeeklyHoursForPrompt({})).toBeUndefined();
+    });
+
+    it('formats every day of the week, Monday first, with shifts or "cerrado"', () => {
+      const weeklyHours: WeeklyHours = {
+        mon: { closed: false, shifts: [{ open: '09:00', close: '22:00' }] },
+        tue: { closed: false, shifts: [{ open: '09:00', close: '22:00' }] },
+        fri: { closed: false, shifts: [{ open: '20:00', close: '02:00' }] },
+        sun: { closed: true, shifts: [] },
+      };
+
+      const result = formatWeeklyHoursForPrompt(weeklyHours);
+
+      expect(result).toBe(
+        [
+          'Lunes: 09:00–22:00',
+          'Martes: 09:00–22:00',
+          'Miércoles: cerrado',
+          'Jueves: cerrado',
+          'Viernes: 20:00–02:00',
+          'Sábado: cerrado',
+          'Domingo: cerrado',
+        ].join('\n')
+      );
     });
   });
 
