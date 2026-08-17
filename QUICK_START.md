@@ -52,11 +52,44 @@ Ver [README.md](README.md) para documentación completa y:
 
 ## 🛠️ Scripts Útiles
 
+### Ejecución
 - `npm run dev` - Desarrollo con hot reload
 - `npm run build` - Compilar TypeScript
 - `npm start` - Producción
-- `npm test` - Ejecutar tests
 - `npm run pm2:start` - Iniciar con PM2
+- `npm run pm2:restart` - Reiniciar servicio con PM2
+- `npm run pm2:stop` - Detener servicio con PM2
+- `npm run pm2:logs` - Ver logs en tiempo real con PM2
+- `npm run pm2:delete` - Eliminar servicio de PM2
+
+### Tests
+- `npm test` - Ejecutar todos los tests una sola vez (útil para CI/CD)
+- `npm run test:watch` - Tests en modo observación (detecta cambios automáticamente)
+- `npm run test:coverage` - Cobertura de tests (genera reporte HTML en `coverage/`)
+- `npm run test:integration` - Tests de integración (valida flujos completos)
+- `npm run test:manual` - Test manual contra negocio real (pruebas manuales con datos reales)
+- `npm run test:reservation` - Tests del flujo de reservas (solo tests de reservación)
+
+**Diferencias clave:**
+- `npm test` - Una ejecución, resultado rápido
+- `npm run test:watch` - Ejecución continua, ideal para desarrollo activo
+- `npm run test:coverage` - Genera reportes de calidad de código
+- `npm run test:integration` - Tests lentos que validan integración entre componentes
+- `npm run test:manual` - Script manual (no automático), prueba contra BD/APIs reales
+- `npm run test:reservation` - Filtra solo tests de reservas para desarrollo específico
+
+### WhatsApp
+- `npm run whatsapp:connect` - Conectar cliente WhatsApp
+- `npm run whatsapp:clean` - Limpiar sesiones de autenticación
+
+### Tipos & Base de datos
+- `npm run supabase:gen` - Generar tipos de Supabase
+- `npm run types:generate` - Generar tipos TypeScript
+
+### Desarrollo
+- `npm run chat:simulate` - Simular conversaciones de chat
+- `npm run lint` - Validar código con ESLint
+- `npm run format` - Formatear código con Prettier
 
 ## 📞 Soporte
 

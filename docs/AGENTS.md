@@ -1,6 +1,10 @@
 # 🤖 Sistema Multi-Agente - IA Server
 
-El servidor ahora soporta múltiples agentes de IA con diferentes propósitos y configuraciones. Cada agente puede tener su propio modelo, prompts personalizados y conjuntos de acciones.
+El servidor soporta múltiples agentes de IA con diferentes propósitos y configuraciones. Cada agente puede tener su propio modelo, prompts personalizados y conjuntos de acciones. Hoy solo hay un agente registrado (`waitlist`), pero el sistema está pensado para sumar más sin tocar el core (ver [Crear un Nuevo Agente](#crear-un-nuevo-agente)).
+
+> **Importante — qué maneja este agente y qué no:** el flujo de reserva paso a paso (personas → día → horario → confirmación → edición → cancelación) para clientes que escriben por WhatsApp es **determinístico** y vive en `WhatsAppHandler`/`ReservationService`, no en este agente. El `waitlist` agent se usa en dos lugares puntuales:
+> 1. Como **fallback conversacional** dentro de ese mismo flujo, para turnos fuera de paso (saludos sueltos, preguntas generales, un borrador en un estado inesperado) — `WhatsAppHandler` le pasa el mensaje y, si el agente infiere una de las tres acciones deterministas (`CREATE_RESERVATION`, `CHECK_STATUS`, `CANCEL`), dispara ese handler; para el resto, contesta en lenguaje natural.
+> 2. Como endpoint standalone (`POST /api/agents/waitlist/chat`, más abajo) para integraciones externas o pruebas, sin pasar por WhatsApp ni por el flujo determinístico.
 
 ## 📋 Tabla de Contenidos
 
@@ -12,17 +16,20 @@ El servidor ahora soporta múltiples agentes de IA con diferentes propósitos y 
 
 ## 🎯 Agentes Disponibles
 
-### 1. Waitlist Agent (Lista de Espera)
+### 1. Waitlist Agent (Reservas)
 
 **ID:** `waitlist`  
-**Propósito:** Gestión de listas de espera para restaurantes vía WhatsApp  
+**Propósito:** Respaldo conversacional para reservas de restaurantes vía WhatsApp — conversación libre fuera del flujo paso a paso, que es determinístico (ver nota arriba)  
 **Modelo:** `openrouter` (resuelto por OPENROUTER_MODEL)
 
-**Acciones soportadas:**
-- `CHECK_STATUS` - Consultar estado en la lista
-- `REGISTER` - Registrarse en la lista de espera
-- `CANCEL` - Cancelar registro
-- `INFO_REQUEST` - Solicitar información general
+**Acciones que puede inferir** (por keyword, definidas en `src/agents/waitlist.agent.ts` — el `action` que devuelve `/api/agents/waitlist/chat` es esta inferencia, no una ejecución automática):
+- `CREATE_RESERVATION` - Crear nueva reserva *(dispara el flujo real cuando se detecta desde WhatsApp)*
+- `UPDATE_RESERVATION` - Modificar reserva existente
+- `LIST_RESERVATIONS` - Listar reservas del cliente
+- `CHECK_STATUS` - Consultar estado en la lista *(dispara el handler real cuando se detecta desde WhatsApp)*
+- `GET_WAIT_TIME` - Consultar tiempo de espera estimado
+- `NOTIFY_DELAY` - Notificar retraso
+- `CANCEL` - Cancelar reserva *(dispara el handler real cuando se detecta desde WhatsApp)*
 
 ## 🔌 API Endpoints
 
@@ -41,8 +48,8 @@ Authorization: Bearer YOUR_API_KEY
   "agents": [
     {
       "id": "waitlist",
-      "name": "Asistente de Lista de Espera",
-      "description": "Gestión de listas de espera para restaurantes vía WhatsApp",
+      "name": "Asistente de Reservas",
+      "description": "Gestión de reservas para restaurantes vía WhatsApp",
       "enabled": true,
       "actions": [
         {
@@ -98,7 +105,7 @@ Content-Type: application/json
     "conversationId": "user-123",
     "agent": {
       "id": "waitlist",
-      "name": "Asistente de Lista de Espera"
+      "name": "Asistente de Reservas"
     },
     "processingTime": 1245
   },
@@ -108,6 +115,8 @@ Content-Type: application/json
   }
 }
 ```
+
+> `action` es la inferencia por keyword descripta en [Agentes Disponibles](#agentes-disponibles): identifica de qué habla el mensaje, pero llamar a este endpoint directamente **no** crea, modifica ni cancela ninguna reserva — `response` es solo texto conversacional.
 
 ### Limpiar Historial de Conversación
 
@@ -296,4 +305,4 @@ Los agentes generan logs detallados para monitoreo y debugging:
 
 ---
 
-Para más información, consulta el [README principal](README.md) o el [QUICK_START.md](QUICK_START.md).
+Para más información, consulta el [README principal](../README.md), el [QUICK_START.md](../QUICK_START.md) o [ENDPOINTS.md](ENDPOINTS.md) para el resto de la API HTTP.
