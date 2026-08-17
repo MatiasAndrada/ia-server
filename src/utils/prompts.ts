@@ -14,12 +14,28 @@ export function buildLanguageInstruction(): string {
  * Builds a human-readable "address, city" string from raw business columns,
  * so the agent always quotes the exact data from the `businesses` table
  * instead of letting the LLM guess or invent a location.
+ *
+ * `address` a veces ya viene con la ciudad/provincia incluida (p.ej. cargada
+ * desde un buscador de direcciones tipo Nominatim), así que los segmentos
+ * repetidos respecto a `city` se descartan para no duplicarlos en el texto.
  */
 export function formatBusinessAddress(
   address?: string | null,
   city?: string | null
 ): string | undefined {
-  const parts = [address?.trim(), city?.trim()].filter((part): part is string => !!part);
+  const segments = [address, city]
+    .flatMap((value) => (value ? value.split(',') : []))
+    .map((part) => part.trim())
+    .filter((part): part is string => part.length > 0);
+
+  const seen = new Set<string>();
+  const parts = segments.filter((part) => {
+    const key = part.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
   return parts.length > 0 ? parts.join(', ') : undefined;
 }
 
