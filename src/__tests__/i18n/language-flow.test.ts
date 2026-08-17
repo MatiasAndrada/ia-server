@@ -10,6 +10,7 @@
 import { WhatsAppHandler } from '../../services/whatsapp-handler.service';
 import { SupabaseService } from '../../services/supabase.service';
 import { ReservationService } from '../../services/reservation.service';
+import { agentService } from '../../services/agent.service';
 import * as languageStore from '../../i18n/language-store';
 import { ReservationDraft } from '../../types';
 
@@ -96,6 +97,14 @@ describe('flujos de idioma', () => {
       .mockResolvedValue(undefined);
 
     jest.spyOn(ReservationService, 'saveDraft').mockResolvedValue(true);
+    // Safety net: any scenario that falls through to the free-text agent
+    // fallback (e.g. a message that doesn't cleanly prefill a reservation)
+    // must not hit the real OpenRouter API from a unit test.
+    jest.spyOn(agentService, 'generateResponse').mockResolvedValue({
+      response: '',
+      action: null,
+      agent: { id: 'waitlist', name: 'Asistente de Reservas' },
+    });
     mockCustomer();
     mockDraft(null);
   });
@@ -125,19 +134,53 @@ describe('flujos de idioma', () => {
       expect(startReservation).toHaveBeenCalledWith(CONVERSATION_ID, BUSINESS_ID, true);
     });
 
-    it('ofrece el menú incluso cuando el primer mensaje combina saludo + intención (no solo saludo puro)', async () => {
-      // Encontrado con scripts/chat-simulator.ts: "oi, mesa pra 4" no matchea
-      // isGreetingMessage (no es SOLO un saludo) y antes caía directo en
+    it('saltea el menú cuando el primer mensaje combina saludo + intención con idioma inferible, y avisa que se puede cambiar', async () => {
+      // Encontrado originalmente con scripts/chat-simulator.ts: "oi, mesa pra 4"
+      // no matchea isGreetingMessage (no es SOLO un saludo) y caía directo en
       // handlePrefilledReservationRequest, que intentaba parsear "oi" como
-      // parte del nombre en vez de ofrecer el menú. Ver offerLanguageMenuOnFirstContact.
+      // parte del nombre. Ese riesgo ahora está cerrado en la raíz —
+      // couldBeAName rechaza cualquier candidato con un dígito, en cualquier
+      // idioma — así que un mensaje con contenido real y detección de idioma
+      // confiable ya no necesita interrumpir con el menú: se manda un
+      // recordatorio corto de que el idioma se puede cambiar y se sigue
+      // procesando el resto del mensaje en el idioma inferido.
       jest.spyOn(ReservationService, 'startReservation').mockResolvedValue({} as any);
 
       await deliver('oi, mesa pra 4');
 
       const [first] = sent();
-      expect(first).toContain('Bem-vindo');
-      expect(first).toContain('1️⃣ 🇪🇸 Español');
+      expect(first).not.toContain('Bem-vindo');
+      expect(first).not.toContain('1️⃣ 🇪🇸 Español');
+      expect(first).toContain('Para trocar de idioma');
       expect(persistLanguageSpy).not.toHaveBeenCalled();
+      expect(languageStore.cacheDetectedLanguage).toHaveBeenCalledWith(
+        BUSINESS_ID,
+        PHONE,
+        'pt'
+      );
+    });
+
+    it('sigue mostrando el menú completo ante un saludo puro, aunque el idioma se pueda inferir', async () => {
+      // Caso del ejemplo original: "hola" solo no tiene nada más para procesar,
+      // así que sigue valiendo la pena preguntar en vez de asumir.
+      jest.spyOn(ReservationService, 'startReservation').mockResolvedValue({} as any);
+
+      await deliver('hola');
+
+      const [first] = sent();
+      expect(first).toContain('1️⃣ 🇪🇸 Español');
+    });
+
+    it('muestra el menú cuando el idioma no se puede inferir con confianza, aunque haya contenido', async () => {
+      // "mesa para 4" no tiene ningún marcador fuerte de idioma (ver
+      // MARKERS en i18n/detect.ts) — detectLanguage devuelve null y, ante la
+      // duda, se sigue prefiriendo preguntar en vez de asumir.
+      jest.spyOn(ReservationService, 'startReservation').mockResolvedValue({} as any);
+
+      await deliver('mesa para 4');
+
+      const [first] = sent();
+      expect(first).toContain('1️⃣ 🇪🇸 Español');
     });
 
     it('emite el menú en el idioma detectado del primer mensaje', async () => {
