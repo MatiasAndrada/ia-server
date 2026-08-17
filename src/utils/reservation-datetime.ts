@@ -4,6 +4,7 @@ import {
   todayLabel,
   closedOnWeekday,
   bookableHoursOnWeekday,
+  atTimeConnector,
 } from '../i18n/calendar-labels';
 import type { WeeklyHours, WeeklyHoursDayKey, WeeklyHoursShift } from '../types';
 
@@ -274,7 +275,7 @@ export function formatScheduledLabel(baDate: Date, hour: number, minute: number,
   const dayLabel = formatDayLabel(baDate, isToday);
   const hh = String(hour).padStart(2, '0');
   const mm = String(minute).padStart(2, '0');
-  return `${dayLabel} a las ${hh}:${mm}`;
+  return `${dayLabel} ${atTimeConnector()} ${hh}:${mm}`;
 }
 
 /** Same as {@link formatScheduledLabel} but starting from a stored "YYYY-MM-DD" day key. */

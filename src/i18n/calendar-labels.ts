@@ -31,6 +31,13 @@ const TODAY_LABEL: Record<SupportedLanguage, string> = {
   pt: 'hoje',
 };
 
+/** Conector día/hora de un `whenLabel` ("viernes 22/08 {at} 21:00"). */
+const AT_TIME_CONNECTOR: Record<SupportedLanguage, string> = {
+  es: 'a las',
+  en: 'at',
+  pt: 'às',
+};
+
 /** "El local está cerrado los {día}" — la frase varía de estructura por idioma. */
 const CLOSED_ON_WEEKDAY: Record<SupportedLanguage, (weekday: string) => string> = {
   es: (weekday) => `El local está cerrado los ${weekday}.`,
@@ -57,6 +64,11 @@ export function weekdayName(dayOfWeek: number, language: SupportedLanguage = cur
 
 export function todayLabel(language: SupportedLanguage = currentLanguage()): string {
   return TODAY_LABEL[language] ?? TODAY_LABEL.es;
+}
+
+/** Conector usado entre el día y la hora de un `whenLabel` ("viernes 22/08 {conector} 21:00"). */
+export function atTimeConnector(language: SupportedLanguage = currentLanguage()): string {
+  return AT_TIME_CONNECTOR[language] ?? AT_TIME_CONNECTOR.es;
 }
 
 export function closedOnWeekday(dayOfWeek: number): string {
