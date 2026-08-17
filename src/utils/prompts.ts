@@ -1,5 +1,6 @@
-import { BusinessContext } from '../types';
+import { BusinessContext, WeeklyHours, WeeklyHoursDayKey } from '../types';
 import { currentLanguage, LANGUAGE_ENGLISH_NAMES } from '../i18n';
+import { formatDayHours } from './reservation-datetime';
 
 /**
  * Instrucción de idioma para el LLM. Se expresa en inglés y nombrando el idioma
@@ -37,6 +38,28 @@ export function formatBusinessAddress(
   });
 
   return parts.length > 0 ? parts.join(', ') : undefined;
+}
+
+/** Monday-first order, matching the convention used elsewhere (e.g. formatOpenDays). */
+const PROMPT_WEEKDAYS: ReadonlyArray<{ key: WeeklyHoursDayKey; label: string }> = [
+  { key: 'mon', label: 'Lunes' },
+  { key: 'tue', label: 'Martes' },
+  { key: 'wed', label: 'Miércoles' },
+  { key: 'thu', label: 'Jueves' },
+  { key: 'fri', label: 'Viernes' },
+  { key: 'sat', label: 'Sábado' },
+  { key: 'sun', label: 'Domingo' },
+];
+
+/**
+ * Builds a human-readable weekly schedule block from `businesses.weekly_hours`
+ * (one line per day), so the agent can quote the real opening hours instead of
+ * guessing or claiming it doesn't have that information.
+ */
+export function formatWeeklyHoursForPrompt(weeklyHours?: WeeklyHours | null): string | undefined {
+  if (!weeklyHours || Object.keys(weeklyHours).length === 0) return undefined;
+
+  return PROMPT_WEEKDAYS.map(({ key, label }) => `${label}: ${formatDayHours(key, weeklyHours)}`).join('\n');
 }
 
 /**
