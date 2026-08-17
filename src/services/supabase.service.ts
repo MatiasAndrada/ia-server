@@ -441,10 +441,10 @@ export class SupabaseService {
         const nowBA = nowInBuenosAires();
         const requestedWhenLabel = request.scheduledAt
           ? describeScheduledAtUtc(request.scheduledAt, nowBA)
-          : 'Hoy (turno actual)';
+          : templates.instantTurnLabel();
         const conflictingWhenLabel = conflictingReservation.scheduled_at
           ? describeScheduledAtUtc(conflictingReservation.scheduled_at, nowBA)
-          : 'Hoy (turno actual)';
+          : templates.instantTurnLabel();
 
         const statusLabel = (() => {
           switch (conflictingReservation.status) {

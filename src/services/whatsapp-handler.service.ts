@@ -3254,7 +3254,7 @@ export class WhatsAppHandler {
 
     const whenLabel = draft.scheduledAt
       ? describeScheduledAtUtc(draft.scheduledAt, nowInBuenosAires())
-      : 'Hoy (turno actual)';
+      : templates.instantTurnLabel();
 
     await this.sendWhatsAppMessage(
       businessId,
@@ -3397,7 +3397,7 @@ export class WhatsAppHandler {
         let confirmationMessage: string;
         const whenLabel = entry.scheduled_at
           ? this.describeReservationWhen(entry.scheduled_at)
-          : 'Hoy (turno actual)';
+          : templates.instantTurnLabel();
         const customerLabel = draft.customerName || 'Cliente';
         const fullNameLabel = this.buildFullName(draft.customerName, draft.customerLastName) || customerLabel;
         const partySizeLabel = draft.partySize || entry.party_size;
