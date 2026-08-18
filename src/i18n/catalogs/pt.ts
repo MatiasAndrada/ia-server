@@ -516,6 +516,36 @@ export const ptCatalog: MessageCatalog = {
     return `Confirmamos a reserva para *${slotLabel}*?${hoursNote}\n\nResponda *sim* ou *não*.`;
   },
 
+  dayClosedAskOtherDay(reason: string | undefined): string {
+    return `❌ ${prefix(reason)}Para qual outro dia você quer reservar?`;
+  },
+
+  carriedTimeHoursNote(hoursRange: string): string {
+    return `\n\nNesse dia atendemos das *${hoursRange}*. Me diga outro horário se preferir.`;
+  },
+
+  didNotUnderstandDayAndTime(): string {
+    return `❌ Não entendi bem o dia e o horário. Para qual dia e horário você quer?`;
+  },
+
+  askTimeAgain(): string {
+    return `Que horário você prefere então?`;
+  },
+
+  confirmSlotYesNoReminder(slotLabel: string | null): string {
+    return slotLabel
+      ? `Responda *sim* ou *não*: confirmamos a reserva para *${slotLabel}*? (Se preferir outro dia ou horário, é só me dizer.)`
+      : `Responda *sim* para confirmar esse horário ou *não* para escolher outro.`;
+  },
+
+  reservationRescheduled(whenLabel: string): string {
+    return `✅ Pronto! Sua reserva foi atualizada para ${whenLabel}.`;
+  },
+
+  reservationUpdateFailed(): string {
+    return `❌ Não foi possível atualizar sua reserva. Por favor tente novamente.`;
+  },
+
   askNewPartySize(): string {
     return `Para quantas pessoas você quer alterar a reserva?\n\nExemplo: 2, 4 ou 6 pessoas.`;
   },
@@ -546,6 +576,16 @@ export const ptCatalog: MessageCatalog = {
 
   noActiveReservationsInquiry(): string {
     return `Você não tem reservas ativas neste momento. Se quiser, pode criar uma nova escrevendo *RESERVAR*.`;
+  },
+
+  firstContactNoReservations(businessName: string, city?: string | null): string {
+    const location = city ? `, ${city}` : '';
+    return (
+      `👋 Olá! Sou o assistente de reservas do *${businessName}*${location}.\n\n` +
+      `Você ainda não tem nenhuma reserva conosco — é a primeira vez que conversamos.\n\n` +
+      `Posso te ajudar a *reservar uma mesa* e, mais adiante, *alterá-la* ou *cancelá-la*.\n\n` +
+      `Quer reservar? Escreva *RESERVAR* e começamos.`
+    );
   },
 
   reservationConfirmedNotice(name: string, partySize: number, displayCode: string): string {
@@ -651,5 +691,9 @@ export const ptCatalog: MessageCatalog = {
 
   inactiveFallback(): string {
     return `Desculpe, nosso serviço de WhatsApp não está disponível no momento. Por favor tente mais tarde.`;
+  },
+
+  genericError(): string {
+    return `Ops, tive um problema ao processar sua mensagem. Pode enviar de novo?`;
   },
 };

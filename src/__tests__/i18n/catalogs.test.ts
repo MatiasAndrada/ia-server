@@ -79,6 +79,13 @@ const ARGS: Record<keyof MessageCatalog, unknown[]> = {
   hoursRejectedSuggestSlot: ['__REASON__', '__TIME__'],
   hoursRejectedNoMoreSlots: ['__REASON__'],
   confirmSlotPrompt: ['__SLOT__', '__NOTE__'],
+  dayClosedAskOtherDay: ['__REASON__'],
+  carriedTimeHoursNote: ['__HOURS__'],
+  didNotUnderstandDayAndTime: [],
+  askTimeAgain: [],
+  confirmSlotYesNoReminder: ['__SLOT__'],
+  reservationRescheduled: ['__WHEN__'],
+  reservationUpdateFailed: [],
   askNewPartySize: [],
   weekdayAmbiguityPrompt: ['__WEEKDAY__', '__NEXT__'],
   weekdayAmbiguityInvalid: ['__WEEKDAY__'],
@@ -103,6 +110,8 @@ const ARGS: Record<keyof MessageCatalog, unknown[]> = {
   reservationOffTopic: ['__BIZ__'],
   reservationOutOfWindow: ['__BIZ__'],
   inactiveFallback: [],
+  genericError: [],
+  firstContactNoReservations: ['__BIZ__', '__CITY__'],
 };
 
 const CATALOG_KEYS = Object.keys(ALL_CATALOGS.es) as (keyof MessageCatalog)[];

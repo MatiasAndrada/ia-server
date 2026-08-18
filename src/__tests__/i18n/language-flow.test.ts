@@ -334,4 +334,91 @@ describe('flujos de idioma', () => {
       expect(sent()[0]).toContain('our WhatsApp service is unavailable');
     });
   });
+
+  // G-02: "¿tengo reservas?" respondía exactamente igual a un número que nunca
+  // escribió que a un cliente habitual entre visitas.
+  describe('consulta de reservas activas sin reservas', () => {
+    beforeEach(() => {
+      jest.spyOn(SupabaseService, 'getActiveReservationsByPhone').mockResolvedValue([]);
+    });
+
+    it('a un teléfono sin historial lo recibe presentando el local', async () => {
+      jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue(null);
+
+      await deliver('tengo reservas?');
+
+      const [first] = sent();
+      expect(first).toContain('La Parrilla');
+      expect(first).toContain('Puerto Iguazú');
+      expect(first).toContain('es la primera vez que hablamos');
+      // La rama corre antes del menú de idioma, así que el hint tiene que ir acá.
+      expect(first).toContain('Para cambiar de idioma');
+    });
+
+    it('a un cliente conocido le manda el mensaje corto de siempre', async () => {
+      mockCustomer({ name: 'Matías' });
+
+      await deliver('tengo reservas?');
+
+      expect(sent()[0]).toBe(
+        'No tenés reservas activas en este momento. Si querés, podés crear una nueva reserva escribiendo *RESERVAR*.'
+      );
+    });
+
+    it("una fila con name 'Unknown' cuenta como cliente nuevo, no como conocido", async () => {
+      // handleCheckStatus/handleCancel creaban estas filas basura; las que ya
+      // existen en producción no se limpian solas.
+      mockCustomer({ name: 'Unknown' });
+
+      await deliver('tengo reservas?');
+
+      expect(sent()[0]).toContain('es la primera vez que hablamos');
+    });
+
+    it('respeta el idioma del cliente', async () => {
+      jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue(null);
+      jest.spyOn(SupabaseService, 'getCustomerLanguage').mockResolvedValue('en');
+
+      await deliver('tengo reservas?');
+
+      expect(sent()[0]).toContain("this is the first time we talk");
+    });
+  });
+
+  // G-03: antes, cualquier excepción no prevista dejaba al cliente sin ninguna
+  // respuesta — indistinguible de que el bot lo ignorara.
+  describe('errores inesperados no dejan al cliente en silencio', () => {
+    it('un fallo dentro del flujo localizado responde una disculpa en el idioma del cliente', async () => {
+      jest.spyOn(SupabaseService, 'getCustomerLanguage').mockResolvedValue('en');
+      mockCustomer({ preferred_language: 'en' });
+      // getDraft se llama apenas entra _processMessageLocalized, así que su
+      // rechazo cae en el catch interno — el que SÍ está dentro del contexto ALS.
+      jest.spyOn(ReservationService, 'getDraft').mockRejectedValue(new Error('boom'));
+
+      await deliver('hello');
+
+      expect(sent()).toHaveLength(1);
+      expect(sent()[0]).toBe('Sorry, something went wrong handling your message. Could you send it again?');
+    });
+
+    it('un fallo previo a resolver el idioma igual responde, en el idioma por defecto', async () => {
+      // getBusinessById corre antes de resolveConversationLanguage: acá todavía
+      // no sabemos el idioma del cliente, así que la disculpa sale en español.
+      jest.spyOn(SupabaseService, 'getBusinessById').mockRejectedValue(new Error('db down'));
+
+      await deliver('hola');
+
+      expect(sent()).toEqual(['Uy, tuve un problema procesando tu mensaje. ¿Me lo repetís?']);
+    });
+
+    it('no spamea disculpas si el error se repite en ráfaga', async () => {
+      // sendWhatsAppMessage dedupea texto idéntico dentro de su ventana de 10s.
+      jest.spyOn(SupabaseService, 'getBusinessById').mockRejectedValue(new Error('db down'));
+
+      await deliver('hola');
+      await deliver('hola de nuevo');
+
+      expect(sent()).toHaveLength(1);
+    });
+  });
 });

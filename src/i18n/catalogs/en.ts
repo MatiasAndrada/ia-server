@@ -517,6 +517,36 @@ export const enCatalog: MessageCatalog = {
     return `Shall we confirm the booking for *${slotLabel}*?${hoursNote}\n\nReply *yes* or *no*.`;
   },
 
+  dayClosedAskOtherDay(reason: string | undefined): string {
+    return `❌ ${prefix(reason)}Which other day would you like to book?`;
+  },
+
+  carriedTimeHoursNote(hoursRange: string): string {
+    return `\n\nThat day we're open from *${hoursRange}*. Tell me another time if you prefer.`;
+  },
+
+  didNotUnderstandDayAndTime(): string {
+    return `❌ I didn't quite catch the day and time. Which day and time would you like?`;
+  },
+
+  askTimeAgain(): string {
+    return `What time would you prefer then?`;
+  },
+
+  confirmSlotYesNoReminder(slotLabel: string | null): string {
+    return slotLabel
+      ? `Reply *yes* or *no*: shall we confirm the booking for *${slotLabel}*? (If you'd rather have another day or time, just tell me.)`
+      : `Reply *yes* to confirm that time, or *no* to pick another one.`;
+  },
+
+  reservationRescheduled(whenLabel: string): string {
+    return `✅ Done! Your booking has been updated to ${whenLabel}.`;
+  },
+
+  reservationUpdateFailed(): string {
+    return `❌ We couldn't update your booking. Please try again.`;
+  },
+
   askNewPartySize(): string {
     return `How many people would you like to change the booking to?\n\nFor example: 2, 4 or 6 people.`;
   },
@@ -547,6 +577,16 @@ export const enCatalog: MessageCatalog = {
 
   noActiveReservationsInquiry(): string {
     return `You don't have any active bookings at the moment. If you'd like, you can create a new one by typing *BOOK*.`;
+  },
+
+  firstContactNoReservations(businessName: string, city?: string | null): string {
+    const location = city ? `, ${city}` : '';
+    return (
+      `👋 Hi! I'm the booking assistant for *${businessName}*${location}.\n\n` +
+      `You don't have any bookings with us yet — this is the first time we talk.\n\n` +
+      `I can help you *book a table*, and later *change* or *cancel* it.\n\n` +
+      `Want to book? Just type *BOOK* and we'll get started.`
+    );
   },
 
   reservationConfirmedNotice(name: string, partySize: number, displayCode: string): string {
@@ -652,5 +692,9 @@ export const enCatalog: MessageCatalog = {
 
   inactiveFallback(): string {
     return `Sorry, our WhatsApp service is unavailable right now. Please try again later.`;
+  },
+
+  genericError(): string {
+    return `Sorry, something went wrong handling your message. Could you send it again?`;
   },
 };

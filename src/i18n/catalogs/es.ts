@@ -531,6 +531,39 @@ export const esCatalog = {
     return `¿Confirmamos la reserva para el *${slotLabel}*?${hoursNote}\n\nRespondé *sí* o *no*.`;
   },
 
+  /** El día elegido está cerrado; a diferencia de hoursRejectedAskOther, acá solo falta el DÍA (la hora se pide después). */
+  dayClosedAskOtherDay(reason: string | undefined): string {
+    return `❌ ${prefix(reason)}¿Para qué otro día querés reservar?`;
+  },
+
+  /** Nota que se anexa al prompt de confirmación cuando se arrastró el horario de un día a otro. */
+  carriedTimeHoursNote(hoursRange: string): string {
+    return `\n\nEse día atendemos de *${hoursRange}*. Decime otro horario si preferís.`;
+  },
+
+  didNotUnderstandDayAndTime(): string {
+    return `❌ No entendí bien el día y la hora. ¿Para qué día y hora lo querés?`;
+  },
+
+  askTimeAgain(): string {
+    return `¿A qué hora preferís entonces?`;
+  },
+
+  /** Recordatorio sí/no cuando la respuesta en confirm_slot no fue ninguna de las dos. */
+  confirmSlotYesNoReminder(slotLabel: string | null): string {
+    return slotLabel
+      ? `Respondé *sí* o *no*: ¿confirmamos la reserva para el *${slotLabel}*? (Si preferís otro día u horario, decímelo directamente).`
+      : `Respondé *sí* para confirmar ese horario o *no* para elegir otro.`;
+  },
+
+  reservationRescheduled(whenLabel: string): string {
+    return `✅ ¡Listo! Tu reserva fue actualizada para el ${whenLabel}.`;
+  },
+
+  reservationUpdateFailed(): string {
+    return `❌ No se pudo actualizar tu reserva. Por favor intentá de nuevo.`;
+  },
+
   askNewPartySize(): string {
     return `¿Para cuántas personas querés cambiar la reserva?\n\nEjemplo: 2, 4 o 6 personas.`;
   },
@@ -561,6 +594,22 @@ export const esCatalog = {
 
   noActiveReservationsInquiry(): string {
     return `No tenés reservas activas en este momento. Si querés, podés crear una nueva reserva escribiendo *RESERVAR*.`;
+  },
+
+  /**
+   * Misma pregunta ("¿tengo reservas?") pero de alguien que nunca escribió a este
+   * local: en vez del texto corto pensado para quien ya conoce el flujo, se
+   * presenta el local y explica qué puede hacer. Incluye el hint de idioma porque
+   * esta rama corre ANTES del menú de idioma, así que si no va acá no lo ve nunca.
+   */
+  firstContactNoReservations(businessName: string, city?: string | null): string {
+    const location = city ? `, ${city}` : '';
+    return (
+      `👋 ¡Hola! Soy el asistente de reservas de *${businessName}*${location}.\n\n` +
+      `Todavía no tenés ninguna reserva con nosotros — es la primera vez que hablamos.\n\n` +
+      `Puedo ayudarte a *reservar una mesa*, y más adelante a *modificarla* o *cancelarla*.\n\n` +
+      `¿Querés reservar? Escribime *RESERVAR* y arrancamos.`
+    );
   },
 
   /** Notificación proactiva: la reserva pasó a CONFIRMED. */
@@ -673,6 +722,15 @@ export const esCatalog = {
 
   inactiveFallback(): string {
     return `Lo siento, nuestro servicio de WhatsApp no está disponible en este momento. Por favor intenta más tarde.`;
+  },
+
+  /**
+   * Error inesperado a mitad de un turno. Distinto de `inactiveFallback`, que
+   * significa "el servicio está apagado": acá el servicio está vivo y algo puntual
+   * falló, así que invitamos a reintentar el mismo mensaje.
+   */
+  genericError(): string {
+    return `Uy, tuve un problema procesando tu mensaje. ¿Me lo repetís?`;
   },
 };
 
