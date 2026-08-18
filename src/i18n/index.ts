@@ -11,8 +11,8 @@ export {
   coerceLanguage,
   normalizeForLanguageMatch,
   type SupportedLanguage,
-} from './languages';
+} from './languages.js';
 
-export { runWithLanguage, currentLanguage, hasLanguageContext } from './context';
+export { runWithLanguage, currentLanguage, hasLanguageContext } from './context.js';
 
-export { getTemplates, catalog, ALL_CATALOGS, type MessageCatalog } from './catalogs';
+export { getTemplates, catalog, ALL_CATALOGS, type MessageCatalog } from './catalogs/index.js';

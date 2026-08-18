@@ -1,7 +1,7 @@
-import { ALL_CATALOGS, getTemplates, type MessageCatalog } from '../../i18n/catalogs';
-import { SUPPORTED_LANGUAGES, SupportedLanguage } from '../../i18n/languages';
-import { runWithLanguage, currentLanguage } from '../../i18n/context';
-import * as templates from '../../utils/message-templates';
+import { ALL_CATALOGS, getTemplates, type MessageCatalog } from '../../i18n/catalogs/index.js';
+import { SUPPORTED_LANGUAGES, SupportedLanguage } from '../../i18n/languages.js';
+import { runWithLanguage, currentLanguage } from '../../i18n/context.js';
+import * as templates from '../../utils/message-templates.js';
 
 /**
  * Argumentos de prueba por template. Los valores son centinelas distintivos

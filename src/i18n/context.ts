@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { DEFAULT_LANGUAGE, SupportedLanguage } from './languages';
+import { DEFAULT_LANGUAGE, SupportedLanguage } from './languages.js';
 
 /**
  * Idioma activo del turno de conversación en curso.

@@ -3,8 +3,8 @@ import {
   detectLanguageChangeRequest,
   parseLanguageMenuChoice,
   DETECTION_THRESHOLD,
-} from '../../i18n/detect';
-import { SupportedLanguage } from '../../i18n/languages';
+} from '../../i18n/detect.js';
+import { SupportedLanguage } from '../../i18n/languages.js';
 
 describe('detectLanguageChangeRequest', () => {
   describe('banderas', () => {

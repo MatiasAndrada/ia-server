@@ -1,28 +1,28 @@
-import { BaileysService } from './baileys.service';
-import { agentService } from './agent.service';
-import { openRouterService } from './openrouter.service';
-import { ReservationService } from './reservation.service';
-import { SupabaseService } from './supabase.service';
-import { SupabaseConfig } from '../config/supabase';
-import { RedisConfig } from '../config/redis';
-import { agentRegistry } from '../agents';
-import { BaileysMessage, BlockedDateEntry, Business, Customer, ReservationDraft, WaitlistEntry, WeeklyHours } from '../types';
-import { logger } from '../utils/logger';
-import { runWithLanguage, currentLanguage, SupportedLanguage } from '../i18n';
+import { BaileysService } from './baileys.service.js';
+import { agentService } from './agent.service.js';
+import { openRouterService } from './openrouter.service.js';
+import { ReservationService } from './reservation.service.js';
+import { SupabaseService } from './supabase.service.js';
+import { SupabaseConfig } from '../config/supabase.js';
+import { RedisConfig } from '../config/redis.js';
+import { agentRegistry } from '../agents/index.js';
+import { BaileysMessage, BlockedDateEntry, Business, Customer, ReservationDraft, WaitlistEntry, WeeklyHours } from '../types/index.js';
+import { logger } from '../utils/logger.js';
+import { runWithLanguage, currentLanguage, SupportedLanguage } from '../i18n/index.js';
 import {
   cacheDetectedLanguage,
   persistLanguage,
   resolveLanguage,
-} from '../i18n/language-store';
+} from '../i18n/language-store.js';
 import {
   detectLanguage,
   detectLanguageChangeRequest,
   parseLanguageMenuChoice,
   DETECTION_THRESHOLD,
-} from '../i18n/detect';
-import { isMultilingualGreeting } from '../i18n/keywords';
-import { extractReservationUpdate, ReservationSlots } from './reservation-nlu.service';
-import { planReservationActions, countActionableIntents, PlannedAction } from './reservation-planner.service';
+} from '../i18n/detect.js';
+import { isMultilingualGreeting } from '../i18n/keywords.js';
+import { extractReservationUpdate, ReservationSlots } from './reservation-nlu.service.js';
+import { planReservationActions, countActionableIntents, PlannedAction } from './reservation-planner.service.js';
 import {
   evaluateReservationScope,
   isGreetingOrReservationOptInMessage,
@@ -32,7 +32,7 @@ import {
   normalizeReservationScopeText,
   hasDateOrTimeSignal,
   isAskingOtherDaysScheduleMessage,
-} from '../utils/reservation-scope';
+} from '../utils/reservation-scope.js';
 import {
   nowInBuenosAires,
   parseRelativeDay,
@@ -64,9 +64,9 @@ import {
   formatBookableDays,
   getUpcomingOpenDaysWithHours,
   type ParsedDay,
-} from '../utils/reservation-datetime';
-import * as templates from '../utils/message-templates';
-import { formatBusinessAddress, formatWeeklyHoursForPrompt } from '../utils/prompts';
+} from '../utils/reservation-datetime.js';
+import * as templates from '../utils/message-templates.js';
+import { formatBusinessAddress, formatWeeklyHoursForPrompt } from '../utils/prompts.js';
 
 type ActiveReservationSnapshot = {
   status: 'WAITING' | 'CONFIRMED' | 'NOTIFIED';
@@ -234,7 +234,7 @@ export class WhatsAppHandler {
       // Cache the JID mapping in Redis for future outbound messages
       // This ensures we send to the correct JID (@lid vs @s.whatsapp.net)
       try {
-        const redis = await import('../config/redis');
+        const redis = await import('../config/redis.js');
         const client = redis.RedisConfig.getClient();
         const jidMappingKey = `jid:${businessId}:${phone}`;
         await client.setEx(jidMappingKey, 30 * 24 * 60 * 60, from); // 30 days TTL
@@ -3464,7 +3464,7 @@ export class WhatsAppHandler {
 
         // Store reservation notification in Redis
         try {
-          const redis = await import('../config/redis');
+          const redis = await import('../config/redis.js');
           const client = redis.RedisConfig.getClient();
           const notificationKey = `notifications:${businessId}:reservation`;
 

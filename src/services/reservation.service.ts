@@ -1,14 +1,14 @@
-import { RedisConfig } from '../config/redis';
-import { SupabaseService } from './supabase.service';
+import { RedisConfig } from '../config/redis.js';
+import { SupabaseService } from './supabase.service.js';
 import {
   ReservationDraft,
   CreateReservationRequest,
   CreateReservationResponse,
   WeeklyHours
-} from '../types';
-import { logger } from '../utils/logger';
-import { formatName } from '../utils/formatters';
-import * as templates from '../utils/message-templates';
+} from '../types/index.js';
+import { logger } from '../utils/logger.js';
+import { formatName } from '../utils/formatters.js';
+import * as templates from '../utils/message-templates.js';
 import {
   ParsedDay,
   formatBaDateKey,
@@ -18,7 +18,7 @@ import {
   isDateBlocked,
   getBlockedDateReasonMessage,
   isFutureReservationBlockedToday,
-} from '../utils/reservation-datetime';
+} from '../utils/reservation-datetime.js';
 
 export class ReservationService {
   private static readonly DRAFT_TTL = 3600; // 1 hour

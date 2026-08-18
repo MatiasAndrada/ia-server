@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
-import { SupabaseService } from '../services/supabase.service';
-import { logger } from '../utils/logger';
+import { SupabaseService } from '../services/supabase.service.js';
+import { logger } from '../utils/logger.js';
 
 /**
  * Create a business blocked date (e.g. holiday, closure, grieving day).

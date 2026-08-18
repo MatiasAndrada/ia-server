@@ -1,7 +1,7 @@
-import { ReservationService } from '../../services/reservation.service';
-import { SupabaseService } from '../../services/supabase.service';
-import { RedisConfig } from '../../config/redis';
-import { SupabaseConfig } from '../../config/supabase';
+import { ReservationService } from '../../services/reservation.service.js';
+import { SupabaseService } from '../../services/supabase.service.js';
+import { RedisConfig } from '../../config/redis.js';
+import { SupabaseConfig } from '../../config/supabase.js';
 
 describe('Reservation Flow Integration Tests', () => {
   const TEST_BUSINESS_ID = process.env.TEST_BUSINESS_ID || 'test-business-id';

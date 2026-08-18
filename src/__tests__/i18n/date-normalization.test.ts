@@ -1,6 +1,6 @@
-import { normalizeTemporalTokens } from '../../i18n/date-normalization';
-import { normalizeReservationScopeText, hasDateOrTimeSignal } from '../../utils/reservation-scope';
-import { parseRelativeDay, parseTimeOfDay } from '../../utils/reservation-datetime';
+import { normalizeTemporalTokens } from '../../i18n/date-normalization.js';
+import { normalizeReservationScopeText, hasDateOrTimeSignal } from '../../utils/reservation-scope.js';
+import { parseRelativeDay, parseTimeOfDay } from '../../utils/reservation-datetime.js';
 
 /** Martes 21/07/2026 12:00 BA — fijo, para que los días relativos sean deterministas. */
 const NOW_BA = new Date('2026-07-21T12:00:00.000Z');

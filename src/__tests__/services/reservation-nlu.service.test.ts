@@ -6,9 +6,9 @@ jest.mock('../../services/openrouter.service', () => ({
 
 jest.mock('../../utils/logger');
 
-import { extractReservationUpdate, reservationNluMetrics } from '../../services/reservation-nlu.service';
-import { openRouterService } from '../../services/openrouter.service';
-import { ReservationDraft } from '../../types';
+import { extractReservationUpdate, reservationNluMetrics } from '../../services/reservation-nlu.service.js';
+import { openRouterService } from '../../services/openrouter.service.js';
+import { ReservationDraft } from '../../types/index.js';
 
 const chatWithActions = openRouterService.chatWithActions as jest.Mock;
 

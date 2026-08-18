@@ -1,5 +1,5 @@
-import { OpenRouterService } from '../../services/openrouter.service';
-import { OpenRouterConfig } from '../../config/openrouter';
+import { OpenRouterService } from '../../services/openrouter.service.js';
+import { OpenRouterConfig } from '../../config/openrouter.js';
 
 // Mock OpenRouterConfig
 jest.mock('../../config/openrouter');

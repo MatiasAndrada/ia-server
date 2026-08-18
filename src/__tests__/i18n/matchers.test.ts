@@ -4,12 +4,12 @@
  * "sim") y un brasileño puede escribir CANCEL. Estos tests fijan ese contrato.
  */
 
-import { WhatsAppHandler } from '../../services/whatsapp-handler.service';
-import { isMultilingualGreeting } from '../../i18n/keywords';
+import { WhatsAppHandler } from '../../services/whatsapp-handler.service.js';
+import { isMultilingualGreeting } from '../../i18n/keywords.js';
 import {
   evaluateReservationScope,
   normalizeReservationScopeText,
-} from '../../utils/reservation-scope';
+} from '../../utils/reservation-scope.js';
 
 jest.mock('../../utils/logger');
 

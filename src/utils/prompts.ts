@@ -1,6 +1,6 @@
-import { BusinessContext, WeeklyHours, WeeklyHoursDayKey } from '../types';
-import { currentLanguage, LANGUAGE_ENGLISH_NAMES } from '../i18n';
-import { formatDayHours } from './reservation-datetime';
+import { BusinessContext, WeeklyHours, WeeklyHoursDayKey } from '../types/index.js';
+import { currentLanguage, LANGUAGE_ENGLISH_NAMES } from '../i18n/index.js';
+import { formatDayHours } from './reservation-datetime.js';
 
 /**
  * Instrucción de idioma para el LLM. Se expresa en inglés y nombrando el idioma

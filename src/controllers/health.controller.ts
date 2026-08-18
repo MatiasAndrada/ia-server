@@ -1,9 +1,9 @@
 import { Request, Response } from 'express';
-import { HealthResponse } from '../types';
-import { openRouterService } from '../services/openrouter.service';
-import { RedisConfig } from '../config/redis';
-import { OpenRouterConfig } from '../config/openrouter';
-import { logger } from '../utils/logger';
+import { HealthResponse } from '../types/index.js';
+import { openRouterService } from '../services/openrouter.service.js';
+import { RedisConfig } from '../config/redis.js';
+import { OpenRouterConfig } from '../config/openrouter.js';
+import { logger } from '../utils/logger.js';
 
 const startTime = Date.now();
 
@@ -89,13 +89,13 @@ export async function statsHandler(_req: Request, res: Response) {
     };
 
     if (RedisConfig.isReady()) {
-      const { conversationService } = await import('../services/conversation.service');
+      const { conversationService } = await import('../services/conversation.service.js');
       conversationStats = await conversationService.getStats();
     }
 
     // Reservation NLU (LLM extraction) counters — how often the model
     // successfully read a message vs. the caller fell back to regex.
-    const { reservationNluMetrics } = await import('../services/reservation-nlu.service');
+    const { reservationNluMetrics } = await import('../services/reservation-nlu.service.js');
     const nluTotal =
       reservationNluMetrics.extracted +
       reservationNluMetrics.empty +

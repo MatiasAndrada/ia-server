@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
-import { agentRegistry } from '../agents';
-import { agentService } from '../services/agent.service';
-import { logger } from '../utils/logger';
+import { agentRegistry } from '../agents/index.js';
+import { agentService } from '../services/agent.service.js';
+import { logger } from '../utils/logger.js';
 
 /**
  * GET /api/agents

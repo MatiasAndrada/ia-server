@@ -1,11 +1,11 @@
 import { Request, Response } from 'express';
-import { ChatRequest, ChatResponse, BatchRequest, BatchResponse, LlmMessage } from '../types';
-import { openRouterService } from '../services/openrouter.service';
-import { conversationService } from '../services/conversation.service';
-import { intentService } from '../services/intent.service';
-import { buildSystemPrompt } from '../utils/prompts';
-import { buildActionTool, parseToolCallActions, calculateConfidence, cleanResponseText } from '../utils/actions';
-import { logger } from '../utils/logger';
+import { ChatRequest, ChatResponse, BatchRequest, BatchResponse, LlmMessage } from '../types/index.js';
+import { openRouterService } from '../services/openrouter.service.js';
+import { conversationService } from '../services/conversation.service.js';
+import { intentService } from '../services/intent.service.js';
+import { buildSystemPrompt } from '../utils/prompts.js';
+import { buildActionTool, parseToolCallActions, calculateConfidence, cleanResponseText } from '../utils/actions.js';
+import { logger } from '../utils/logger.js';
 
 /**
  * POST /api/chat

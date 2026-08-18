@@ -7,7 +7,7 @@ import {
   normalizeReservationScopeText,
   buildReservationOffTopicMessage,
   buildReservationOutOfWindowMessage,
-} from '../../utils/reservation-scope';
+} from '../../utils/reservation-scope.js';
 
 describe('reservation-scope', () => {
   describe('evaluateReservationScope', () => {

@@ -1,5 +1,5 @@
-import { currentLanguage } from './context';
-import { SupportedLanguage } from './languages';
+import { currentLanguage } from './context.js';
+import { SupportedLanguage } from './languages.js';
 
 /**
  * Etiquetas de calendario en el idioma activo.

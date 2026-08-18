@@ -6,52 +6,52 @@ import * as fs from 'fs';
 import helmet from 'helmet';
 import cors from 'cors';
 import compression from 'compression';
-import { OpenRouterConfig } from './config/openrouter';
-import { RedisConfig } from './config/redis';
-import { SupabaseConfig } from './config/supabase';
-import { BaileysService } from './services/baileys.service';
-import { RealtimeSyncService } from './services/realtime-sync.service';
-import { ReservationService } from './services/reservation.service';
-import { PostVisitService } from './services/post-visit.service';
-import { EnvConfig } from './types';
-import { logger, logRequest } from './utils/logger';
-import { authMiddleware } from './middleware/auth.middleware';
+import { OpenRouterConfig } from './config/openrouter.js';
+import { RedisConfig } from './config/redis.js';
+import { SupabaseConfig } from './config/supabase.js';
+import { BaileysService } from './services/baileys.service.js';
+import { RealtimeSyncService } from './services/realtime-sync.service.js';
+import { ReservationService } from './services/reservation.service.js';
+import { PostVisitService } from './services/post-visit.service.js';
+import { EnvConfig } from './types/index.js';
+import { logger, logRequest } from './utils/logger.js';
+import { authMiddleware } from './middleware/auth.middleware.js';
 import {
   generalRateLimiter,
   batchRateLimiter,
   healthCheckRateLimiter,
-} from './middleware/rateLimit.middleware';
+} from './middleware/rateLimit.middleware.js';
 import {
   validate,
   chatSchema,
   intentSchema,
   batchSchema,
   validatePhoneParam,
-} from './middleware/validation.middleware';
+} from './middleware/validation.middleware.js';
 import {
   chatHandler,
   analyzeIntentHandler,
   clearConversationHandler,
   batchHandler,
-} from './controllers/chat.controller';
-import { healthHandler, statsHandler } from './controllers/health.controller';
+} from './controllers/chat.controller.js';
+import { healthHandler, statsHandler } from './controllers/health.controller.js';
 import {
   listAgentsHandler,
   getAgentHandler,
   agentChatHandler,
   clearConversationHandler as agentClearConversationHandler,
-} from './controllers/agent.controller';
+} from './controllers/agent.controller.js';
 import {
   getDraftStatusHandler,
   createReservationHandler,
   updateReservationStatusHandler,
   deleteDraftHandler,
-} from './controllers/reservation.controller';
-import { createBlockedDateHandler } from './controllers/blocked-date.controller';
+} from './controllers/reservation.controller.js';
+import { createBlockedDateHandler } from './controllers/blocked-date.controller.js';
 
 // Import new HTTP-only routes
-import sessionsRoutes from './routes/sessions.routes';
-import messagesRoutes from './routes/messages.routes';
+import sessionsRoutes from './routes/sessions.routes.js';
+import messagesRoutes from './routes/messages.routes.js';
 
 // Load and validate environment variables
 function getEnvConfig(): EnvConfig {

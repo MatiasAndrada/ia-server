@@ -5,7 +5,7 @@ import {
   LANGUAGE_MENU_ORDER,
   normalizeForLanguageMatch,
   SupportedLanguage,
-} from './languages';
+} from './languages.js';
 
 /**
  * Detección de idioma y de pedidos explícitos de cambio de idioma.

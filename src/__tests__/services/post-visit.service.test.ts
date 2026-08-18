@@ -1,7 +1,7 @@
-import { PostVisitService } from '../../services/post-visit.service';
-import { RedisConfig } from '../../config/redis';
-import { SupabaseConfig } from '../../config/supabase';
-import { BaileysService } from '../../services/baileys.service';
+import { PostVisitService } from '../../services/post-visit.service.js';
+import { RedisConfig } from '../../config/redis.js';
+import { SupabaseConfig } from '../../config/supabase.js';
+import { BaileysService } from '../../services/baileys.service.js';
 
 jest.mock('../../utils/logger');
 

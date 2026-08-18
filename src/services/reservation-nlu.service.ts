@@ -1,7 +1,7 @@
-import { openRouterService } from './openrouter.service';
-import { buildReservationSlotsTool } from '../agents/reservation-tools';
-import { ConversationMessage, LlmMessage, ReservationDraft } from '../types';
-import { logger } from '../utils/logger';
+import { openRouterService } from './openrouter.service.js';
+import { buildReservationSlotsTool } from '../agents/reservation-tools.js';
+import { ConversationMessage, LlmMessage, ReservationDraft } from '../types/index.js';
+import { logger } from '../utils/logger.js';
 
 export interface ReservationSlots {
   customerName?: string;

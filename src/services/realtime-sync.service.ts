@@ -1,13 +1,13 @@
-import { SupabaseConfig } from '../config/supabase';
-import { RedisConfig } from '../config/redis';
-import { logger } from '../utils/logger';
-import { runWithLanguage } from '../i18n';
-import { resolveLanguage } from '../i18n/language-store';
-import type { Database } from '../types/supabase';
-import * as templates from '../utils/message-templates';
-import { PostVisitService } from './post-visit.service';
-import { SupabaseService } from './supabase.service';
-import { openRouterService } from './openrouter.service';
+import { SupabaseConfig } from '../config/supabase.js';
+import { RedisConfig } from '../config/redis.js';
+import { logger } from '../utils/logger.js';
+import { runWithLanguage } from '../i18n/index.js';
+import { resolveLanguage } from '../i18n/language-store.js';
+import type { Database } from '../types/supabase.js';
+import * as templates from '../utils/message-templates.js';
+import { PostVisitService } from './post-visit.service.js';
+import { SupabaseService } from './supabase.service.js';
+import { openRouterService } from './openrouter.service.js';
 
 // Helper types for strict type safety
 type CustomersRow = Database['public']['Tables']['customers']['Row'];
@@ -251,7 +251,7 @@ export class RealtimeSyncService {
         }
       }
 
-      const { BaileysService } = await import('./baileys.service');
+      const { BaileysService } = await import('./baileys.service.js');
       const supabaseClient = SupabaseConfig.getClient();
 
       const { data: customerData, error: customerError } = await supabaseClient
@@ -495,7 +495,7 @@ export class RealtimeSyncService {
     }
 
     try {
-      const { BaileysService } = await import('./baileys.service');
+      const { BaileysService } = await import('./baileys.service.js');
       const baileys = BaileysService.getInstance();
 
       if (!baileys.hasSession(businessId)) {
@@ -636,8 +636,8 @@ export class RealtimeSyncService {
       });
 
       // Import services dynamically to avoid circular dependencies
-      const { BaileysService } = await import('./baileys.service');
-      const { SupabaseConfig } = await import('../config/supabase');
+      const { BaileysService } = await import('./baileys.service.js');
+      const { SupabaseConfig } = await import('../config/supabase.js');
 
       logger.info('📦 [REALTIME] Services imported, fetching customer data...', {
         customerId: newEntry.customer_id,
@@ -714,7 +714,7 @@ export class RealtimeSyncService {
       // (cached when user sends messages, ensures correct @lid vs @s.whatsapp.net)
       let recipientJid = customer.phone;
       try {
-        const { RedisConfig } = await import('../config/redis');
+        const { RedisConfig } = await import('../config/redis.js');
         const redisClient = RedisConfig.getClient();
         const jidMappingKey = `jid:${newEntry.business_id}:${customer.phone}`;
         const cachedJid = await redisClient.get(jidMappingKey);

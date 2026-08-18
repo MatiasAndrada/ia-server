@@ -1,6 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { logger } from '../utils/logger';
-import type { Database } from '../types/supabase';
+import { logger } from '../utils/logger.js';
+import type { Database } from '../types/supabase.js';
 
 export class SupabaseConfig {
   private static client: SupabaseClient<Database> | null = null;

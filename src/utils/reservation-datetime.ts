@@ -1,12 +1,12 @@
-import { normalizeReservationScopeText } from './reservation-scope';
+import { normalizeReservationScopeText } from './reservation-scope.js';
 import {
   weekdayName,
   todayLabel,
   closedOnWeekday,
   bookableHoursOnWeekday,
   atTimeConnector,
-} from '../i18n/calendar-labels';
-import type { WeeklyHours, WeeklyHoursDayKey, WeeklyHoursShift } from '../types';
+} from '../i18n/calendar-labels.js';
+import type { WeeklyHours, WeeklyHoursDayKey, WeeklyHoursShift } from '../types/index.js';
 
 /** Buenos Aires has no DST — fixed UTC-3 offset. */
 export const BA_OFFSET_MS = 3 * 60 * 60 * 1000;

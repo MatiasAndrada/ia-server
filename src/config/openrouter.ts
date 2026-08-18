@@ -1,5 +1,5 @@
 import axios, { AxiosInstance } from 'axios';
-import { EnvConfig } from '../types';
+import { EnvConfig } from '../types/index.js';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 

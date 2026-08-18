@@ -1,13 +1,13 @@
-import { AgentConfig, AgentResponse, ConversationMessage, LlmGenerationOptions, LlmMessage } from '../types';
-import { openRouterService } from './openrouter.service';
-import { RedisConfig } from '../config/redis';
-import { logger } from '../utils/logger';
+import { AgentConfig, AgentResponse, ConversationMessage, LlmGenerationOptions, LlmMessage } from '../types/index.js';
+import { openRouterService } from './openrouter.service.js';
+import { RedisConfig } from '../config/redis.js';
+import { logger } from '../utils/logger.js';
 import {
   buildReservationIntroMessage,
   evaluateReservationScope,
   isGreetingOrReservationOptInMessage,
-} from '../utils/reservation-scope';
-import { buildLanguageInstruction } from '../utils/prompts';
+} from '../utils/reservation-scope.js';
+import { buildLanguageInstruction } from '../utils/prompts.js';
 
 /**
  * Servicio para manejar interacciones con agentes de IA
