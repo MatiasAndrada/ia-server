@@ -8,7 +8,7 @@ import { RedisConfig } from '../config/redis.js';
 import { agentRegistry } from '../agents/index.js';
 import { BaileysMessage, BlockedDateEntry, Business, Customer, ReservationDraft, WaitlistEntry, WeeklyHours } from '../types/index.js';
 import { logger } from '../utils/logger.js';
-import { runWithLanguage, currentLanguage, SupportedLanguage } from '../i18n/index.js';
+import { runWithLanguage, currentLanguage, SupportedLanguage, DEFAULT_LANGUAGE } from '../i18n/index.js';
 import {
   cacheDetectedLanguage,
   persistLanguage,
@@ -221,6 +221,12 @@ export class WhatsAppHandler {
    * that fallback message is customer-facing too.
    */
   private async _processMessage(message: BaileysMessage): Promise<void> {
+    // Hoisted so the catch below can still answer in the customer's language.
+    // `runWithLanguage` is AsyncLocalStorage.run: the store is already gone by the
+    // time a rejection resumes here, so the catch would otherwise fall back to
+    // Spanish for an EN/PT customer. Re-entering the context explicitly fixes that.
+    let resolvedLanguage: SupportedLanguage = DEFAULT_LANGUAGE;
+
     try {
       const { from, message: messageText, businessId, fromMe } = message;
       if (this.shouldIgnoreMessage(from, messageText, fromMe, businessId)) {
@@ -269,15 +275,26 @@ export class WhatsAppHandler {
         messageText,
         businessStatus.language
       );
+      resolvedLanguage = language;
 
       await runWithLanguage(language, () =>
         this._processMessageLocalized(message, businessStatus, phone, conversationId, isExplicit)
       );
     } catch (error) {
-      logger.error('Error resolving conversation language', {
+      // The try above wraps the whole turn, not just language resolution — the old
+      // log label claimed otherwise and hid the real cause of every failure here.
+      logger.error('Unhandled error processing WhatsApp message', {
         error,
         businessId: message.businessId,
+        from: message.from,
       });
+
+      // Never leave the customer in silence: they can't tell a crash from being
+      // ignored. sendWhatsAppMessage swallows its own errors and dedupes identical
+      // text within DUPLICATE_OUTBOUND_WINDOW_MS, so this can't throw or spam.
+      await runWithLanguage(resolvedLanguage, () =>
+        this.sendWhatsAppMessage(message.businessId, message.from, templates.genericError())
+      );
     }
   }
 
@@ -928,6 +945,9 @@ export class WhatsAppHandler {
       });
     } catch (error) {
       logger.error('Error processing WhatsApp message', { error, message });
+
+      // Already inside the runWithLanguage context, so this comes out localized.
+      await this.sendWhatsAppMessage(message.businessId, message.from, templates.genericError());
     }
   }
 
@@ -1827,7 +1847,7 @@ export class WhatsAppHandler {
             if (weeklyHoursForDayOverride && Object.keys(weeklyHoursForDayOverride).length > 0) {
               const dayCheck = isDayOpen(dayOverride.baDate, weeklyHoursForDayOverride);
               if (!dayCheck.open) {
-                await this.sendWhatsAppMessage(businessId, jid, `❌ ${dayCheck.reason} ¿Para qué otro día querés reservar?`);
+                await this.sendWhatsAppMessage(businessId, jid, templates.dayClosedAskOtherDay(dayCheck.reason));
                 return true;
               }
             }
@@ -1963,7 +1983,7 @@ export class WhatsAppHandler {
                 const newAt = combineToUtcISO(targetBaDate, targetHour, targetMinute);
 
                 if (isInPast(newAt)) {
-                  await this.sendWhatsAppMessage(businessId, jid, '❌ Ese horario ya pasó. ¿Para qué otro día y hora lo querés?');
+                  await this.sendWhatsAppMessage(businessId, jid, templates.timeAlreadyPassed());
                   return true;
                 }
 
@@ -2030,7 +2050,7 @@ export class WhatsAppHandler {
                     openingMarginForConfirm,
                     closingMarginForConfirm
                   );
-                  carriedTimeHoursNote = `\n\nEse día atendemos de *${hoursRangeForDay}*. Decime otro horario si preferís.`;
+                  carriedTimeHoursNote = templates.carriedTimeHoursNote(hoursRangeForDay);
                 }
 
                 await this.sendWhatsAppMessage(
@@ -2041,7 +2061,7 @@ export class WhatsAppHandler {
                 return true;
               }
 
-              await this.sendWhatsAppMessage(businessId, jid, '❌ No entendí bien el día y la hora. ¿Para qué día y hora lo querés?');
+              await this.sendWhatsAppMessage(businessId, jid, templates.didNotUnderstandDayAndTime());
               return true;
             }
           }
@@ -2052,8 +2072,8 @@ export class WhatsAppHandler {
               await ReservationService.deleteDraft(conversationId);
               const label = describeScheduledAtUtc(proposedAt, nowInBuenosAires());
               const msg = ok
-                ? `✅ ¡Listo! Tu reserva fue actualizada para el ${label}.`
-                : '❌ No se pudo actualizar tu reserva. Por favor intentá de nuevo.';
+                ? templates.reservationRescheduled(label)
+                : templates.reservationUpdateFailed();
               await this.sendWhatsAppMessage(businessId, jid, msg);
             } else {
               await this.createAndNotifyReservation(conversationId, businessId, jid);
@@ -2088,7 +2108,7 @@ export class WhatsAppHandler {
                 dateDraft.confirmSlotOrigin = undefined;
                 await ReservationService.saveDraft(dateDraft);
               }
-              await this.sendWhatsAppMessage(businessId, jid, '¿A qué hora preferís entonces?');
+              await this.sendWhatsAppMessage(businessId, jid, templates.askTimeAgain());
             }
             return true;
           }
@@ -2097,9 +2117,7 @@ export class WhatsAppHandler {
           await this.sendWhatsAppMessage(
             businessId,
             jid,
-            fallbackLabel
-              ? `Respondé *sí* o *no*: ¿confirmamos la reserva para el *${fallbackLabel}*? (Si preferís otro día u horario, decímelo directamente).`
-              : 'Respondé *sí* para confirmar ese horario o *no* para elegir otro.'
+            templates.confirmSlotYesNoReminder(fallbackLabel)
           );
           return true;
         }
@@ -2111,7 +2129,7 @@ export class WhatsAppHandler {
 
           if (!reservationId) {
             await ReservationService.deleteDraft(conversationId);
-            await this.sendWhatsAppMessage(businessId, jid, 'Lo siento, no encontré tu reserva. Intentá de nuevo.');
+            await this.sendWhatsAppMessage(businessId, jid, templates.noActiveReservation());
             return true;
           }
 
@@ -3986,6 +4004,22 @@ export class WhatsAppHandler {
     return patterns.some((pattern) => pattern.test(normalized));
   }
 
+  /**
+   * True when this phone already has history WITH THIS BUSINESS — `customers` is
+   * one row per (phone, business_id), so a regular at another local still counts
+   * as new here.
+   *
+   * A bare row isn't enough: `handleCheckStatus`/`handleCancel` used to mint rows
+   * whose name was the literal 'Unknown', and rows created before that was fixed
+   * are still in production. Those are treated as new, since we know nothing real
+   * about the person.
+   */
+  private async isReturningCustomer(phone: string, businessId: string): Promise<boolean> {
+    const customer = await SupabaseService.getCustomerByPhone(phone, businessId);
+    const name = customer?.name?.trim();
+    return !!name && name.toLowerCase() !== 'unknown';
+  }
+
   private async handleActiveReservationsInquiry(
     businessId: string,
     jid: string,
@@ -3996,6 +4030,27 @@ export class WhatsAppHandler {
       const activeReservations = await SupabaseService.getActiveReservationsByPhone(phone, businessId);
 
       if (activeReservations.length === 0) {
+        // "No tenés reservas" es el mensaje correcto para un cliente que ya nos
+        // conoce, pero a alguien que nunca escribió no le dice quiénes somos ni
+        // qué puede hacer. Se bifurca según si el teléfono ya tiene historial
+        // CON ESTE NEGOCIO (customers es una fila por (phone, business_id)).
+        const isReturning = await this.isReturningCustomer(phone, businessId);
+
+        if (!isReturning) {
+          const business = await SupabaseService.getBusinessById(businessId);
+          await this.sendWhatsAppMessage(
+            businessId,
+            jid,
+            `${templates.firstContactNoReservations(business?.name || 'el local', business?.city)}\n\n` +
+              templates.languageChangeHint()
+          );
+          logger.info('First-contact welcome sent instead of the terse no-reservations reply', {
+            conversationId,
+            businessId,
+          });
+          return true;
+        }
+
         await this.sendWhatsAppMessage(
           businessId,
           jid,
@@ -5439,12 +5494,11 @@ export class WhatsAppHandler {
       // Extract normalized phone number for database lookups
       const phone = this.normalizeWhatsAppNumber(jid);
 
-      // Get or create customer
-      const customer = await SupabaseService.getOrCreateCustomer(
-        'Unknown',
-        phone,
-        businessId
-      );
+      // Read-only lookup on purpose: this path must never mint a customer row.
+      // It used to call getOrCreateCustomer('Unknown', ...), which created rows
+      // whose name was the literal 'Unknown' — and since that string is truthy,
+      // it poisoned every "is this a returning customer?" check downstream.
+      const customer = await SupabaseService.getCustomerByPhone(phone, businessId);
 
       if (!customer) {
         logger.warn('Customer not found', { businessId, phone });
@@ -5488,12 +5542,9 @@ export class WhatsAppHandler {
       // Extract normalized phone number for database lookups
       const phone = this.normalizeWhatsAppNumber(jid);
 
-      // Get customer
-      const customer = await SupabaseService.getOrCreateCustomer(
-        'Unknown',
-        phone,
-        businessId
-      );
+      // Read-only lookup — see handleCheckStatus: creating a placeholder customer
+      // here would misclassify a brand-new phone as a returning one.
+      const customer = await SupabaseService.getCustomerByPhone(phone, businessId);
 
       if (!customer) {
         logger.warn('Customer not found for cancellation', { businessId, phone });

@@ -406,6 +406,10 @@ export function inactiveFallback(): string {
   return catalog().inactiveFallback();
 }
 
+export function genericError(): string {
+  return catalog().genericError();
+}
+
 // ============================
 // Guards y prompts de flujo (T1b — consolidados desde whatsapp-handler)
 // ============================
@@ -470,6 +474,34 @@ export function confirmSlotPrompt(slotLabel: string, hoursNote: string): string 
   return catalog().confirmSlotPrompt(slotLabel, hoursNote);
 }
 
+export function dayClosedAskOtherDay(reason: string | undefined): string {
+  return catalog().dayClosedAskOtherDay(reason);
+}
+
+export function carriedTimeHoursNote(hoursRange: string): string {
+  return catalog().carriedTimeHoursNote(hoursRange);
+}
+
+export function didNotUnderstandDayAndTime(): string {
+  return catalog().didNotUnderstandDayAndTime();
+}
+
+export function askTimeAgain(): string {
+  return catalog().askTimeAgain();
+}
+
+export function confirmSlotYesNoReminder(slotLabel: string | null): string {
+  return catalog().confirmSlotYesNoReminder(slotLabel);
+}
+
+export function reservationRescheduled(whenLabel: string): string {
+  return catalog().reservationRescheduled(whenLabel);
+}
+
+export function reservationUpdateFailed(): string {
+  return catalog().reservationUpdateFailed();
+}
+
 export function askNewPartySize(): string {
   return catalog().askNewPartySize();
 }
@@ -500,4 +532,8 @@ export function timeAlreadyPassed(): string {
 
 export function noActiveReservationsInquiry(): string {
   return catalog().noActiveReservationsInquiry();
+}
+
+export function firstContactNoReservations(businessName: string, city?: string | null): string {
+  return catalog().firstContactNoReservations(businessName, city);
 }
