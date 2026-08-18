@@ -1,13 +1,10 @@
 import { Router } from 'express';
 import * as messagesController from '../controllers/messages.controller.js';
-import { authMiddleware } from '../middleware/auth.middleware.js';
-import { generalRateLimiter } from '../middleware/rateLimit.middleware.js';
 
 const router: Router = Router();
 
-// Apply middleware
-router.use(authMiddleware);
-router.use(generalRateLimiter);
+// authMiddleware y generalRateLimiter NO se montan acá — ver sessions.routes.ts:
+// index.ts ya los aplica sobre todo `/api`, y el doble montaje contaba doble.
 
 /**
  * Messages Routes
