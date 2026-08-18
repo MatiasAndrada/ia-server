@@ -1,7 +1,7 @@
-import { openRouterService } from './openrouter.service';
-import { buildReservationPlannerTool } from '../agents/reservation-tools';
-import { ConversationMessage, LlmMessage } from '../types';
-import { logger } from '../utils/logger';
+import { openRouterService } from './openrouter.service.js';
+import { buildReservationPlannerTool } from '../agents/reservation-tools.js';
+import { ConversationMessage, LlmMessage } from '../types/index.js';
+import { logger } from '../utils/logger.js';
 
 export type PlannedActionIntent = 'create' | 'cancel' | 'modify' | 'query' | 'other';
 

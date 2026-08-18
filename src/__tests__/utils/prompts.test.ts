@@ -1,5 +1,5 @@
-import { buildSystemPrompt, buildIntentPrompt, buildFallbackResponse, formatWeeklyHoursForPrompt } from '../../utils/prompts';
-import { BusinessContext, WeeklyHours } from '../../types';
+import { buildSystemPrompt, buildIntentPrompt, buildFallbackResponse, formatWeeklyHoursForPrompt } from '../../utils/prompts.js';
+import { BusinessContext, WeeklyHours } from '../../types/index.js';
 
 describe('Prompts Utils', () => {
   describe('buildSystemPrompt', () => {

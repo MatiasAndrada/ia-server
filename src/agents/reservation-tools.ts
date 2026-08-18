@@ -1,4 +1,4 @@
-import { LlmToolDefinition } from '../types';
+import { LlmToolDefinition } from '../types/index.js';
 
 /**
  * Tool used to give the deterministic reservation flow (whatsapp-handler.service.ts)

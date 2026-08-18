@@ -1,6 +1,6 @@
-import { SupabaseConfig } from '../config/supabase';
-import type { Database } from '../types/supabase';
-import { formatName } from '../utils/formatters';
+import { SupabaseConfig } from '../config/supabase.js';
+import type { Database } from '../types/supabase.js';
+import { formatName } from '../utils/formatters.js';
 import {
   CreateReservationRequest,
   CreateReservationResponse,
@@ -10,11 +10,11 @@ import {
   Table,
   WaitlistEntry,
   BlockedDateEntry,
-} from '../types';
-import { logger } from '../utils/logger';
-import { openRouterService } from './openrouter.service';
-import { describeScheduledAtUtc, nowInBuenosAires } from '../utils/reservation-datetime';
-import * as templates from '../utils/message-templates';
+} from '../types/index.js';
+import { logger } from '../utils/logger.js';
+import { openRouterService } from './openrouter.service.js';
+import { describeScheduledAtUtc, nowInBuenosAires } from '../utils/reservation-datetime.js';
+import * as templates from '../utils/message-templates.js';
 
 const RESERVATION_OVERLAP_MINUTES = 120;
 const RESERVATION_OVERLAP_MS = RESERVATION_OVERLAP_MINUTES * 60 * 1000;

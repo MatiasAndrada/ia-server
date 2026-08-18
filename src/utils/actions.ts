@@ -1,5 +1,5 @@
-import { Action, ActionType, LlmToolCall, LlmToolDefinition } from '../types';
-import { logger } from './logger';
+import { Action, ActionType, LlmToolCall, LlmToolDefinition } from '../types/index.js';
+import { logger } from './logger.js';
 
 const VALID_ACTION_TYPES: ActionType[] = ['REGISTER', 'CHECK_STATUS', 'CANCEL', 'INFO_REQUEST'];
 

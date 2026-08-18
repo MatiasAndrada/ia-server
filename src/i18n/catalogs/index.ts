@@ -1,10 +1,10 @@
-import { SupportedLanguage } from '../languages';
-import { currentLanguage } from '../context';
-import { esCatalog, type MessageCatalog } from './es';
-import { enCatalog } from './en';
-import { ptCatalog } from './pt';
+import { SupportedLanguage } from '../languages.js';
+import { currentLanguage } from '../context.js';
+import { esCatalog, type MessageCatalog } from './es.js';
+import { enCatalog } from './en.js';
+import { ptCatalog } from './pt.js';
 
-export type { MessageCatalog } from './es';
+export type { MessageCatalog } from './es.js';
 
 const CATALOGS: Record<SupportedLanguage, MessageCatalog> = {
   es: esCatalog,

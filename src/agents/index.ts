@@ -1,6 +1,6 @@
-import { AgentConfig, AgentListItem } from '../types';
-import { waitlistAgent } from './waitlist.agent';
-import { logger } from '../utils/logger';
+import { AgentConfig, AgentListItem } from '../types/index.js';
+import { waitlistAgent } from './waitlist.agent.js';
+import { logger } from '../utils/logger.js';
 
 /**
  * Registro centralizado de agentes disponibles

@@ -1,5 +1,5 @@
 import rateLimit from 'express-rate-limit';
-import { logger } from '../utils/logger';
+import { logger } from '../utils/logger.js';
 
 /**
  * General rate limiter: 100 requests per minute per IP

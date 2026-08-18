@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
-import { BaileysService } from '../services/baileys.service';
-import { logger } from '../utils/logger';
+import { BaileysService } from '../services/baileys.service.js';
+import { logger } from '../utils/logger.js';
 
 const baileysService = BaileysService.getInstance();
 

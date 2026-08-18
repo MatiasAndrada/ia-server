@@ -1,4 +1,4 @@
-import { AgentConfig } from '../types';
+import { AgentConfig } from '../types/index.js';
 
 export const waitlistAgent: AgentConfig = {
   id: 'waitlist',

@@ -16,9 +16,9 @@ jest.mock('../../config/redis', () => ({
 
 jest.mock('../../utils/logger');
 
-import { agentService } from '../../services/agent.service';
-import { openRouterService } from '../../services/openrouter.service';
-import { waitlistAgent } from '../../agents/waitlist.agent';
+import { agentService } from '../../services/agent.service.js';
+import { openRouterService } from '../../services/openrouter.service.js';
+import { waitlistAgent } from '../../agents/waitlist.agent.js';
 
 describe('AgentService reservation scope guard', () => {
   beforeEach(() => {

@@ -20,8 +20,8 @@ import {
   formatBookableDays,
   isDayOpen,
   checkBusinessHours,
-} from '../../utils/reservation-datetime';
-import type { WeeklyHours } from '../../types';
+} from '../../utils/reservation-datetime.js';
+import type { WeeklyHours } from '../../types/index.js';
 
 // Thursday 2026-07-02, 12:00 BA wall-clock time (represented per the module's
 // "UTC getters reflect BA local time" convention).

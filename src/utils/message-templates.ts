@@ -15,7 +15,7 @@
  * un turno de conversación), usar getTemplates(lang) de src/i18n directamente.
  */
 
-import { catalog } from '../i18n/catalogs';
+import { catalog } from '../i18n/catalogs/index.js';
 
 // ============================
 // M0 — Selección de idioma

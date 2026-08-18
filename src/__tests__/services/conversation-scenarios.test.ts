@@ -10,22 +10,22 @@
  *  - Correctly manages draft state
  */
 
-import { WhatsAppHandler } from '../../services/whatsapp-handler.service';
-import { SupabaseService } from '../../services/supabase.service';
-import { ReservationService } from '../../services/reservation.service';
-import { agentService } from '../../services/agent.service';
-import { agentRegistry } from '../../agents';
+import { WhatsAppHandler } from '../../services/whatsapp-handler.service.js';
+import { SupabaseService } from '../../services/supabase.service.js';
+import { ReservationService } from '../../services/reservation.service.js';
+import { agentService } from '../../services/agent.service.js';
+import { agentRegistry } from '../../agents/index.js';
 import {
   ALL_SCENARIOS,
   ConversationScenario,
   getScenariosByCategory,
   ScenarioCategory,
-} from '../scenarios/conversation-scenarios';
+} from '../scenarios/conversation-scenarios.js';
 import {
   isGreetingOrReservationOptInMessage,
   buildReservationIntroMessage,
   evaluateReservationScope,
-} from '../../utils/reservation-scope';
+} from '../../utils/reservation-scope.js';
 
 jest.mock('../../utils/logger');
 

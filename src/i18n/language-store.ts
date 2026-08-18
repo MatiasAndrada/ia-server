@@ -1,7 +1,7 @@
-import { RedisConfig } from '../config/redis';
-import { SupabaseService } from '../services/supabase.service';
-import { logger } from '../utils/logger';
-import { coerceLanguage, DEFAULT_LANGUAGE, SupportedLanguage } from './languages';
+import { RedisConfig } from '../config/redis.js';
+import { SupabaseService } from '../services/supabase.service.js';
+import { logger } from '../utils/logger.js';
+import { coerceLanguage, DEFAULT_LANGUAGE, SupportedLanguage } from './languages.js';
 
 /**
  * Persistencia y resolución del idioma preferido de cada cliente.

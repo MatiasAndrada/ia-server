@@ -1,7 +1,7 @@
-import { openRouterService } from './openrouter.service';
-import { IntentType, IntentResponse, BusinessContext } from '../types';
-import { buildIntentPrompt } from '../utils/prompts';
-import { logger } from '../utils/logger';
+import { openRouterService } from './openrouter.service.js';
+import { IntentType, IntentResponse, BusinessContext } from '../types/index.js';
+import { buildIntentPrompt } from '../utils/prompts.js';
+import { logger } from '../utils/logger.js';
 
 export class IntentService {
   /**

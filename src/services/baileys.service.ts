@@ -1,11 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as QRCode from 'qrcode-terminal';
-import { logger } from '../utils/logger';
-import { BaileysSession, BaileysMessage } from '../types';
-import { SupabaseService } from './supabase.service';
-import { WhatsAppHandler } from './whatsapp-handler.service';
-import { RedisConfig } from '../config/redis';
+import { logger } from '../utils/logger.js';
+import { BaileysSession, BaileysMessage } from '../types/index.js';
+import { SupabaseService } from './supabase.service.js';
+import { WhatsAppHandler } from './whatsapp-handler.service.js';
+import { RedisConfig } from '../config/redis.js';
 
 // Dynamic import for Baileys ES Module compatibility
 let makeWASocket: any;

@@ -1,4 +1,4 @@
-import { OpenRouterConfig } from '../config/openrouter';
+import { OpenRouterConfig } from '../config/openrouter.js';
 import {
   LlmGenerationOptions,
   LlmMessage,
@@ -6,9 +6,9 @@ import {
   LlmToolDefinition,
   OpenRouterChatCompletionRequest,
   OpenRouterChatCompletionResponse,
-} from '../types';
-import { logger } from '../utils/logger';
-import { buildBlockedDateReasonPrompt, buildFallbackResponse } from '../utils/prompts';
+} from '../types/index.js';
+import { logger } from '../utils/logger.js';
+import { buildBlockedDateReasonPrompt, buildFallbackResponse } from '../utils/prompts.js';
 import { AxiosError } from 'axios';
 
 const DEFAULT_GENERATION_OPTIONS: LlmGenerationOptions = {

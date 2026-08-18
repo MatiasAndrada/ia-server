@@ -4,7 +4,7 @@ import {
   calculateConfidence,
   extractEntities,
   cleanResponseText,
-} from '../../utils/actions';
+} from '../../utils/actions.js';
 
 describe('Actions Utils', () => {
   describe('buildActionTool', () => {

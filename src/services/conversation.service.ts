@@ -1,6 +1,6 @@
-import { RedisConfig } from '../config/redis';
-import { ConversationMessage, ConversationHistory } from '../types';
-import { logger } from '../utils/logger';
+import { RedisConfig } from '../config/redis.js';
+import { ConversationMessage, ConversationHistory } from '../types/index.js';
+import { logger } from '../utils/logger.js';
 
 export class ConversationService {
   private readonly keyPrefix = 'conversation:';

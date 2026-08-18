@@ -9,8 +9,8 @@
  * reduz a ambiguidade das palavras-chave entre os dois idiomas.
  */
 
-import type { MessageCatalog } from './es';
-import { buildLanguageMenuLines } from './es';
+import type { MessageCatalog } from './es.js';
+import { buildLanguageMenuLines } from './es.js';
 
 /**
  * `checkBusinessHours` puede no devolver motivo. Antes se interpolaba directo y

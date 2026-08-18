@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
-import { BaileysService } from '../services/baileys.service';
-import { RedisConfig } from '../config/redis';
-import { logger } from '../utils/logger';
+import { BaileysService } from '../services/baileys.service.js';
+import { RedisConfig } from '../config/redis.js';
+import { logger } from '../utils/logger.js';
 
 const baileysService = BaileysService.getInstance();
 

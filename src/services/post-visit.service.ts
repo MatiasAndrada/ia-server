@@ -1,9 +1,9 @@
-import { RedisConfig } from '../config/redis';
-import { SupabaseConfig } from '../config/supabase';
-import { logger } from '../utils/logger';
-import { getTemplates } from '../i18n';
-import { resolveLanguage } from '../i18n/language-store';
-import type { Database } from '../types/supabase';
+import { RedisConfig } from '../config/redis.js';
+import { SupabaseConfig } from '../config/supabase.js';
+import { logger } from '../utils/logger.js';
+import { getTemplates } from '../i18n/index.js';
+import { resolveLanguage } from '../i18n/language-store.js';
+import type { Database } from '../types/supabase.js';
 
 type CustomersRow = Database['public']['Tables']['customers']['Row'];
 
@@ -185,7 +185,7 @@ export class PostVisitService {
     const { language } = await resolveLanguage(businessId, customer.phone);
     const message = getTemplates(language).postVisitMessage();
 
-    const { BaileysService } = await import('./baileys.service');
+    const { BaileysService } = await import('./baileys.service.js');
     const baileys = BaileysService.getInstance();
     const sent = await baileys.sendMessage(businessId, recipientJid, message);
 

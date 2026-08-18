@@ -1,7 +1,7 @@
 import { Router } from 'express';
-import * as sessionController from '../controllers/session.controller';
-import { authMiddleware } from '../middleware/auth.middleware';
-import { generalRateLimiter } from '../middleware/rateLimit.middleware';
+import * as sessionController from '../controllers/session.controller.js';
+import { authMiddleware } from '../middleware/auth.middleware.js';
+import { generalRateLimiter } from '../middleware/rateLimit.middleware.js';
 
 const router: Router = Router();
 

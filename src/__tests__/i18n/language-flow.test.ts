@@ -7,12 +7,12 @@
  * el draft, y que un cliente recurrente no vuelva a ver el menú.
  */
 
-import { WhatsAppHandler } from '../../services/whatsapp-handler.service';
-import { SupabaseService } from '../../services/supabase.service';
-import { ReservationService } from '../../services/reservation.service';
-import { agentService } from '../../services/agent.service';
-import * as languageStore from '../../i18n/language-store';
-import { ReservationDraft } from '../../types';
+import { WhatsAppHandler } from '../../services/whatsapp-handler.service.js';
+import { SupabaseService } from '../../services/supabase.service.js';
+import { ReservationService } from '../../services/reservation.service.js';
+import { agentService } from '../../services/agent.service.js';
+import * as languageStore from '../../i18n/language-store.js';
+import { ReservationDraft } from '../../types/index.js';
 
 jest.mock('../../utils/logger');
 

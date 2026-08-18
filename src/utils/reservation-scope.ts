@@ -1,7 +1,7 @@
-import { ReservationDraft } from '../types';
-import { isMultilingualGreeting } from '../i18n/keywords';
-import { catalog } from '../i18n/catalogs';
-import { normalizeTemporalTokens } from '../i18n/date-normalization';
+import { ReservationDraft } from '../types/index.js';
+import { isMultilingualGreeting } from '../i18n/keywords.js';
+import { catalog } from '../i18n/catalogs/index.js';
+import { normalizeTemporalTokens } from '../i18n/date-normalization.js';
 
 export type ReservationScopeDecision = 'allow' | 'off_topic' | 'out_of_window';
 

@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
-import { ReservationService } from '../services/reservation.service';
-import { SupabaseService } from '../services/supabase.service';
-import { logger } from '../utils/logger';
+import { ReservationService } from '../services/reservation.service.js';
+import { SupabaseService } from '../services/supabase.service.js';
+import { logger } from '../utils/logger.js';
 
 /**
  * Get reservation draft status

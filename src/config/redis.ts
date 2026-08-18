@@ -1,5 +1,5 @@
 import { createClient, RedisClientType } from 'redis';
-import { logger } from '../utils/logger';
+import { logger } from '../utils/logger.js';
 
 export class RedisConfig {
   private static client: RedisClientType;

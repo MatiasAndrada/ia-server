@@ -1,8 +1,8 @@
 import request from 'supertest';
 import express, { Express } from 'express';
-import { chatHandler, analyzeIntentHandler } from '../../controllers/chat.controller';
-import { healthHandler } from '../../controllers/health.controller';
-import { validate, chatSchema } from '../../middleware/validation.middleware';
+import { chatHandler, analyzeIntentHandler } from '../../controllers/chat.controller.js';
+import { healthHandler } from '../../controllers/health.controller.js';
+import { validate, chatSchema } from '../../middleware/validation.middleware.js';
 
 // Mock services
 jest.mock('../../services/openrouter.service');
@@ -12,11 +12,11 @@ jest.mock('../../config/redis');
 jest.mock('../../config/openrouter');
 jest.mock('../../utils/logger');
 
-import { openRouterService } from '../../services/openrouter.service';
-import { conversationService } from '../../services/conversation.service';
-import { intentService } from '../../services/intent.service';
-import { RedisConfig } from '../../config/redis';
-import { OpenRouterConfig } from '../../config/openrouter';
+import { openRouterService } from '../../services/openrouter.service.js';
+import { conversationService } from '../../services/conversation.service.js';
+import { intentService } from '../../services/intent.service.js';
+import { RedisConfig } from '../../config/redis.js';
+import { OpenRouterConfig } from '../../config/openrouter.js';
 
 describe('API Integration Tests', () => {
   let app: Express;
