@@ -410,7 +410,7 @@ export class WhatsAppHandler {
     await this.sendWhatsAppMessage(
       businessId,
       jid,
-      templates.languageWelcomeMenu(business?.name || 'el local', business?.city)
+      templates.languageWelcomeMenu(business?.name || 'el local')
     );
     logger.info('Language menu sent on first contact (non-greeting message)', {
       conversationId,
@@ -4041,7 +4041,7 @@ export class WhatsAppHandler {
           await this.sendWhatsAppMessage(
             businessId,
             jid,
-            `${templates.firstContactNoReservations(business?.name || 'el local', business?.city)}\n\n` +
+            `${templates.firstContactNoReservations(business?.name || 'el local')}\n\n` +
               templates.languageChangeHint()
           );
           logger.info('First-contact welcome sent instead of the terse no-reservations reply', {
@@ -4237,7 +4237,7 @@ export class WhatsAppHandler {
       await this.sendWhatsAppMessage(
         businessId,
         jid,
-        templates.languageWelcomeMenu(business?.name || 'el local', business?.city)
+        templates.languageWelcomeMenu(business?.name || 'el local')
       );
       logger.info('Language menu sent on first contact', { conversationId, businessId });
       return;
