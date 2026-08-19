@@ -21,8 +21,8 @@ import { catalog } from '../i18n/catalogs/index.js';
 // M0 — Selección de idioma
 // ============================
 
-export function languageWelcomeMenu(businessName: string, city?: string | null): string {
-  return catalog().languageWelcomeMenu(businessName, city);
+export function languageWelcomeMenu(businessName: string): string {
+  return catalog().languageWelcomeMenu(businessName);
 }
 
 export function languageChanged(): string {
@@ -534,6 +534,6 @@ export function noActiveReservationsInquiry(): string {
   return catalog().noActiveReservationsInquiry();
 }
 
-export function firstContactNoReservations(businessName: string, city?: string | null): string {
-  return catalog().firstContactNoReservations(businessName, city);
+export function firstContactNoReservations(businessName: string): string {
+  return catalog().firstContactNoReservations(businessName);
 }
