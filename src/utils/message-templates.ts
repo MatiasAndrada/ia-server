@@ -157,8 +157,16 @@ export function partySizeUpdated(partySize: number): string {
   return catalog().partySizeUpdated(partySize);
 }
 
+export function partySizeUpdateFailed(): string {
+  return catalog().partySizeUpdateFailed();
+}
+
 export function scheduleUpdated(whenLabel: string): string {
   return catalog().scheduleUpdated(whenLabel);
+}
+
+export function scheduleRevertedToInstant(): string {
+  return catalog().scheduleRevertedToInstant();
 }
 
 // ============================
@@ -244,6 +252,38 @@ export function reservationOverlapConflict(
 
 export function noActiveReservation(): string {
   return catalog().noActiveReservation();
+}
+
+export function newReservationOverlapReminder(
+  conflictingWhenLabel: string,
+  conflictingDisplayCode: string | null,
+  conflictingStatusLabel: string
+): string {
+  return catalog().newReservationOverlapReminder(
+    conflictingWhenLabel,
+    conflictingDisplayCode,
+    conflictingStatusLabel
+  );
+}
+
+// ============================
+// Mensajes multi-acción (cancelar/consultar varias reservas en un turno)
+// ============================
+
+export function cancelTargetNotFound(hasActiveReservations: boolean): string {
+  return catalog().cancelTargetNotFound(hasActiveReservations);
+}
+
+export function reservationCancelledInline(whenLabel: string, displayCode: string | null): string {
+  return catalog().reservationCancelledInline(whenLabel, displayCode);
+}
+
+export function cancelActionFailed(): string {
+  return catalog().cancelActionFailed();
+}
+
+export function noActiveReservationsShort(): string {
+  return catalog().noActiveReservationsShort();
 }
 
 // ============================
@@ -335,6 +375,15 @@ export function tableReadyNotice(): string {
   return catalog().tableReadyNotice();
 }
 
+/** Respuesta a un mensaje de cortesía (agradecimiento u "ok") tras una reserva ya activa. */
+export function postReservationCourtesyReply(
+  reservationRef: string,
+  isPending: boolean,
+  isGratitude: boolean
+): string {
+  return catalog().postReservationCourtesyReply(reservationRef, isPending, isGratitude);
+}
+
 // ============================
 // M11 — Bienvenida al restaurante
 // ============================
@@ -420,6 +469,10 @@ export function invalidNameRetry(): string {
 
 export function askCorrectName(): string {
   return catalog().askCorrectName();
+}
+
+export function askCorrectNameField(field: 'full' | 'lastName'): string {
+  return catalog().askCorrectNameField(field);
 }
 
 export function invalidLastNameRetry(): string {

@@ -8,7 +8,7 @@ import { RedisConfig } from '../config/redis.js';
 import { agentRegistry } from '../agents/index.js';
 import { BaileysMessage, BlockedDateEntry, Business, Customer, ReservationDraft, WaitlistEntry, WeeklyHours } from '../types/index.js';
 import { logger } from '../utils/logger.js';
-import { runWithLanguage, currentLanguage, SupportedLanguage, DEFAULT_LANGUAGE } from '../i18n/index.js';
+import { runWithLanguage, currentLanguage, SupportedLanguage, DEFAULT_LANGUAGE, ALL_CATALOGS } from '../i18n/index.js';
 import {
   cacheDetectedLanguage,
   persistLanguage,
@@ -77,8 +77,13 @@ type ActiveReservationSnapshot = {
 const DEBOUNCE_MS = 1500;
 const DUPLICATE_OUTBOUND_WINDOW_MS = 10000;
 const INACTIVE_FALLBACK_TTL_SECONDS = 120;
-const INACTIVE_FALLBACK_MESSAGE =
-  'Lo siento, nuestro servicio de WhatsApp no está disponible en este momento. Por favor intenta más tarde.';
+/**
+ * Todas las variantes localizadas de `inactiveFallback()` (una por idioma
+ * soportado), para que `sanitizeAgentResponse` pueda reconocer y limpiar el
+ * fallback sin importar en qué idioma haya salido — un regex fijo en español
+ * no detectaba la variante en/pt y la dejaba duplicada en la respuesta final.
+ */
+const INACTIVE_FALLBACK_MESSAGES = Object.values(ALL_CATALOGS).map((c) => c.inactiveFallback());
 
 export class WhatsAppHandler {
   private baileysService: BaileysService;
@@ -1288,8 +1293,8 @@ export class WhatsAppHandler {
               );
               await ReservationService.deleteDraft(conversationId);
               const msg = ok
-                ? `✅ ¡Listo! Tu reserva fue actualizada a *${resolvedPartySize}* personas.`
-                : '❌ No se pudo actualizar la cantidad. Por favor intentá de nuevo.';
+                ? templates.partySizeUpdated(resolvedPartySize)
+                : templates.partySizeUpdateFailed();
               await this.sendWhatsAppMessage(businessId, jid, msg);
               return true;
             }
@@ -1357,8 +1362,8 @@ export class WhatsAppHandler {
               const ok = await SupabaseService.updateReservationSchedule(draft.existingReservationId, null);
               await ReservationService.deleteDraft(conversationId);
               const msg = ok
-                ? '✅ ¡Listo! Tu reserva vuelve a ser para el turno actual.'
-                : '❌ No se pudo actualizar tu reserva. Por favor intentá de nuevo.';
+                ? templates.scheduleRevertedToInstant()
+                : templates.reservationUpdateFailed();
               await this.sendWhatsAppMessage(businessId, jid, msg);
               return true;
             }
@@ -2329,9 +2334,7 @@ export class WhatsAppHandler {
             await this.sendWhatsAppMessage(
               businessId,
               jid,
-              draft.nameEditField === 'lastName'
-                ? '¿Cuál es tu apellido correcto?'
-                : '¿Cuál es tu nombre y apellido correcto?'
+              templates.askCorrectNameField(draft.nameEditField === 'lastName' ? 'lastName' : 'full')
             );
             return true;
           }
@@ -3658,8 +3661,11 @@ export class WhatsAppHandler {
 
   private sanitizeAgentResponse(response: string, draft: ReservationDraft | null): string {
     const trimmedResponse = response.trim();
-    const fallbackEscaped = INACTIVE_FALLBACK_MESSAGE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    let sanitized = trimmedResponse.replace(new RegExp(fallbackEscaped, 'gi'), '').trim();
+    let sanitized = trimmedResponse;
+    for (const fallbackMessage of INACTIVE_FALLBACK_MESSAGES) {
+      const fallbackEscaped = fallbackMessage.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      sanitized = sanitized.replace(new RegExp(fallbackEscaped, 'gi'), '').trim();
+    }
 
     const hasUnresolvedPlaceholders = /\{(?:name|qty)\}|\[(?:NOMBRE|CANTIDAD)\]/i.test(sanitized);
     if (hasUnresolvedPlaceholders) {
@@ -3722,15 +3728,12 @@ export class WhatsAppHandler {
       }
 
       const statusLabel = this.getReservationStatusLabel(conflictingReservation.status);
-      const displayCodeText = conflictingReservation.display_code
-        ? ` (código *${conflictingReservation.display_code}*)`
-        : '';
 
-      const reminderMessage =
-        `⚠️ Tu nueva reserva se superpone con una reserva activa para ${this.describeReservationWhen(conflictingReservation.scheduled_at)}` +
-        `${displayCodeText} con estado *${statusLabel}*.` +
-        `\n\nNo puedo crearla porque debe haber al menos 120 minutos entre reservas.` +
-        `\n\nSi querés, respondé *CANCELAR* para anularla y después crear una nueva.`;
+      const reminderMessage = templates.newReservationOverlapReminder(
+        this.describeReservationWhen(conflictingReservation.scheduled_at),
+        conflictingReservation.display_code,
+        statusLabel
+      );
 
       await this.sendWhatsAppMessage(businessId, jid, reminderMessage);
 
@@ -4363,27 +4366,25 @@ export class WhatsAppHandler {
         if (action.intent === 'cancel') {
           const target = this.matchTargetReservation(action, activeReservations);
           if (!target) {
-            summaryLines.push(
-              activeReservations.length === 0
-                ? '⚠️ No encontré una reserva activa para cancelar.'
-                : '⚠️ No pude identificar cuál reserva cancelar; escribí *CANCELAR* y te muestro tus reservas.'
-            );
+            summaryLines.push(templates.cancelTargetNotFound(activeReservations.length > 0));
             continue;
           }
           const ok = await SupabaseService.updateReservationStatus(target.id, 'CANCELLED');
           if (ok) {
             summaryLines.push(
-              `✅ Cancelé tu reserva para ${this.describeReservationWhen(target.scheduled_at)}` +
-                `${target.display_code ? ` (código *${target.display_code}*)` : ''}.`
+              templates.reservationCancelledInline(
+                this.describeReservationWhen(target.scheduled_at),
+                target.display_code
+              )
             );
             activeReservations = activeReservations.filter((r) => r.id !== target.id);
           } else {
-            summaryLines.push('❌ No pude cancelar una de las reservas. Intentá de nuevo.');
+            summaryLines.push(templates.cancelActionFailed());
           }
         } else if (action.intent === 'query') {
           summaryLines.push(
             activeReservations.length === 0
-              ? 'No tenés reservas activas en este momento.'
+              ? templates.noActiveReservationsShort()
               : this.describeActiveReservationsInline(activeReservations)
           );
         }
@@ -4614,9 +4615,7 @@ export class WhatsAppHandler {
         await this.sendWhatsAppMessage(
           businessId,
           jid,
-          field === 'lastName'
-            ? '¿Cuál es tu apellido correcto?'
-            : '¿Cuál es tu nombre y apellido correcto?'
+          templates.askCorrectNameField(field)
         );
         return true;
       }
@@ -4938,14 +4937,11 @@ export class WhatsAppHandler {
 
       const isGratitude = this.isGratitudeMessage(messageText);
 
-      const response =
-        activeReservation.status === 'WAITING'
-          ? isGratitude
-            ? `¡De nada! 🙌\n\nTu reserva${reservationRef} sigue pendiente de confirmación. Apenas confirmen, te avisamos por acá.`
-            : `¡Perfecto! 🙌\n\nTu reserva${reservationRef} sigue pendiente de confirmación. Apenas confirmen, te avisamos por acá.`
-          : isGratitude
-            ? `¡De nada! 🙌\n\nTu reserva${reservationRef} ya está confirmada. Si necesitas algo más, estoy para ayudarte.`
-            : `¡Genial! 🙌\n\nTu reserva${reservationRef} ya está confirmada. Si necesitas algo más, estoy para ayudarte.`;
+      const response = templates.postReservationCourtesyReply(
+        reservationRef,
+        activeReservation.status === 'WAITING',
+        isGratitude
+      );
 
       await this.sendWhatsAppMessage(businessId, jid, response);
       return true;
