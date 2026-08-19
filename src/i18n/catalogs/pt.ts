@@ -249,8 +249,16 @@ export const ptCatalog: MessageCatalog = {
     return `✅ Pronto! Sua reserva foi atualizada para *${partySize}* pessoas.`;
   },
 
+  partySizeUpdateFailed(): string {
+    return `❌ Não foi possível atualizar a quantidade. Por favor tente novamente.`;
+  },
+
   scheduleUpdated(whenLabel: string): string {
     return `✅ Pronto! Sua reserva foi atualizada para ${whenLabel}.`;
+  },
+
+  scheduleRevertedToInstant(): string {
+    return `✅ Pronto! Sua reserva volta a ser para o turno atual.`;
   },
 
   // ============================
@@ -369,6 +377,43 @@ export const ptCatalog: MessageCatalog = {
     return `Não encontrei nenhuma reserva ativa. Posso ajudar em mais alguma coisa?`;
   },
 
+  newReservationOverlapReminder(
+    conflictingWhenLabel: string,
+    conflictingDisplayCode: string | null,
+    conflictingStatusLabel: string
+  ): string {
+    const displayCodeText = conflictingDisplayCode ? ` (código *${conflictingDisplayCode}*)` : '';
+    return (
+      `⚠️ Sua nova reserva se sobrepõe a uma reserva ativa para ${conflictingWhenLabel}` +
+      `${displayCodeText} com status *${conflictingStatusLabel}*.` +
+      `\n\nNão posso criá-la porque deve haver pelo menos 120 minutos entre reservas.` +
+      `\n\nSe quiser, responda *CANCELAR* para anulá-la e depois criar uma nova.`
+    );
+  },
+
+  // ============================
+  // Mensagens multi-ação (cancelar/consultar várias reservas em um turno)
+  // ============================
+
+  cancelTargetNotFound(hasActiveReservations: boolean): string {
+    return hasActiveReservations
+      ? `⚠️ Não consegui identificar qual reserva cancelar; escreva *CANCELAR* e mostro suas reservas.`
+      : `⚠️ Não encontrei uma reserva ativa para cancelar.`;
+  },
+
+  reservationCancelledInline(whenLabel: string, displayCode: string | null): string {
+    const codeText = displayCode ? ` (código *${displayCode}*)` : '';
+    return `✅ Cancelei sua reserva para ${whenLabel}${codeText}.`;
+  },
+
+  cancelActionFailed(): string {
+    return `❌ Não consegui cancelar uma das reservas. Tente novamente.`;
+  },
+
+  noActiveReservationsShort(): string {
+    return `Você não tem reservas ativas neste momento.`;
+  },
+
   // ============================
   // M8 — Horários indisponíveis
   // ============================
@@ -461,6 +506,12 @@ export const ptCatalog: MessageCatalog = {
 
   askCorrectName(): string {
     return `Qual é o seu nome correto para continuarmos com a reserva?`;
+  },
+
+  askCorrectNameField(field: 'full' | 'lastName'): string {
+    return field === 'lastName'
+      ? `Qual é o seu sobrenome correto?`
+      : `Qual é o seu nome e sobrenome corretos?`;
   },
 
   invalidLastNameRetry(): string {
@@ -616,6 +667,17 @@ export const ptCatalog: MessageCatalog = {
       `Você pode ocupá-la nos próximos 20 minutos.\n` +
       `Depois desse tempo, a reserva pode ser liberada.`
     );
+  },
+
+  postReservationCourtesyReply(reservationRef: string, isPending: boolean, isGratitude: boolean): string {
+    if (isPending) {
+      return isGratitude
+        ? `De nada! 🙌\n\nSua reserva${reservationRef} continua pendente de confirmação. Assim que confirmarem, avisamos por aqui.`
+        : `Perfeito! 🙌\n\nSua reserva${reservationRef} continua pendente de confirmação. Assim que confirmarem, avisamos por aqui.`;
+    }
+    return isGratitude
+      ? `De nada! 🙌\n\nSua reserva${reservationRef} já está confirmada. Se precisar de mais alguma coisa, estou à disposição.`
+      : `Ótimo! 🙌\n\nSua reserva${reservationRef} já está confirmada. Se precisar de mais alguma coisa, estou à disposição.`;
   },
 
   // ============================

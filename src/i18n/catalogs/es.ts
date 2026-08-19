@@ -264,8 +264,17 @@ export const esCatalog = {
     return `✅ ¡Listo! Tu reserva fue actualizada a *${partySize}* personas.`;
   },
 
+  partySizeUpdateFailed(): string {
+    return `❌ No se pudo actualizar la cantidad. Por favor intentá de nuevo.`;
+  },
+
   scheduleUpdated(whenLabel: string): string {
     return `✅ ¡Listo! Tu reserva fue actualizada para el ${whenLabel}.`;
+  },
+
+  /** La reserva de edición vuelve a ser instantánea (sin fecha/hora puntual). */
+  scheduleRevertedToInstant(): string {
+    return `✅ ¡Listo! Tu reserva vuelve a ser para el turno actual.`;
   },
 
   // ============================
@@ -388,6 +397,51 @@ export const esCatalog = {
     return `No encontré ninguna reserva activa. ¿Algo más en lo que pueda ayudarte?`;
   },
 
+  /**
+   * Igual que {@link reservationOverlapConflict} pero para el guard que corre
+   * ANTES de empezar el draft de una reserva nueva (enforceSingleActiveReservationPolicy):
+   * todavía no hay un requestedWhenLabel puntual, así que el texto habla de
+   * "tu nueva reserva" en general.
+   */
+  newReservationOverlapReminder(
+    conflictingWhenLabel: string,
+    conflictingDisplayCode: string | null,
+    conflictingStatusLabel: string
+  ): string {
+    const displayCodeText = conflictingDisplayCode ? ` (código *${conflictingDisplayCode}*)` : '';
+    return (
+      `⚠️ Tu nueva reserva se superpone con una reserva activa para ${conflictingWhenLabel}` +
+      `${displayCodeText} con estado *${conflictingStatusLabel}*.` +
+      `\n\nNo puedo crearla porque debe haber al menos 120 minutos entre reservas.` +
+      `\n\nSi querés, respondé *CANCELAR* para anularla y después crear una nueva.`
+    );
+  },
+
+  // ============================
+  // Mensajes multi-acción (cancelar/consultar varias reservas en un turno)
+  // ============================
+
+  /** `hasActiveReservations` = el cliente tiene otras reservas activas pero no se pudo identificar cuál. */
+  cancelTargetNotFound(hasActiveReservations: boolean): string {
+    return hasActiveReservations
+      ? `⚠️ No pude identificar cuál reserva cancelar; escribí *CANCELAR* y te muestro tus reservas.`
+      : `⚠️ No encontré una reserva activa para cancelar.`;
+  },
+
+  reservationCancelledInline(whenLabel: string, displayCode: string | null): string {
+    const codeText = displayCode ? ` (código *${displayCode}*)` : '';
+    return `✅ Cancelé tu reserva para ${whenLabel}${codeText}.`;
+  },
+
+  cancelActionFailed(): string {
+    return `❌ No pude cancelar una de las reservas. Intentá de nuevo.`;
+  },
+
+  /** Variante corta de {@link noActiveReservationsInquiry}, para insertar como una línea más de un resumen multi-acción. */
+  noActiveReservationsShort(): string {
+    return `No tenés reservas activas en este momento.`;
+  },
+
   // ============================
   // M8 — Horarios no disponibles
   // ============================
@@ -480,6 +534,13 @@ export const esCatalog = {
 
   askCorrectName(): string {
     return `¿Cuál es tu nombre correcto para continuar con la reserva?`;
+  },
+
+  /** Re-pregunta de corrección de nombre/apellido en el flujo de edición de datos del cliente. */
+  askCorrectNameField(field: 'full' | 'lastName'): string {
+    return field === 'lastName'
+      ? `¿Cuál es tu apellido correcto?`
+      : `¿Cuál es tu nombre y apellido correcto?`;
   },
 
   invalidLastNameRetry(): string {
@@ -647,6 +708,22 @@ export const esCatalog = {
       `Podés ocuparla dentro de los próximos 20 minutos.\n` +
       `Luego de ese tiempo, la reserva podría liberarse.`
     );
+  },
+
+  /**
+   * Respuesta a un mensaje de cortesía (agradecimiento o simple "ok") después de
+   * que el cliente ya tiene una reserva activa. `isPending` distingue WAITING de
+   * CONFIRMED/NOTIFIED; `isGratitude` distingue un "gracias" de un "ok"/"dale".
+   */
+  postReservationCourtesyReply(reservationRef: string, isPending: boolean, isGratitude: boolean): string {
+    if (isPending) {
+      return isGratitude
+        ? `¡De nada! 🙌\n\nTu reserva${reservationRef} sigue pendiente de confirmación. Apenas confirmen, te avisamos por acá.`
+        : `¡Perfecto! 🙌\n\nTu reserva${reservationRef} sigue pendiente de confirmación. Apenas confirmen, te avisamos por acá.`;
+    }
+    return isGratitude
+      ? `¡De nada! 🙌\n\nTu reserva${reservationRef} ya está confirmada. Si necesitas algo más, estoy para ayudarte.`
+      : `¡Genial! 🙌\n\nTu reserva${reservationRef} ya está confirmada. Si necesitas algo más, estoy para ayudarte.`;
   },
 
   // ============================

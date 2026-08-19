@@ -250,8 +250,16 @@ export const enCatalog: MessageCatalog = {
     return `✅ Done! Your booking was updated to *${partySize}* people.`;
   },
 
+  partySizeUpdateFailed(): string {
+    return `❌ We couldn't update the number of people. Please try again.`;
+  },
+
   scheduleUpdated(whenLabel: string): string {
     return `✅ Done! Your booking was moved to ${whenLabel}.`;
+  },
+
+  scheduleRevertedToInstant(): string {
+    return `✅ Done! Your booking is back to the current service.`;
   },
 
   // ============================
@@ -370,6 +378,43 @@ export const enCatalog: MessageCatalog = {
     return `I couldn't find any active booking. Anything else I can help you with?`;
   },
 
+  newReservationOverlapReminder(
+    conflictingWhenLabel: string,
+    conflictingDisplayCode: string | null,
+    conflictingStatusLabel: string
+  ): string {
+    const displayCodeText = conflictingDisplayCode ? ` (code *${conflictingDisplayCode}*)` : '';
+    return (
+      `⚠️ Your new booking overlaps with an active booking on ${conflictingWhenLabel}` +
+      `${displayCodeText} with status *${conflictingStatusLabel}*.` +
+      `\n\nI can't create it because there must be at least 120 minutes between bookings.` +
+      `\n\nIf you'd like, reply *CANCEL* to cancel it and then create a new one.`
+    );
+  },
+
+  // ============================
+  // Multi-action messages (cancel/query several bookings in one turn)
+  // ============================
+
+  cancelTargetNotFound(hasActiveReservations: boolean): string {
+    return hasActiveReservations
+      ? `⚠️ I couldn't tell which booking to cancel; type *CANCEL* and I'll show you your bookings.`
+      : `⚠️ I couldn't find an active booking to cancel.`;
+  },
+
+  reservationCancelledInline(whenLabel: string, displayCode: string | null): string {
+    const codeText = displayCode ? ` (code *${displayCode}*)` : '';
+    return `✅ I cancelled your booking for ${whenLabel}${codeText}.`;
+  },
+
+  cancelActionFailed(): string {
+    return `❌ I couldn't cancel one of the bookings. Please try again.`;
+  },
+
+  noActiveReservationsShort(): string {
+    return `You don't have any active bookings at the moment.`;
+  },
+
   // ============================
   // M8 — Unavailable time slots
   // ============================
@@ -462,6 +507,12 @@ export const enCatalog: MessageCatalog = {
 
   askCorrectName(): string {
     return `What is your correct name so we can continue with the booking?`;
+  },
+
+  askCorrectNameField(field: 'full' | 'lastName'): string {
+    return field === 'lastName'
+      ? `What's your correct last name?`
+      : `What's your correct first and last name?`;
   },
 
   invalidLastNameRetry(): string {
@@ -617,6 +668,17 @@ export const enCatalog: MessageCatalog = {
       `You can take it within the next 20 minutes.\n` +
       `After that, the booking may be released.`
     );
+  },
+
+  postReservationCourtesyReply(reservationRef: string, isPending: boolean, isGratitude: boolean): string {
+    if (isPending) {
+      return isGratitude
+        ? `You're welcome! 🙌\n\nYour booking${reservationRef} is still pending confirmation. We'll let you know as soon as it's confirmed.`
+        : `Perfect! 🙌\n\nYour booking${reservationRef} is still pending confirmation. We'll let you know as soon as it's confirmed.`;
+    }
+    return isGratitude
+      ? `You're welcome! 🙌\n\nYour booking${reservationRef} is already confirmed. If you need anything else, I'm here to help.`
+      : `Great! 🙌\n\nYour booking${reservationRef} is already confirmed. If you need anything else, I'm here to help.`;
   },
 
   // ============================
