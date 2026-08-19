@@ -198,7 +198,6 @@ async function initializeApp() {
           logger.warn('CORS blocked request', { origin });
           callback(new Error('Not allowed by CORS'));
         },
-        credentials: true,
       })
     );
 
