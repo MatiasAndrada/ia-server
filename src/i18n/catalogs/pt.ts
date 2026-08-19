@@ -30,10 +30,9 @@ export const ptCatalog: MessageCatalog = {
   // M0 — Seleção de idioma
   // ============================
 
-  languageWelcomeMenu(businessName: string, city?: string | null): string {
-    const location = city ? `, ${city}` : '';
+  languageWelcomeMenu(businessName: string): string {
     return (
-      `🌎 Bem-vindo ao *${businessName}*${location}!\n\n` +
+      `🌎 Bem-vindo ao *${businessName}*!\n\n` +
       `Em qual idioma você prefere fazer sua reserva?\n\n` +
       `${buildLanguageMenuLines()}\n\n` +
       `Responda com o *número* do idioma que preferir, ou continue escrevendo que eu acompanho você no seu idioma.`
@@ -578,10 +577,9 @@ export const ptCatalog: MessageCatalog = {
     return `Você não tem reservas ativas neste momento. Se quiser, pode criar uma nova escrevendo *RESERVAR*.`;
   },
 
-  firstContactNoReservations(businessName: string, city?: string | null): string {
-    const location = city ? `, ${city}` : '';
+  firstContactNoReservations(businessName: string): string {
     return (
-      `👋 Olá! Sou o assistente de reservas do *${businessName}*${location}.\n\n` +
+      `👋 Olá! Sou o assistente de reservas do *${businessName}*.\n\n` +
       `Você ainda não tem nenhuma reserva conosco — é a primeira vez que conversamos.\n\n` +
       `Posso te ajudar a *reservar uma mesa* e, mais adiante, *alterá-la* ou *cancelá-la*.\n\n` +
       `Quer reservar? Escreva *RESERVAR* e começamos.`

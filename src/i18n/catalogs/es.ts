@@ -9,15 +9,19 @@
  * Los textos corresponden a los módulos M1..M12 del Manual Conversacional Nubotik.
  */
 
-import { LANGUAGE_MENU_ORDER, LANGUAGE_NATIVE_NAMES, LANGUAGE_FLAGS } from '../languages.js';
+import { LANGUAGE_MENU_ORDER, LANGUAGE_NATIVE_NAMES } from '../languages.js';
 
 const NUMBER_EMOJI = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
 
-/** Filas del menú de idiomas, compartidas por los tres catálogos (no se traducen: cada idioma se nombra a sí mismo). */
+/**
+ * Filas del menú de idiomas, compartidas por los tres catálogos (no se
+ * traducen: cada idioma se nombra a sí mismo). Sin bandera: el idioma se
+ * infiere de una bandera recibida, pero no se muestran banderas en los
+ * mensajes salientes.
+ */
 export function buildLanguageMenuLines(): string {
   return LANGUAGE_MENU_ORDER.map(
-    (language, index) =>
-      `${NUMBER_EMOJI[index]} ${LANGUAGE_FLAGS[language]} ${LANGUAGE_NATIVE_NAMES[language]}`
+    (language, index) => `${NUMBER_EMOJI[index]} ${LANGUAGE_NATIVE_NAMES[language]}`
   ).join('\n');
 }
 
@@ -39,10 +43,9 @@ export const esCatalog = {
   // M0 — Selección de idioma
   // ============================
 
-  languageWelcomeMenu(businessName: string, city?: string | null): string {
-    const location = city ? `, ${city}` : '';
+  languageWelcomeMenu(businessName: string): string {
     return (
-      `🌎 ¡Bienvenido a *${businessName}*${location}!\n\n` +
+      `🌎 ¡Bienvenido a *${businessName}*!\n\n` +
       `¿En qué idioma te acompañamos con tu reserva?\n\n` +
       `${buildLanguageMenuLines()}\n\n` +
       `Respondé con el *número* del idioma que preferís, o seguí escribiendo y te atiendo en tu idioma.`
@@ -602,10 +605,9 @@ export const esCatalog = {
    * presenta el local y explica qué puede hacer. Incluye el hint de idioma porque
    * esta rama corre ANTES del menú de idioma, así que si no va acá no lo ve nunca.
    */
-  firstContactNoReservations(businessName: string, city?: string | null): string {
-    const location = city ? `, ${city}` : '';
+  firstContactNoReservations(businessName: string): string {
     return (
-      `👋 ¡Hola! Soy el asistente de reservas de *${businessName}*${location}.\n\n` +
+      `👋 ¡Hola! Soy el asistente de reservas de *${businessName}*.\n\n` +
       `Todavía no tenés ninguna reserva con nosotros — es la primera vez que hablamos.\n\n` +
       `Puedo ayudarte a *reservar una mesa*, y más adelante a *modificarla* o *cancelarla*.\n\n` +
       `¿Querés reservar? Escribime *RESERVAR* y arrancamos.`

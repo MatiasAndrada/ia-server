@@ -31,10 +31,9 @@ export const enCatalog: MessageCatalog = {
   // M0 — Language selection
   // ============================
 
-  languageWelcomeMenu(businessName: string, city?: string | null): string {
-    const location = city ? `, ${city}` : '';
+  languageWelcomeMenu(businessName: string): string {
     return (
-      `🌎 Welcome to *${businessName}*${location}!\n\n` +
+      `🌎 Welcome to *${businessName}*!\n\n` +
       `Which language would you like us to use for your booking?\n\n` +
       `${buildLanguageMenuLines()}\n\n` +
       `Reply with the *number* of your preferred language, or just keep writing and I'll follow your lead.`
@@ -579,10 +578,9 @@ export const enCatalog: MessageCatalog = {
     return `You don't have any active bookings at the moment. If you'd like, you can create a new one by typing *BOOK*.`;
   },
 
-  firstContactNoReservations(businessName: string, city?: string | null): string {
-    const location = city ? `, ${city}` : '';
+  firstContactNoReservations(businessName: string): string {
     return (
-      `👋 Hi! I'm the booking assistant for *${businessName}*${location}.\n\n` +
+      `👋 Hi! I'm the booking assistant for *${businessName}*.\n\n` +
       `You don't have any bookings with us yet — this is the first time we talk.\n\n` +
       `I can help you *book a table*, and later *change* or *cancel* it.\n\n` +
       `Want to book? Just type *BOOK* and we'll get started.`
