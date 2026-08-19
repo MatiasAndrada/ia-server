@@ -17,7 +17,7 @@ const RESERVATION_ROW = {
 };
 
 const ARGS: Record<keyof MessageCatalog, unknown[]> = {
-  languageWelcomeMenu: ['__BIZ__', '__CITY__'],
+  languageWelcomeMenu: ['__BIZ__'],
   languageChanged: [],
   languageChangeHint: [],
   instantTurnLabel: [],
@@ -111,7 +111,7 @@ const ARGS: Record<keyof MessageCatalog, unknown[]> = {
   reservationOutOfWindow: ['__BIZ__'],
   inactiveFallback: [],
   genericError: [],
-  firstContactNoReservations: ['__BIZ__', '__CITY__'],
+  firstContactNoReservations: ['__BIZ__'],
 };
 
 const CATALOG_KEYS = Object.keys(ALL_CATALOGS.es) as (keyof MessageCatalog)[];

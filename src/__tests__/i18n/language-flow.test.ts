@@ -117,10 +117,10 @@ describe('flujos de idioma', () => {
 
       const [first] = sent();
       expect(first).toContain('La Parrilla');
-      expect(first).toContain('Puerto Iguazú');
-      expect(first).toContain('1️⃣ 🇪🇸 Español');
-      expect(first).toContain('2️⃣ 🇬🇧 English');
-      expect(first).toContain('3️⃣ 🇧🇷 Português');
+      expect(first).not.toContain('Puerto Iguazú');
+      expect(first).toContain('1️⃣ Español');
+      expect(first).toContain('2️⃣ English');
+      expect(first).toContain('3️⃣ Português');
     });
 
     it('marca el draft con awaitingLanguageChoice sin crear un step nuevo', async () => {
@@ -150,7 +150,7 @@ describe('flujos de idioma', () => {
 
       const [first] = sent();
       expect(first).not.toContain('Bem-vindo');
-      expect(first).not.toContain('1️⃣ 🇪🇸 Español');
+      expect(first).not.toContain('1️⃣ Español');
       expect(first).toContain('Para trocar de idioma');
       expect(persistLanguageSpy).not.toHaveBeenCalled();
       expect(languageStore.cacheDetectedLanguage).toHaveBeenCalledWith(
@@ -168,7 +168,7 @@ describe('flujos de idioma', () => {
       await deliver('hola');
 
       const [first] = sent();
-      expect(first).toContain('1️⃣ 🇪🇸 Español');
+      expect(first).toContain('1️⃣ Español');
     });
 
     it('muestra el menú cuando el idioma no se puede inferir con confianza, aunque haya contenido', async () => {
@@ -180,7 +180,7 @@ describe('flujos de idioma', () => {
       await deliver('mesa para 4');
 
       const [first] = sent();
-      expect(first).toContain('1️⃣ 🇪🇸 Español');
+      expect(first).toContain('1️⃣ Español');
     });
 
     it('emite el menú en el idioma detectado del primer mensaje', async () => {
@@ -206,7 +206,7 @@ describe('flujos de idioma', () => {
 
       await deliver('Oi');
 
-      expect(sent()[0]).not.toContain('1️⃣ 🇪🇸 Español');
+      expect(sent()[0]).not.toContain('1️⃣ Español');
     });
 
     it('a un cliente recurrente lo saluda en su idioma y le ofrece cómo cambiarlo', async () => {
@@ -254,7 +254,7 @@ describe('flujos de idioma', () => {
       expect(persistLanguageSpy).not.toHaveBeenCalled();
       // ...pero el nombre sí se tomó y el flujo siguió.
       expect(setCustomerName).toHaveBeenCalled();
-      expect(sent().join('\n')).not.toContain('1️⃣ 🇪🇸 Español');
+      expect(sent().join('\n')).not.toContain('1️⃣ Español');
     });
   });
 
@@ -349,7 +349,7 @@ describe('flujos de idioma', () => {
 
       const [first] = sent();
       expect(first).toContain('La Parrilla');
-      expect(first).toContain('Puerto Iguazú');
+      expect(first).not.toContain('Puerto Iguazú');
       expect(first).toContain('es la primera vez que hablamos');
       // La rama corre antes del menú de idioma, así que el hint tiene que ir acá.
       expect(first).toContain('Para cambiar de idioma');
