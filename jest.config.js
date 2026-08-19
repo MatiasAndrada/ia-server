@@ -14,6 +14,7 @@ module.exports = {
   verbose: true,
   testTimeout: 10000,
   moduleNameMapper: {
-    '^@/(.*)$': '<rootDir>/src/$1'
+    '^@/(.*)$': '<rootDir>/src/$1',
+    '^(\\.{1,2}/.*)\\.js$': '$1'
   }
 };
