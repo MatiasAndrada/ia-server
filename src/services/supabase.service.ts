@@ -11,7 +11,7 @@ import {
   WaitlistEntry,
   BlockedDateEntry,
 } from '../types/index.js';
-import { logger } from '../utils/logger.js';
+import { logger, logEvent } from '../utils/logger.js';
 import { openRouterService } from './openrouter.service.js';
 import { describeScheduledAtUtc, nowInBuenosAires } from '../utils/reservation-datetime.js';
 import * as templates from '../utils/message-templates.js';
@@ -110,7 +110,7 @@ export class SupabaseService {
         return [];
       }
 
-      logger.info('Businesses fetched', { count: businesses?.length || 0 });
+      logger.debug('Businesses fetched', { count: businesses?.length || 0 });
       return (businesses as Business[]) || [];
     } catch (error) {
       logger.error('Error getting businesses', { error });
@@ -138,7 +138,7 @@ export class SupabaseService {
 
       const tables = (tablesData as Table[] | null) ?? [];
 
-      logger.info('Tables fetched', {
+      logger.debug('Tables fetched', {
         businessId,
         count: tables.length,
       });
@@ -169,7 +169,7 @@ export class SupabaseService {
 
       const tables = (tablesData as Table[] | null) ?? [];
 
-      logger.info('Active tables fetched', {
+      logger.debug('Active tables fetched', {
         businessId,
         count: tables.length,
       });
@@ -234,7 +234,7 @@ export class SupabaseService {
         }
 
         const updatedCustomer = updatedCustomerData as Customer;
-        logger.info('Customer found and updated', { customerId: updatedCustomer.id, phone });
+        logger.debug('Customer found and updated', { customerId: updatedCustomer.id, phone });
         return updatedCustomer;
       }
 
@@ -258,7 +258,7 @@ export class SupabaseService {
       }
 
       const newCustomer = newCustomerData as Customer;
-      logger.info('Customer created', { customerId: newCustomer.id, phone, businessId });
+      logger.debug('Customer created', { customerId: newCustomer.id, phone, businessId });
       return newCustomer;
     } catch (error) {
       logger.error('Supabase: getOrCreateCustomer failed', { error, phone, businessId });
@@ -338,7 +338,7 @@ export class SupabaseService {
 
       if (error) throw error;
 
-      logger.info('Customer language preference saved', { phone, businessId, language });
+      logger.debug('Customer language preference saved', { phone, businessId, language });
       return true;
     } catch (error) {
       logger.error('Supabase: updateCustomerLanguage failed', {
@@ -397,7 +397,7 @@ export class SupabaseService {
       if (updateError) throw updateError;
 
       const updated = updatedData as Customer;
-      logger.info('Customer name updated by phone', { customerId: updated.id, phone });
+      logger.debug('Customer name updated by phone', { customerId: updated.id, phone });
       return updated;
     } catch (error) {
       logger.error('Supabase: updateCustomerNameByPhone failed', { error, phone, businessId });
@@ -412,7 +412,7 @@ export class SupabaseService {
     request: CreateReservationRequest
   ): Promise<CreateReservationResponse> {
     try {
-      logger.info('🎯 Starting reservation creation', {
+      logger.debug('Starting reservation creation', {
         businessId: request.businessId,
         customerName: request.customerName,
         customerPhone: request.customerPhone,
@@ -423,14 +423,14 @@ export class SupabaseService {
       const client = this.getClient();
 
       // Get or create customer
-      logger.info('📞 Getting or creating customer...');
+      logger.debug('Getting or creating customer...');
       const customer = await this.getOrCreateCustomer(
         request.customerName,
         request.customerPhone,
         request.businessId,
         request.customerLastName ?? null
       );
-      logger.info('✅ Customer ready', { customerId: customer.id, name: customer.name });
+      logger.debug('Customer ready', { customerId: customer.id, name: customer.name });
 
       const activeReservations = await this.getActiveReservations(customer.id, request.businessId);
       const conflictingReservation = activeReservations.find((reservation) =>
@@ -465,7 +465,8 @@ export class SupabaseService {
           }
         })();
 
-        logger.warn('⚠️ Reservation creation rejected due to overlap with an active reservation', {
+        logEvent('warn', 'reservation.rejected', {
+          reason: 'overlap_with_active_reservation',
           customerId: customer.id,
           conflictId: conflictingReservation.id,
           requestedWhen: requestedWhenLabel,
@@ -496,10 +497,10 @@ export class SupabaseService {
       );
 
       // Get business configuration to check auto_accept_reservations
-      logger.info('⚙️ Getting business configuration...');
+      logger.debug('Getting business configuration...');
       const business = await this.getBusinessById(request.businessId);
       const autoAccept = business?.auto_accept_reservations ?? false;
-      logger.info('✅ Business configuration retrieved', { 
+      logger.debug('Business configuration retrieved', { 
         businessId: request.businessId, 
         autoAcceptReservations: autoAccept 
       });
@@ -551,7 +552,7 @@ export class SupabaseService {
       const initialStatus: WaitlistStatus = autoAccept ? 'CONFIRMED' : 'WAITING';
       const confirmedAt = autoAccept ? new Date().toISOString() : null;
       
-      logger.info('💾 Creating waitlist entry in database...', {
+      logger.debug('Creating waitlist entry in database...', {
         businessId: request.businessId,
         customerId: customer.id,
         partySize: request.partySize,
@@ -581,7 +582,7 @@ export class SupabaseService {
         .single();
 
       if (entryError) {
-        logger.error('❌ Error creating waitlist entry', {
+        logger.error('Error creating waitlist entry', {
           error: entryError,
           code: entryError.code,
           message: entryError.message,
@@ -591,13 +592,13 @@ export class SupabaseService {
       }
 
       if (!waitlistEntryData) {
-        logger.error('❌ Waitlist entry created but no data returned');
+        logger.error('Waitlist entry created but no data returned');
         throw new Error('No data returned from insert');
       }
 
       const waitlistEntry = waitlistEntryData as WaitlistEntriesRow;
 
-      logger.info('✅ Waitlist entry created successfully!', {
+      logger.debug('Waitlist entry created successfully!', {
         entryId: waitlistEntry.id,
         displayCode: waitlistEntry.display_code,
         businessId: waitlistEntry.business_id,
@@ -612,7 +613,12 @@ export class SupabaseService {
         waitlistEntry: waitlistEntry as WaitlistEntry,
       };
     } catch (error) {
-      logger.error('Supabase: createReservation failed', { error, request });
+      logger.error('Supabase: createReservation failed', {
+        error,
+        businessId: request.businessId,
+        partySize: request.partySize,
+        scheduledAt: request.scheduledAt,
+      });
       return {
         success: false,
         error: 'Error inesperado al crear la reserva',
@@ -739,7 +745,7 @@ export class SupabaseService {
         .eq('id', reservationId);
 
       if (error) throw error;
-      logger.info('Reservation party size updated', { reservationId, partySize });
+      logger.debug('Reservation party size updated', { reservationId, partySize });
       return true;
     } catch (error) {
       logger.error('Error updating reservation party size', { error, reservationId });
@@ -763,7 +769,7 @@ export class SupabaseService {
         .eq('id', reservationId);
 
       if (error) throw error;
-      logger.info('Reservation schedule updated', { reservationId, scheduledAt });
+      logger.debug('Reservation schedule updated', { reservationId, scheduledAt });
       return true;
     } catch (error) {
       logger.error('Error updating reservation schedule', { error, reservationId });
@@ -813,7 +819,7 @@ export class SupabaseService {
         throw error;
       }
 
-      logger.info('Waitlist entry status updated', { entryId, status });
+      logger.debug('Waitlist entry status updated', { entryId, status });
       return true;
     } catch (error) {
       logger.error('Supabase: updateReservationStatus failed', { error, entryId });
@@ -839,7 +845,7 @@ export class SupabaseService {
 
       const business = businessData as Business | null;
       if (!business) {
-        logger.warn('Business not found', { businessId });
+        logger.debug('Business not found', { businessId });
         return null;
       }
 
@@ -899,7 +905,7 @@ export class SupabaseService {
 
       if (error) throw error;
 
-      logger.info('Supabase: blocked date reason_message updated', { businessId, date });
+      logger.debug('Supabase: blocked date reason_message updated', { businessId, date });
     } catch (error) {
       logger.warn('Supabase: updateBlockedDateReasonMessage failed (non-critical)', {
         error,
@@ -940,7 +946,7 @@ export class SupabaseService {
         throw error;
       }
 
-      logger.info('Supabase: blocked date created', {
+      logger.debug('Supabase: blocked date created', {
         businessId,
         date,
         hasReason: !!trimmedReason,
@@ -971,7 +977,7 @@ export class SupabaseService {
     // Use setTimeout to ensure this runs asynchronously
     setImmediate(async () => {
       try {
-        logger.info('🔄 Starting background blocked date reason message generation', {
+        logger.debug('Starting background blocked date reason message generation', {
           businessId,
           date,
         });
@@ -985,13 +991,13 @@ export class SupabaseService {
 
         await SupabaseService.updateBlockedDateReasonMessage(businessId, date, reasonMessage);
 
-        logger.info('✅ Blocked date reason_message generated and saved successfully', {
+        logger.debug('Blocked date reason_message generated and saved successfully', {
           businessId,
           date,
           messageLength: reasonMessage.length,
         });
       } catch (error) {
-        logger.warn('❌ Failed to generate blocked date reason_message in background', {
+        logger.warn('Failed to generate blocked date reason_message in background', {
           error: error instanceof Error ? error.message : 'Unknown error',
           businessId,
           date,
@@ -1087,7 +1093,7 @@ export class SupabaseService {
         throw error;
       }
 
-      logger.info('Business WhatsApp status updated successfully', { businessId, sessionId });
+      logger.debug('Business WhatsApp status updated successfully', { businessId, sessionId });
       return true;
     } catch (error) {
       logger.error('Error updating WhatsApp status', { 
