@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { ReservationService } from '../services/reservation.service.js';
 import { SupabaseService } from '../services/supabase.service.js';
-import { logger } from '../utils/logger.js';
+import { logger, logEvent } from '../utils/logger.js';
 
 /**
  * Get reservation draft status
@@ -80,9 +80,11 @@ export async function createReservationHandler(req: Request, res: Response) {
       return res.status(400).json(result);
     }
 
-    logger.info('Reservation created from frontend', {
+    logEvent('info', 'reservation.created', {
       businessId,
       entryId: result.waitlistEntry?.id,
+      displayCode: result.waitlistEntry?.display_code,
+      source: 'dashboard',
     });
 
     return res.status(201).json(result);
@@ -128,7 +130,11 @@ export async function updateReservationStatusHandler(req: Request, res: Response
       });
     }
 
-    logger.info('Reservation status updated', { reservationId, status });
+    logEvent(
+      'info',
+      status === 'CANCELLED' ? 'reservation.cancelled' : 'reservation.updated',
+      { reservationId, status, via: 'api' }
+    );
 
     return res.json({
       success: true,

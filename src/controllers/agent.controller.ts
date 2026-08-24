@@ -108,7 +108,7 @@ export async function agentChatHandler(req: Request, res: Response) {
       });
     }
 
-    logger.info('Processing agent chat request', {
+    logger.debug('Processing agent chat request', {
       agentId,
       conversationId,
       messageLength: message.length
@@ -124,7 +124,7 @@ export async function agentChatHandler(req: Request, res: Response) {
 
     const totalTime = Date.now() - startTime;
 
-    logger.info('Agent chat completed', {
+    logger.debug('Agent chat completed', {
       agentId,
       conversationId,
       action: response.action,
@@ -175,7 +175,7 @@ export async function clearConversationHandler(req: Request, res: Response) {
 
     await agentService.clearConversationHistory(conversationId);
 
-    logger.info('Conversation cleared', { agentId, conversationId });
+    logger.debug('Conversation cleared', { agentId, conversationId });
 
     return res.json({
       success: true,

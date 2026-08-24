@@ -28,7 +28,7 @@ export async function createBlockedDateHandler(req: Request, res: Response) {
       });
     }
 
-    logger.info('Blocked date created from API', { businessId, date });
+    logger.debug('Blocked date created from API', { businessId, date });
 
     return res.status(201).json({
       success: true,

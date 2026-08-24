@@ -99,7 +99,7 @@ export class ConversationService {
 
       const result = await client.del(key);
 
-      logger.info('Cleared conversation history', {
+      logger.debug('Cleared conversation history', {
         phone,
         existed: result > 0,
       });

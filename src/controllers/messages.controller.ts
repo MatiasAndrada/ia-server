@@ -101,7 +101,7 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
-    logger.info('Sending message via HTTP', { businessId, to, messageLength: message.length });
+    logger.debug('Sending message via HTTP', { businessId, to, messageLength: message.length });
 
     // Send the message
     const success = await baileysService.sendMessage(businessId, to, message);

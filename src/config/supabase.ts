@@ -9,7 +9,7 @@ export class SupabaseConfig {
   static initialize(supabaseUrl?: string, supabaseKey?: string): void {
     try {
       if (this.isInitialized) {
-        logger.warn('Supabase: Already initialized');
+        logger.debug('Supabase: already initialized');
         return;
       }
 
@@ -29,7 +29,7 @@ export class SupabaseConfig {
       });
 
       this.isInitialized = true;
-      logger.info('Supabase: Initialized successfully');
+      logger.debug('Supabase: initialized');
     } catch (error) {
       logger.error('Supabase: Initialization failed', { error });
       throw error;
