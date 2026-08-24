@@ -1,7 +1,19 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as QRCode from 'qrcode-terminal';
-import { logger } from '../utils/logger.js';
+import { logger, logEvent } from '../utils/logger.js';
+import type { SendFailureReason } from '../utils/log-events.js';
+import { withLogContext } from '../utils/log-context.js';
+import { throttle } from '../utils/log-throttle.js';
+
+/**
+ * El QR se dibuja en la terminal sólo cuando hay alguien mirándola. En
+ * producción se lee desde Redis vía `GET /api/sessions/:businessId/qr`, así que
+ * imprimirlo ahí sólo rompería el stdout estructurado que consume PM2.
+ */
+const SHOW_QR_IN_TERMINAL =
+  process.env.WHATSAPP_QR_TERMINAL === 'true' ||
+  (process.env.WHATSAPP_QR_TERMINAL !== 'false' && process.env.NODE_ENV !== 'production');
 import { BaileysSession, BaileysMessage } from '../types/index.js';
 import { SupabaseService } from './supabase.service.js';
 import { WhatsAppHandler } from './whatsapp-handler.service.js';
@@ -31,9 +43,9 @@ async function loadBaileys() {
     fetchLatestWaWebVersion = baileys.fetchLatestWaWebVersion;
     Browsers = baileys.Browsers;
     baileysLoaded = true;
-    logger.info('Baileys ES Module loaded successfully');
+    logger.debug('Baileys ES Module loaded');
   } catch (error) {
-    logger.error('Failed to load Baileys module:', error);
+    logger.error('Failed to load Baileys module', { error });
     throw error;
   }
 }
@@ -78,7 +90,7 @@ export class BaileysService {
   private ensureAuthDir(): void {
     if (!fs.existsSync(this.AUTH_DIR)) {
       fs.mkdirSync(this.AUTH_DIR, { recursive: true });
-      logger.info('Created auth_sessions directory', { path: this.AUTH_DIR });
+      logger.debug('Created auth_sessions directory', { path: this.AUTH_DIR });
     }
   }
 
@@ -204,7 +216,7 @@ export class BaileysService {
       };
       
       fs.writeFileSync(metaPath, JSON.stringify(metadata, null, 2));
-      logger.info('Business metadata stored', { businessId, metaPath });
+      logger.debug('Business metadata stored', { businessId });
     } catch (error) {
       logger.error('Failed to store business metadata', { businessId, error });
     }
@@ -257,7 +269,7 @@ export class BaileysService {
         this.sessionStates.set(businessId, state);
       }
       
-      logger.info('QR code stored in Redis', { businessId });
+      logger.debug('QR code stored in Redis', { businessId });
     } catch (error) {
       logger.error('Failed to store QR code in Redis', { businessId, error });
     }
@@ -288,7 +300,7 @@ export class BaileysService {
         this.sessionStates.set(businessId, state);
       }
       
-      logger.info('Session status updated in Redis', { businessId, status });
+      logger.debug('Session status updated in Redis', { businessId, status });
     } catch (error) {
       logger.error('Failed to update session status in Redis', { businessId, error });
     }
@@ -317,15 +329,14 @@ export class BaileysService {
       // Set expiration (7 days)
       await redis.expire(messagesKey, 7 * 24 * 60 * 60);
       
-      logger.info('Message stored in Redis', { 
-        businessId: message.businessId, 
-        from: message.from,
-        messageLength: message.message.length
+      logger.debug('Message stored in Redis', {
+        businessId: message.businessId,
+        messageLength: message.message.length,
       });
     } catch (error) {
-      logger.error('Failed to store message in Redis', { 
-        businessId: message.businessId, 
-        error 
+      logger.error('Failed to store message in Redis', {
+        businessId: message.businessId,
+        error,
       });
     }
   }
@@ -335,7 +346,7 @@ export class BaileysService {
    */
   async startSession(businessId: string): Promise<void> {
     if (this.startSessionInProgress.has(businessId)) {
-      logger.warn('Session start already in progress, skipping duplicate start', { businessId });
+      logger.debug('Session start already in progress, skipping duplicate', { businessId });
       return;
     }
 
@@ -346,7 +357,7 @@ export class BaileysService {
 
       distributedLock = await this.acquireStartSessionLock(businessId);
       if (!distributedLock) {
-        logger.warn('Session start skipped due to distributed lock contention', { businessId });
+        logger.debug('Session start skipped: distributed lock contention', { businessId });
         return;
       }
 
@@ -354,31 +365,35 @@ export class BaileysService {
       await loadBaileys();
       
       if (this.sessions.has(businessId)) {
-        logger.warn('Session already exists, removing old session first', { businessId });
+        logger.debug('Session already exists, removing old session first', { businessId });
         await this.stopSession(businessId);
       }
 
       const sessionPath = this.getSessionPath(businessId);
-      logger.info('Starting WhatsApp session', { businessId, sessionPath });
+      // El ciclo de vida detallado del socket es traza: en el log anterior
+      // había 2577 "Starting WhatsApp session" contra 481 conexiones logradas,
+      // todo en `info`. Lo que importa es el resultado — `session.linked` o
+      // `session.closed` — no cada paso del armado.
+      logger.debug('Starting WhatsApp session', { businessId, sessionPath });
 
       // Load or create auth state
       const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-      logger.info('Auth state loaded', { businessId, hasCredentials: !!state.creds });
+      logger.debug('Auth state loaded', { businessId, hasCredentials: !!state.creds });
 
       // Fetch latest WA Web version to avoid protocol mismatches (e.g. 405 before QR)
       let waVersion: [number, number, number] | undefined;
       try {
         const latest = await fetchLatestWaWebVersion();
         waVersion = latest?.version;
-        logger.info('Using WhatsApp Web version', {
+        logger.debug('Using WhatsApp Web version', {
           businessId,
           version: waVersion?.join('.'),
           isLatest: latest?.isLatest,
         });
       } catch (versionError) {
-        logger.warn('Failed to fetch latest WhatsApp Web version, using Baileys default', {
+        logger.debug('Failed to fetch latest WhatsApp Web version, using Baileys default', {
           businessId,
-          error: versionError instanceof Error ? versionError.message : versionError,
+          error: versionError,
         });
       }
 
@@ -425,7 +440,7 @@ export class BaileysService {
       // Store business metadata in session directory
       await this.storeBusinessMetadata(businessId);
       
-      logger.info('Socket created and stored', { businessId });
+      logger.debug('Socket created and stored', { businessId });
 
       // Handle credentials update
       sock.ev.on('creds.update', saveCreds);
@@ -440,7 +455,7 @@ export class BaileysService {
         await this.handleIncomingMessages(businessId, m);
       });
 
-      logger.info('WhatsApp socket created', { businessId });
+      logger.debug('WhatsApp socket wired up', { businessId });
     } catch (error) {
       logger.error('Error starting WhatsApp session', { error, businessId });
       await this.updateSessionStatus(businessId, 'error', error);
@@ -533,12 +548,16 @@ export class BaileysService {
 
     // Emit QR code if generated
     if (qr) {
-      logger.info('QR Code generated', { businessId });
-      
-      // Mostrar QR en terminal usando qrcode-terminal
-      console.log('\n🎉 ¡QR CODE GENERADO! Escanea con WhatsApp:\n');
-      QRCode.generate(qr, { small: true });
-      console.log(`\n📱 Business ID: ${businessId}\n`);
+      logEvent('info', 'session.qr', { businessId });
+
+      // El QR en terminal es funcional (se escanea desde ahí durante el
+      // vinculado), no un log — por eso sigue en console y no en el logger.
+      // En producción se lee desde Redis vía la API de sesiones, así que ahí
+      // sólo ensuciaría el stdout estructurado.
+      if (SHOW_QR_IN_TERMINAL) {
+        console.log(`\n📱 Escaneá este QR con WhatsApp — business ${businessId}\n`);
+        QRCode.generate(qr, { small: true });
+      }
       
       const state = this.sessionStates.get(businessId);
       if (state) {
@@ -556,11 +575,10 @@ export class BaileysService {
         | undefined;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
-      logger.warn('Connection closed', { 
-        businessId, 
-        shouldReconnect,
+      logEvent(shouldReconnect ? 'warn' : 'info', shouldReconnect ? 'session.closed' : 'session.logout', {
+        businessId,
         statusCode,
-        errorMessage: lastDisconnect?.error?.message,
+        error: lastDisconnect?.error,
       });
 
       // Update state
@@ -574,7 +592,7 @@ export class BaileysService {
       await SupabaseService.updateBusinessWhatsAppStatus(
         businessId
       ).catch(err => {
-        logger.warn('Failed to update Supabase WhatsApp status on disconnect', { err, businessId });
+        logger.warn('Failed to update Supabase WhatsApp status on disconnect', { error: err, businessId });
       });
 
       await this.updateSessionStatus(businessId, 'disconnected');
@@ -591,19 +609,26 @@ export class BaileysService {
         this.reconnectAttempts.set(businessId, attempts + 1);
 
         const delay = this.getReconnectDelayMs(attempts);
-        logger.info('Reconnecting with backoff...', {
-          businessId,
-          attempt: attempts + 1,
-          delayMs: delay,
-        });
+        // Sin techo de intentos, un comercio con la sesión rota reintenta para
+        // siempre. Los primeros intentos son la señal útil; a partir de ahí se
+        // avisa una vez por minuto para que el bucle no tape el resto del log.
+        const t = throttle(`session.reconnecting:${businessId}`, 60_000);
+        if (attempts < 3 || t.allowed) {
+          logEvent('info', 'session.reconnecting', {
+            businessId,
+            attempt: attempts + 1,
+            delayMs: delay,
+            suppressed: attempts < 3 ? 0 : t.suppressed,
+          });
+        }
 
         setTimeout(() => {
           // Clean up before reconnecting
           this.sessions.delete(businessId);
 
           this.startSession(businessId).catch(async (err) => {
-            logger.error('Reconnection attempt failed, will keep retrying with backoff', {
-              err,
+            logger.debug('Reconnection attempt failed, will keep retrying with backoff', {
+              error: err,
               businessId,
             });
             await this.updateSessionStatus(businessId, 'error', 'Reconnection attempt failed, retrying');
@@ -618,11 +643,15 @@ export class BaileysService {
         const sessionPath = this.getSessionPath(businessId);
         if (fs.existsSync(sessionPath)) {
           fs.rmSync(sessionPath, { recursive: true, force: true });
-          logger.info('Session files deleted from disk after logout', { businessId, sessionPath });
+          logger.debug('Session files deleted from disk after logout', { businessId });
         }
       }
     } else if (connection === 'open') {
-      logger.info('WhatsApp session connected', { businessId });
+      const previousAttempts = this.reconnectAttempts.get(businessId) || 0;
+      logEvent('info', 'session.linked', {
+        businessId,
+        ...(previousAttempts > 0 && { afterAttempts: previousAttempts }),
+      });
       
       // Reset reconnection attempts on successful connection
       this.reconnectAttempts.delete(businessId);
@@ -645,7 +674,7 @@ export class BaileysService {
         businessId, // use businessId as sessionId
         phoneNumber
       ).catch(err => {
-        logger.warn('Failed to update Supabase WhatsApp status', { err, businessId });
+        logger.warn('Failed to update Supabase WhatsApp status', { error: err, businessId });
       });
 
       await this.updateSessionStatus(businessId, 'connected');
@@ -663,7 +692,9 @@ export class BaileysService {
 
       const isAiChatEnabled = await SupabaseService.isBusinessAiChatEnabled(businessId);
       if (!isAiChatEnabled) {
-        logger.info('AI chat disabled for business, skipping incoming messages', {
+        // Es el estado normal de todo comercio con el bot apagado: 676
+        // líneas `info` en la muestra anterior sin ninguna acción posible.
+        logger.debug('AI chat disabled for business, skipping incoming messages', {
           businessId,
           messageCount: Array.isArray(messages) ? messages.length : 0,
         });
@@ -701,7 +732,7 @@ export class BaileysService {
         const timestamp = msg.messageTimestamp as number;
 
         if (fromMe && this.isKnownOutboundMessageId(businessId, messageId)) {
-          logger.info('Skipping outbound echo message from bot', {
+          logger.debug('Skipping outbound echo message from bot', {
             businessId,
             from,
             messageId,
@@ -710,16 +741,20 @@ export class BaileysService {
         }
 
         if (messageId) {
-          const shouldProcess = await this.shouldProcessInboundMessage(businessId, messageId, from);
+          const shouldProcess = await this.shouldProcessInboundMessage(businessId, messageId);
           if (!shouldProcess) {
             continue;
           }
         }
 
-        logger.info('Message received', { 
-          businessId, 
-          from, 
-          messageLength: messageContent.length 
+        // `msg.in` se emite acá, en el punto real de entrada, y no en el
+        // handler: acá ya pasaron el dedup y el guard de eco, así que hay
+        // exactamente un `msg.in` por mensaje efectivamente aceptado.
+        logEvent('info', 'msg.in', {
+          businessId,
+          from,
+          messageId,
+          messageLength: messageContent.length,
         });
 
         // Create message object
@@ -737,7 +772,9 @@ export class BaileysService {
         
         // Process message with AI
         try {
-          await this.whatsAppHandler.processMessage(baileysMessage);
+          await withLogContext({ businessId, phone: this.extractPhoneFromJid(from) }, () =>
+            this.whatsAppHandler.processMessage(baileysMessage)
+          );
         } catch (error) {
           logger.error('Error processing message with WhatsApp handler', { error, businessId, from });
         }
@@ -749,12 +786,11 @@ export class BaileysService {
 
   private async shouldProcessInboundMessage(
     businessId: string,
-    messageId: string,
-    from: string
+    messageId: string
   ): Promise<boolean> {
     try {
       if (!RedisConfig.isReady()) {
-        logger.warn('Redis not ready, inbound dedup skipped', { businessId, messageId, from });
+        logger.debug('Redis not ready, inbound dedup skipped', { businessId, messageId });
         return true;
       }
 
@@ -766,16 +802,15 @@ export class BaileysService {
       });
 
       if (!wasSet) {
-        logger.warn('Duplicate inbound message skipped', { businessId, messageId, from });
+        logger.debug('Duplicate inbound message skipped', { businessId, messageId });
         return false;
       }
 
       return true;
     } catch (error) {
-      logger.error('Failed to deduplicate inbound message, processing anyway', {
+      logger.warn('Failed to deduplicate inbound message, processing anyway', {
         businessId,
         messageId,
-        from,
         error,
       });
       return true;
@@ -838,7 +873,7 @@ export class BaileysService {
       if (RedisConfig.isReady()) {
         const cached = await RedisConfig.getClient().get(cacheKey);
         if (cached) {
-          logger.info('✅ [JID] Using cached JID', { phone, jid: cached });
+          logger.debug('Using cached JID', { phone, jid: cached });
           return cached;
         }
       }
@@ -850,7 +885,7 @@ export class BaileysService {
       if (sock && this.isSessionConnected(businessId)) {
         const [result] = await sock.onWhatsApp(normalized);
         if (result?.exists && result?.jid) {
-          logger.info('✅ [JID] Resolved via onWhatsApp', { phone, jid: result.jid });
+          logger.debug('JID resolved via onWhatsApp', { phone, jid: result.jid });
           try {
             if (RedisConfig.isReady()) {
               await RedisConfig.getClient().setEx(cacheKey, 7 * 24 * 3600, result.jid);
@@ -858,10 +893,10 @@ export class BaileysService {
           } catch (_) { /* ignore cache errors */ }
           return result.jid;
         }
-        logger.warn('⚠️ [JID] Number not found on WhatsApp', { phone, normalized });
+        logger.debug('Number not found on WhatsApp', { phone, normalized });
       }
     } catch (error) {
-      logger.warn('⚠️ [JID] onWhatsApp lookup failed, falling back to manual JID', { phone, error });
+      logger.debug('onWhatsApp lookup failed, falling back to manual JID', { phone, error });
     }
 
     // Fallback: construct JID manually
@@ -875,23 +910,26 @@ export class BaileysService {
 
       const sock = this.sessions.get(businessId);
 
+      // Antes estos dos casos eran `error` sin campo común y sin throttle:
+      // 1754 líneas de "Session not found" en el log anterior. Ahora comparten
+      // el evento `msg.out_failed` con una `reason` tipificada, así se puede
+      // agrupar por causa en vez de leer tres mensajes distintos.
       if (!sock) {
-        logger.error('Session not found', { businessId });
+        this.logSendFailure(businessId, to, 'no_session');
         return false;
       }
 
       if (!this.isSessionConnected(businessId)) {
-        logger.error('Session not connected', { businessId });
+        this.logSendFailure(businessId, to, 'not_connected');
         return false;
       }
 
       // Resolve to the correct WhatsApp JID (handles Argentine mobile 9-prefix, @lid, etc.)
       const jid = await this.resolveJid(businessId, to);
 
-      logger.info('🚀 Attempting to send message via Baileys', {
+      logger.debug('Sending message via Baileys', {
         businessId,
         to: jid,
-        messagePreview: message.substring(0, 50),
         messageLength: message.length,
       });
 
@@ -902,12 +940,11 @@ export class BaileysService {
       const result = await Promise.race([sendPromise, timeoutPromise]);
       this.rememberOutboundMessageId(businessId, result?.key?.id);
 
-      logger.info('✅ Message sent successfully via Baileys', { 
-        businessId, 
-        to: jid, 
+      logEvent('info', 'msg.out', {
+        businessId,
+        to: jid,
         messageLength: message.length,
         messageId: result?.key?.id,
-        status: result?.status,
       });
 
       // Update last activity
@@ -919,9 +956,33 @@ export class BaileysService {
 
       return true;
     } catch (error) {
-      logger.error('Error sending message', { error, businessId, to });
+      const isTimeout = error instanceof Error && error.message.includes('timeout');
+      this.logSendFailure(businessId, to, isTimeout ? 'timeout' : 'send_error', error);
       return false;
     }
+  }
+
+  /**
+   * Un único punto para reportar un envío fallido, con la causa tipificada y
+   * throttle por comercio: cuando una sesión se cae, cada mensaje pendiente
+   * dispara este camino y sin throttle el log se vuelve ilegible.
+   */
+  private logSendFailure(
+    businessId: string,
+    to: string,
+    reason: SendFailureReason,
+    error?: unknown
+  ): void {
+    const t = throttle(`msg.out_failed:${businessId}:${reason}`, 60_000);
+    if (!t.allowed) return;
+
+    logEvent('warn', 'msg.out_failed', {
+      businessId,
+      to,
+      reason,
+      suppressed: t.suppressed,
+      ...(error !== undefined && { error }),
+    });
   }
 
   /**
@@ -938,7 +999,7 @@ export class BaileysService {
 
       this.sessionStates.delete(businessId);
 
-      logger.info('Session stopped', { businessId });
+      logEvent('info', 'session.stopped', { businessId });
     } catch (error) {
       logger.error('Error stopping session', { error, businessId });
     }
@@ -949,24 +1010,24 @@ export class BaileysService {
    */
   async recoverSessions(): Promise<void> {
     try {
-      logger.info('Recovering existing sessions...');
+      logger.debug('Recovering existing sessions');
 
       if (!fs.existsSync(this.AUTH_DIR)) {
-        logger.info('No auth directory found, skipping recovery');
+        logger.debug('No auth directory found, skipping recovery');
         return;
       }
 
       const directories = fs.readdirSync(this.AUTH_DIR, { withFileTypes: true });
       const sessionDirs = directories.filter((dirent: fs.Dirent) => dirent.isDirectory());
 
-      logger.info('Found session directories', { count: sessionDirs.length });
+      logger.debug('Found session directories', { count: sessionDirs.length });
 
       for (const dirent of sessionDirs) {
         try {
           const sessionPath = path.join(this.AUTH_DIR, dirent.name);
 
           if (!this.hasPersistedCredentials(sessionPath)) {
-            logger.info('Skipping recovery, no persisted credentials (never fully linked)', {
+            logger.debug('Skipping recovery, no persisted credentials (never fully linked)', {
               dirName: dirent.name,
             });
             continue;
@@ -977,16 +1038,21 @@ export class BaileysService {
 
           if (!businessId) {
             // Fallback: use directory name as businessId (for backward compatibility)
-            logger.warn('No business metadata found, using directory name as businessId', { dirName: dirent.name });
+            logger.warn('No business metadata found, using directory name as businessId', {
+              dirName: dirent.name,
+            });
             const fallbackBusinessId = dirent.name;
 
             // Start session with fallback businessId
             await this.startSession(fallbackBusinessId);
-            logger.info('Session recovery initiated (fallback)', { businessId: fallbackBusinessId });
+            logEvent('info', 'session.recovered', {
+              businessId: fallbackBusinessId,
+              source: 'directory-name',
+            });
           } else {
             // Start session with businessId from metadata
             await this.startSession(businessId);
-            logger.info('Session recovery initiated', { businessId });
+            logEvent('info', 'session.recovered', { businessId, source: 'metadata' });
           }
         } catch (error) {
           logger.error('Failed to recover session', { error, dirName: dirent.name });
@@ -1009,7 +1075,7 @@ export class BaileysService {
       const sessionPath = this.getSessionPath(businessId);
       if (fs.existsSync(sessionPath)) {
         fs.rmSync(sessionPath, { recursive: true, force: true });
-        logger.info('Session deleted from disk', { businessId, sessionPath });
+        logger.debug('Session deleted from disk', { businessId });
       }
     } catch (error) {
       logger.error('Error deleting session', { error, businessId });
