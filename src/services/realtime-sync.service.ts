@@ -1,6 +1,8 @@
 import { SupabaseConfig } from '../config/supabase.js';
 import { RedisConfig } from '../config/redis.js';
-import { logger } from '../utils/logger.js';
+import { logger, logEvent } from '../utils/logger.js';
+import { withLogContext } from '../utils/log-context.js';
+import { throttle } from '../utils/log-throttle.js';
 import { runWithLanguage } from '../i18n/index.js';
 import { resolveLanguage } from '../i18n/language-store.js';
 import type { Database } from '../types/supabase.js';
@@ -56,12 +58,12 @@ export class RealtimeSyncService {
    */
   static async initializeRealtimeSync(): Promise<void> {
     if (this.initialized) {
-      logger.info('Realtime sync already initialized');
+      logger.debug('Realtime sync already initialized');
       return;
     }
 
     try {
-      logger.info('🔄 Initializing realtime synchronization...');
+      logger.debug('Initializing realtime synchronization');
 
       const client = SupabaseConfig.getClient();
 
@@ -78,7 +80,7 @@ export class RealtimeSyncService {
       this.subscribeToBlockedDates(client);
 
       this.initialized = true;
-      logger.info('✅ Realtime sync initialized successfully');
+      logger.debug('Realtime sync initialized', { channels: this.subscriptions.size });
     } catch (error) {
       logger.error('Failed to initialize realtime sync', { error });
       // Don't throw - sync is optional, system should work without it
@@ -105,9 +107,14 @@ export class RealtimeSyncService {
         )
         .subscribe((status: string) => {
           if (status === 'SUBSCRIBED') {
-            logger.info('✅ Subscribed to businesses realtime changes');
+            logEvent('info', 'realtime.subscribed', { channel: 'businesses' });
           } else if (status === 'CHANNEL_ERROR') {
-            logger.error('❌ Error subscribing to businesses');
+            // Supabase reintenta en bucle: sin throttle esto llegó a ~1000
+            // líneas idénticas en el log.
+            const t = throttle('realtime.lost:businesses', 60_000);
+            if (t.allowed) {
+              logEvent('error', 'realtime.lost', { channel: 'businesses', suppressed: t.suppressed });
+            }
           }
         });
 
@@ -137,9 +144,12 @@ export class RealtimeSyncService {
         )
         .subscribe((status: string) => {
           if (status === 'SUBSCRIBED') {
-            logger.info('✅ Subscribed to tables realtime changes');
+            logEvent('info', 'realtime.subscribed', { channel: 'tables' });
           } else if (status === 'CHANNEL_ERROR') {
-            logger.error('❌ Error subscribing to tables');
+            const t = throttle('realtime.lost:tables', 60_000);
+            if (t.allowed) {
+              logEvent('error', 'realtime.lost', { channel: 'tables', suppressed: t.suppressed });
+            }
           }
         });
 
@@ -158,7 +168,7 @@ export class RealtimeSyncService {
    */
   private static subscribeToWaitlistEntries(client: any): void {
     try {
-      logger.info('🔌 [REALTIME] Setting up waitlist_entries subscription...');
+      logger.debug('Setting up waitlist_entries subscription');
 
       const subscription = client
         .channel('public:waitlist_entries')
@@ -170,7 +180,7 @@ export class RealtimeSyncService {
             table: 'waitlist_entries',
           },
           async (payload: any) => {
-            logger.info('📨 [REALTIME] INSERT received on waitlist_entries', {
+            logger.debug('INSERT received on waitlist_entries', {
               entryId: payload?.new?.id,
               source: payload?.new?.source,
               status: payload?.new?.status,
@@ -178,7 +188,10 @@ export class RealtimeSyncService {
             // Handle DASHBOARD inserts directly.
             // For AI_CHAT inserts the WhatsApp handler already sent the confirmation;
             // only use realtime as a fallback if that send was missed (dedup check).
-            await this.handleNewEntryNotification(payload);
+            await withLogContext(
+              { businessId: payload?.new?.business_id, entryId: payload?.new?.id },
+              () => this.handleNewEntryNotification(payload)
+            );
           }
         )
         .on(
@@ -189,37 +202,39 @@ export class RealtimeSyncService {
             table: 'waitlist_entries',
           },
           async (payload: any) => {
-            logger.info('📨 [REALTIME] *** Waitlist entry UPDATE received ***', {
-              timestamp: new Date().toISOString(),
-              hasPayload: !!payload,
-            });
-            await this.handleWaitlistStatusChange(payload);
+            await withLogContext(
+              { businessId: payload?.new?.business_id, entryId: payload?.new?.id },
+              () => this.handleWaitlistStatusChange(payload)
+            );
           }
         )
         .subscribe((status: string) => {
           if (status === 'SUBSCRIBED') {
-            logger.info('✅ [REALTIME] Successfully subscribed to waitlist_entries - listening for INSERT (panel) and UPDATE (status changes)', {
-              channel: 'public:waitlist_entries',
-            });
+            logEvent('info', 'realtime.subscribed', { channel: 'waitlist_entries' });
             if (this.waitlistChannelHadError) {
               this.waitlistChannelHadError = false;
-              logger.info('🔄 [REALTIME] Reconnected after error — starting missed-event recovery...');
-              this.recoverMissedNotifications().catch((err) =>
-                logger.error('❌ [REALTIME] Recovery failed', { error: err })
+              logger.debug('Reconnected after error, starting missed-event recovery');
+              this.recoverMissedNotifications().catch((error) =>
+                logger.error('Missed-event recovery failed', { error })
               );
             }
           } else if (status === 'CHANNEL_ERROR') {
             this.waitlistChannelHadError = true;
-            logger.error('❌ [REALTIME] Error subscribing to waitlist_entries', { status });
+            const t = throttle('realtime.lost:waitlist_entries', 60_000);
+            if (t.allowed) {
+              logEvent('error', 'realtime.lost', {
+                channel: 'waitlist_entries',
+                suppressed: t.suppressed,
+              });
+            }
           } else {
-            logger.info('📡 [REALTIME] Waitlist subscription status update', { status });
+            logger.debug('Waitlist subscription status update', { status });
           }
         });
 
       this.subscriptions.set('waitlist_entries', subscription);
-      logger.info('💾 [REALTIME] Waitlist subscription stored in registry');
     } catch (error) {
-      logger.error('❌ [REALTIME] Failed to subscribe to waitlist_entries', { error });
+      logger.error('Failed to subscribe to waitlist_entries', { error });
     }
   }
 
@@ -233,7 +248,12 @@ export class RealtimeSyncService {
     try {
       const entry = payload?.new;
       if (!entry?.id || !entry?.customer_id || !entry?.business_id) {
-        logger.warn('⚠️ [REALTIME] INSERT missing required fields', { payload });
+        // Antes se volcaba el `payload` entero (la fila completa de Postgres).
+        logger.debug('INSERT missing required fields', {
+          entryId: entry?.id,
+          hasCustomer: !!entry?.customer_id,
+          hasBusiness: !!entry?.business_id,
+        });
         return;
       }
 
@@ -243,8 +263,7 @@ export class RealtimeSyncService {
       if (RedisConfig.isReady()) {
         const alreadySent = await RedisConfig.getClient().get(dedupKey);
         if (alreadySent) {
-          logger.info('⏭️ [REALTIME] Skipping INSERT notification — already sent by handler', {
-            entryId: entry.id,
+          logger.debug('Skipping INSERT notification, already sent by handler', {
             source: entry.source,
           });
           return;
@@ -261,7 +280,7 @@ export class RealtimeSyncService {
         .single();
 
       if (customerError || !customerData) {
-        logger.error('❌ [REALTIME] Customer not found for INSERT notification', {
+        logger.warn('Customer not found for INSERT notification', {
           customerId: entry.customer_id,
           error: customerError,
         });
@@ -271,9 +290,9 @@ export class RealtimeSyncService {
       const customer = customerData as CustomersRow;
 
       if (!customer.phone) {
-        logger.error('❌ [REALTIME] Customer has no phone, skipping INSERT notification', {
+        // Ocurre con clientes cargados a mano desde el panel: no es accionable.
+        logger.debug('Customer has no phone, skipping INSERT notification', {
           customerId: customer.id,
-          entryId: entry.id,
         });
         return;
       }
@@ -320,9 +339,8 @@ export class RealtimeSyncService {
       const sent = await baileys.sendMessage(entry.business_id, recipientJid, notificationMessage);
 
       if (sent) {
-        logger.info('✅ [REALTIME] INSERT notification sent', {
-          entryId: entry.id,
-          businessId: entry.business_id,
+        logEvent('info', 'realtime.notified', {
+          trigger: 'insert',
           source: entry.source,
           status: entry.status,
           phone: customer.phone,
@@ -331,18 +349,20 @@ export class RealtimeSyncService {
           await RedisConfig.getClient().setEx(dedupKey, 86400, '1');
         }
       } else {
-        logger.error('❌ [REALTIME] Failed to send INSERT notification', {
-          entryId: entry.id,
-          businessId: entry.business_id,
-          source: entry.source,
-          phone: customer.phone,
-        });
+        // Cuando la sesión de WhatsApp del comercio está caída esto se repite
+        // por cada entrada: 1678 líneas idénticas en el log anterior.
+        const t = throttle(`realtime.notify_failed:${entry.business_id}`, 60_000);
+        if (t.allowed) {
+          logEvent('warn', 'msg.out_failed', {
+            trigger: 'realtime_insert',
+            source: entry.source,
+            phone: customer.phone,
+            suppressed: t.suppressed,
+          });
+        }
       }
     } catch (error) {
-      logger.error('❌ [REALTIME] Error in handleNewEntryNotification', {
-        error,
-        errorMessage: error instanceof Error ? error.message : 'Unknown error',
-      });
+      logger.error('Error in handleNewEntryNotification', { error });
     }
   }
 
@@ -364,9 +384,9 @@ export class RealtimeSyncService {
         .gte('updated_at', twoHoursAgo);
 
       if (statusError) {
-        logger.error('❌ [RECOVERY] Failed to query status entries', { error: statusError });
+        logger.error('Recovery failed to query status entries', { error: statusError });
       } else if (statusEntries && statusEntries.length > 0) {
-        logger.info(`🔍 [RECOVERY] Found ${statusEntries.length} recent CONFIRMED/NOTIFIED/SEATED entries to check`);
+        logger.debug('Recovery: checking recent status entries', { count: statusEntries.length });
         for (const entry of statusEntries) {
           const dedupKey = `wa:status:sent:${entry.id}:${entry.status}`;
           let alreadySent = false;
@@ -374,7 +394,10 @@ export class RealtimeSyncService {
             alreadySent = !!(await RedisConfig.getClient().get(dedupKey));
           }
           if (!alreadySent) {
-            logger.info('🔔 [RECOVERY] Sending missed status notification', { entryId: entry.id, status: entry.status });
+            logger.debug('Recovery: sending missed status notification', {
+              entryId: entry.id,
+              status: entry.status,
+            });
             await this.handleWaitlistStatusChange({ eventType: 'UPDATE', new: entry, old: { status: 'WAITING' } });
           }
         }
@@ -388,9 +411,11 @@ export class RealtimeSyncService {
         .gte('created_at', twoHoursAgo);
 
       if (newEntriesError) {
-        logger.error('❌ [RECOVERY] Failed to query new entries', { error: newEntriesError });
+        logger.error('Recovery failed to query new entries', { error: newEntriesError });
       } else if (newEntries && newEntries.length > 0) {
-        logger.info(`🔍 [RECOVERY] Found ${newEntries.length} recent entries to check for missed INSERT notifications`);
+        logger.debug('Recovery: checking recent entries for missed INSERTs', {
+          count: newEntries.length,
+        });
         for (const entry of newEntries) {
           const dedupKey = `wa:created:${entry.id}`;
           let alreadySent = false;
@@ -398,18 +423,22 @@ export class RealtimeSyncService {
             alreadySent = !!(await RedisConfig.getClient().get(dedupKey));
           }
           if (!alreadySent) {
-            logger.info('🔔 [RECOVERY] Sending missed INSERT notification', { entryId: entry.id, source: entry.source, status: entry.status });
+            logger.debug('Recovery: sending missed INSERT notification', {
+              entryId: entry.id,
+              source: entry.source,
+              status: entry.status,
+            });
             await this.handleNewEntryNotification({ new: entry });
           }
         }
       }
 
-      logger.info('✅ [RECOVERY] Missed notification recovery complete');
-    } catch (error) {
-      logger.error('❌ [RECOVERY] Unexpected error during recovery', {
-        error,
-        errorMessage: error instanceof Error ? error.message : 'Unknown error',
+      logEvent('info', 'realtime.recovered', {
+        statusEntriesChecked: statusEntries?.length ?? 0,
+        newEntriesChecked: newEntries?.length ?? 0,
       });
+    } catch (error) {
+      logger.error('Unexpected error during realtime recovery', { error });
     }
   }
 
@@ -423,10 +452,10 @@ export class RealtimeSyncService {
 
       const businessId = newBusiness?.id || oldBusiness?.id;
 
-      logger.info('📬 Business change detected', {
-        eventType,
-        businessId,
-      });
+      // Estas tres líneas se disparaban juntas cada ~7 s para el mismo comercio
+      // — 9000+ entradas en una muestra de 20 MB, para un evento que en la gran
+      // mayoría de los casos el sistema descarta. Son traza, no eventos.
+      logger.debug('Business change detected', { eventType, businessId });
 
       if (eventType === 'INSERT' || eventType === 'UPDATE') {
         const businessKey = `business:${businessId}`;
@@ -455,7 +484,7 @@ export class RealtimeSyncService {
           3600, // 1 hour TTL
           JSON.stringify(newBusiness)
         );
-        logger.info('💾 Business cached in Redis', { businessId });
+        logger.debug('Business cached in Redis', { businessId });
 
         const shouldRefreshCaches =
           eventType === 'INSERT' ||
@@ -464,9 +493,9 @@ export class RealtimeSyncService {
         if (shouldRefreshCaches) {
           const tablesCacheKey = `business:tables:${businessId}`;
           await redis.del(tablesCacheKey);
-          logger.info('🔄 Tables cache cleared', { businessId });
+          logger.debug('Tables cache cleared', { businessId });
         } else {
-          logger.info('⏭️ Skipping cache refresh for technical business update', { businessId });
+          logger.debug('Skipping cache refresh for technical business update', { businessId });
         }
 
         await this.closeSessionIfWeeklyHoursMissing(businessId, newBusiness);
@@ -476,10 +505,14 @@ export class RealtimeSyncService {
         const tablesCacheKey = `business:tables:${businessId}`;
         await redis.del(businessKey);
         await redis.del(tablesCacheKey);
-        logger.info('🗑️ Business removed from cache', { businessId });
+        logger.debug('Business removed from cache', { businessId });
       }
     } catch (error) {
-      logger.error('Error handling business change', { error, payload });
+      logger.error('Error handling business change', {
+        error,
+        eventType: payload?.eventType,
+        businessId: payload?.new?.id ?? payload?.old?.id,
+      });
     }
   }
 
@@ -502,7 +535,10 @@ export class RealtimeSyncService {
         return;
       }
 
-      logger.warn('⏹️ weekly_hours is null — closing WhatsApp session', { businessId });
+      logEvent('warn', 'session.closed', {
+        businessId,
+        reason: 'weekly_hours is null',
+      });
       await baileys.stopSession(businessId);
     } catch (error) {
       logger.error('Error closing WhatsApp session for missing weekly_hours', { error, businessId });
@@ -518,7 +554,7 @@ export class RealtimeSyncService {
       const table = newTable || oldTable;
       const businessId = table?.business_id;
 
-      logger.info('📬 Table change detected', {
+      logger.debug('Table change detected', {
         eventType,
         businessId,
         tableId: table?.id,
@@ -526,7 +562,7 @@ export class RealtimeSyncService {
       });
 
       if (!businessId) {
-        logger.warn('Table change missing businessId');
+        logger.debug('Table change missing businessId');
         return;
       }
 
@@ -535,9 +571,13 @@ export class RealtimeSyncService {
 
       await redis.del(tablesCacheKey);
 
-      logger.info('🔄 Tables cache cleared for business', { businessId });
+      logger.debug('Tables cache cleared for business', { businessId });
     } catch (error) {
-      logger.error('Error handling tables change', { error, payload });
+      logger.error('Error handling tables change', {
+        error,
+        eventType: payload?.eventType,
+        businessId: payload?.new?.business_id ?? payload?.old?.business_id,
+      });
     }
   }
 
@@ -546,18 +586,13 @@ export class RealtimeSyncService {
    */
   private static async handleWaitlistStatusChange(payload: any): Promise<void> {
     try {
-      logger.info('📨 [REALTIME] Waitlist UPDATE event received', {
-        eventType: payload.eventType,
-        payloadKeys: Object.keys(payload),
-      });
-
       const { eventType, new: newEntry, old: oldEntry } = payload;
 
-      logger.info('📊 [REALTIME] Analyzing status change', {
+      // Este handler emitía 7 líneas `info` por evento, incluso para los que
+      // descarta de inmediato. Toda esa deliberación es traza: sólo el envío
+      // efectivo (o su fallo) llega a `info`.
+      logger.debug('Waitlist UPDATE received', {
         eventType,
-        entryId: newEntry?.id,
-        businessId: newEntry?.business_id,
-        customerId: newEntry?.customer_id,
         oldStatus: oldEntry?.status,
         newStatus: newEntry?.status,
         displayCode: newEntry?.display_code,
@@ -565,7 +600,7 @@ export class RealtimeSyncService {
 
       // Only process UPDATE events
       if (eventType !== 'UPDATE') {
-        logger.info('⏭️ [REALTIME] Skipping non-UPDATE event', { eventType });
+        logger.debug('Skipping non-UPDATE event', { eventType });
         return;
       }
 
@@ -585,17 +620,14 @@ export class RealtimeSyncService {
       // M11 — welcome message when the customer is seated at the restaurant
       const isSeated = statusChanged && newEntry?.status === 'SEATED';
 
-      logger.info('🔍 [REALTIME] Status validation', {
+      logger.debug('Status validation', {
         oldStatus: oldEntry?.status,
         newStatus: newEntry?.status,
         statusChanged,
-        isConfirmed,
-        isNotified,
-        isSeated,
       });
 
       if (!isConfirmed && !isNotified && !isSeated) {
-        logger.info('⏭️ [REALTIME] Skipping - status is not CONFIRMED, NOTIFIED or SEATED', {
+        logger.debug('Skipping: status is not CONFIRMED, NOTIFIED or SEATED', {
           newStatus: newEntry?.status,
           statusChanged,
         });
@@ -610,26 +642,17 @@ export class RealtimeSyncService {
           const dedupKey = `wa:status:sent:${newEntry.id}:${newEntry.status}`;
           const alreadySent = await redisClient.get(dedupKey);
           if (alreadySent) {
-            logger.info('⏭️ [REALTIME] Skipping duplicate status notification', {
-              entryId: newEntry.id,
-              businessId: newEntry.business_id,
+            logger.debug('Skipping duplicate status notification', {
               status: newEntry.status,
             });
             return;
           }
         }
       } catch (error) {
-        logger.warn('⚠️ [REALTIME] Failed dedup check for confirmation send', {
-          entryId: newEntry?.id,
-          businessId: newEntry?.business_id,
-          error,
-        });
+        logger.warn('Failed dedup check for confirmation send', { error });
       }
 
-      logger.info('🔔 [REALTIME] ✅ Status changed! Preparing notification...', {
-        entryId: newEntry.id,
-        businessId: newEntry.business_id,
-        customerId: newEntry.customer_id,
+      logger.debug('Status changed, preparing notification', {
         displayCode: newEntry.display_code,
         oldStatus: oldEntry.status,
         newStatus: newEntry.status,
@@ -638,10 +661,6 @@ export class RealtimeSyncService {
       // Import services dynamically to avoid circular dependencies
       const { BaileysService } = await import('./baileys.service.js');
       const { SupabaseConfig } = await import('../config/supabase.js');
-
-      logger.info('📦 [REALTIME] Services imported, fetching customer data...', {
-        customerId: newEntry.customer_id,
-      });
 
       // Get customer data directly from Supabase
       const supabaseClient = SupabaseConfig.getClient();
@@ -652,10 +671,9 @@ export class RealtimeSyncService {
         .single();
 
       if (customerError || !customerData) {
-        logger.error('❌ [REALTIME] Customer not found for waitlist notification', {
+        logger.warn('Customer not found for waitlist notification', {
           customerId: newEntry.customer_id,
           error: customerError,
-          errorDetails: customerError ? JSON.stringify(customerError) : 'No data',
         });
         return;
       }
@@ -663,16 +681,14 @@ export class RealtimeSyncService {
       const customer = customerData as CustomersRow;
 
       if (!customer.phone) {
-        logger.error('❌ [REALTIME] Customer has no phone, skipping waitlist notification', {
+        logger.debug('Customer has no phone, skipping waitlist notification', {
           customerId: customer.id,
-          entryId: newEntry.id,
         });
         return;
       }
 
-      logger.info('✅ [REALTIME] Customer data retrieved', {
+      logger.debug('Customer data retrieved', {
         customerId: customer.id,
-        customerName: customer.name,
         phone: customer.phone,
       });
 
@@ -702,11 +718,8 @@ export class RealtimeSyncService {
       }
       });
 
-      logger.info('📝 [REALTIME] Notification message built', {
+      logger.debug('Notification message built', {
         messageLength: notificationMessage.length,
-        messagePreview: notificationMessage.substring(0, 80),
-        recipient: customer.phone,
-        businessId: newEntry.business_id,
         status: newEntry.status,
       });
 
@@ -721,33 +734,20 @@ export class RealtimeSyncService {
         
         if (cachedJid) {
           recipientJid = cachedJid;
-          logger.info('✅ [REALTIME] Using cached JID for correct delivery', {
-            phone: customer.phone,
-            cachedJid,
-            businessId: newEntry.business_id,
-          });
+          logger.debug('Using cached JID for delivery', { phone: customer.phone, cachedJid });
         } else {
-          logger.warn('⚠️ [REALTIME] No cached JID found, using phone number (may not deliver correctly)', {
+          logger.debug('No cached JID found, falling back to phone number', {
             phone: customer.phone,
-            willUseDefaultDomain: true,
           });
         }
       } catch (error) {
-        logger.warn('⚠️ [REALTIME] Failed to get cached JID, using phone number', {
+        logger.debug('Failed to read cached JID, falling back to phone number', {
           error,
           phone: customer.phone,
         });
       }
 
       // Send WhatsApp notification
-      logger.info('📤 [REALTIME] Attempting to send WhatsApp notification...', {
-        businessId: newEntry.business_id,
-        phone: customer.phone,
-        recipientJid,
-        entryId: newEntry.id,
-        displayCode: newEntry.display_code,
-      });
-
       const baileys = BaileysService.getInstance();
       const sent = await baileys.sendMessage(
         newEntry.business_id,
@@ -755,23 +755,13 @@ export class RealtimeSyncService {
         notificationMessage
       );
 
-      logger.info('📊 [REALTIME] WhatsApp send attempt result', {
-        sent,
-        type: typeof sent,
-        businessId: newEntry.business_id,
-        phone: customer.phone,
-        recipientJid,
-        entryId: newEntry.id,
-      });
-
       if (sent) {
-        logger.info('✅ [REALTIME] WhatsApp notification sent successfully!', {
-          businessId: newEntry.business_id,
+        logEvent('info', 'realtime.notified', {
+          trigger: 'status_change',
+          status: newEntry.status,
+          previousStatus: oldEntry.status,
           phone: customer.phone,
-          recipientJid,
-          entryId: newEntry.id,
           displayCode: newEntry.display_code,
-          customerName: customer.name,
         });
 
         // Mark this status notification as sent to avoid duplicate sends.
@@ -785,29 +775,28 @@ export class RealtimeSyncService {
             );
           }
         } catch (error) {
-          logger.warn('⚠️ [REALTIME] Failed to mark status notification dedup key', {
-            entryId: newEntry.id,
-            businessId: newEntry.business_id,
+          logger.warn('Failed to mark status notification dedup key', {
             status: newEntry.status,
             error,
           });
         }
       } else {
-        logger.error('❌ [REALTIME] Failed to send WhatsApp notification', {
-          businessId: newEntry.business_id,
-          phone: customer.phone,
-          recipientJid,
-          entryId: newEntry.id,
-          displayCode: newEntry.display_code,
-          customerName: customer.name,
-        });
+        const t = throttle(`realtime.notify_failed:${newEntry.business_id}`, 60_000);
+        if (t.allowed) {
+          logEvent('warn', 'msg.out_failed', {
+            trigger: 'realtime_status_change',
+            status: newEntry.status,
+            phone: customer.phone,
+            displayCode: newEntry.display_code,
+            suppressed: t.suppressed,
+          });
+        }
       }
     } catch (error) {
-      logger.error('❌ [REALTIME] Error in handleWaitlistStatusChange', { 
+      logger.error('Error in handleWaitlistStatusChange', {
         error,
-        errorMessage: error instanceof Error ? error.message : 'Unknown error',
-        errorStack: error instanceof Error ? error.stack : undefined,
-        payload: JSON.stringify(payload).substring(0, 500),
+        eventType: payload?.eventType,
+        status: payload?.new?.status,
       });
     }
   }
@@ -828,7 +817,7 @@ export class RealtimeSyncService {
    */
   private static subscribeToBlockedDates(client: any): void {
     try {
-      logger.info('🔌 [REALTIME] Setting up business_blocked_dates subscription...');
+      logger.debug('Setting up business_blocked_dates subscription');
 
       const subscription = client
         .channel('public:business_blocked_dates')
@@ -840,7 +829,7 @@ export class RealtimeSyncService {
             table: 'business_blocked_dates',
           },
           async (payload: any) => {
-            logger.debug('📨 [BLOCKED_DATE] INSERT event received', {
+            logger.debug('Blocked date INSERT event received', {
               businessId: payload?.new?.business_id,
               date: payload?.new?.date,
               hasReason: !!payload?.new?.reason,
@@ -856,7 +845,7 @@ export class RealtimeSyncService {
             table: 'business_blocked_dates',
           },
           async (payload: any) => {
-            logger.debug('📨 [BLOCKED_DATE] UPDATE event received', {
+            logger.debug('Blocked date UPDATE event received', {
               businessId: payload?.new?.business_id,
               date: payload?.new?.date,
               hasReason: !!payload?.new?.reason,
@@ -866,20 +855,23 @@ export class RealtimeSyncService {
         )
         .subscribe((status: string) => {
           if (status === 'SUBSCRIBED') {
-            logger.info('✅ [REALTIME] Successfully subscribed to business_blocked_dates - listening for auto-generation of reason_message', {
-              channel: 'public:business_blocked_dates',
-            });
+            logEvent('info', 'realtime.subscribed', { channel: 'business_blocked_dates' });
           } else if (status === 'CHANNEL_ERROR') {
-            logger.error('❌ [REALTIME] Error subscribing to business_blocked_dates', { status });
+            const t = throttle('realtime.lost:business_blocked_dates', 60_000);
+            if (t.allowed) {
+              logEvent('error', 'realtime.lost', {
+                channel: 'business_blocked_dates',
+                suppressed: t.suppressed,
+              });
+            }
           } else {
-            logger.info('📡 [REALTIME] business_blocked_dates subscription status update', { status });
+            logger.debug('business_blocked_dates subscription status update', { status });
           }
         });
 
       this.subscriptions.set('business_blocked_dates', subscription);
-      logger.info('💾 [REALTIME] business_blocked_dates subscription stored in registry');
     } catch (error) {
-      logger.error('❌ [REALTIME] Failed to subscribe to business_blocked_dates', { error });
+      logger.error('Failed to subscribe to business_blocked_dates', { error });
     }
   }
 
@@ -910,18 +902,17 @@ export class RealtimeSyncService {
       const reason: string | null = newRow.reason?.trim() || null;
       const reasonMessage: string | null = newRow.reason_message || null;
 
-      logger.info('🔍 [BLOCKED_DATE] Realtime change detected', {
+      logger.debug('Blocked date change detected', {
         eventType,
         businessId,
         date,
         hasReason: !!reason,
         hasReasonMessage: !!reasonMessage,
-        oldReason: oldRow?.reason?.trim() || null,
       });
 
       // Skip if missing required fields
       if (!businessId || !date || !reason) {
-        logger.debug('[BLOCKED_DATE] Skipped: missing businessId, date, or reason', {
+        logger.debug('Blocked date skipped: missing businessId, date, or reason', {
           businessId,
           date,
           reason,
@@ -931,10 +922,9 @@ export class RealtimeSyncService {
 
       // Check if message already exists for this reason
       if (reasonMessage) {
-        logger.info('⏭️ [BLOCKED_DATE] Skipped: reason_message already exists', {
+        logger.debug('Blocked date skipped: reason_message already exists', {
           businessId,
           date,
-          messageLength: reasonMessage.length,
         });
         return;
       }
@@ -942,7 +932,7 @@ export class RealtimeSyncService {
       // Check if the reason changed (for UPDATE events)
       const oldReason = oldRow?.reason?.trim() || null;
       if (eventType === 'UPDATE' && oldReason === reason) {
-        logger.debug('[BLOCKED_DATE] Skipped: reason unchanged in UPDATE', {
+        logger.debug('Blocked date skipped: reason unchanged in UPDATE', {
           businessId,
           date,
           reason,
@@ -950,10 +940,9 @@ export class RealtimeSyncService {
         return;
       }
 
-      logger.info('🚀 [BLOCKED_DATE] Starting reason_message generation from realtime', {
+      logger.debug('Starting blocked-date reason_message generation', {
         businessId,
         date,
-        reason,
         eventType,
       });
 
@@ -966,19 +955,18 @@ export class RealtimeSyncService {
 
       await SupabaseService.updateBlockedDateReasonMessage(businessId, date, generatedMessage);
 
-      logger.info('✅ [BLOCKED_DATE] reason_message generated and saved from realtime', {
+      logger.debug('Blocked-date reason_message generated and saved', {
         businessId,
         date,
         eventType,
         messageLength: generatedMessage.length,
       });
     } catch (error) {
-      logger.error('❌ [BLOCKED_DATE] Failed to generate reason_message from realtime', {
-        error: error instanceof Error ? error.message : 'Unknown error',
+      logger.error('Failed to generate blocked-date reason_message', {
+        error,
         businessId: payload?.new?.business_id,
         date: payload?.new?.date,
         eventType: payload?.eventType,
-        stack: error instanceof Error ? error.stack : undefined,
       });
     }
   }
@@ -992,12 +980,12 @@ export class RealtimeSyncService {
 
       for (const [key, subscription] of this.subscriptions.entries()) {
         await client.removeChannel(subscription);
-        logger.info('Unsubscribed from realtime channel', { channel: key });
+        logger.debug('Unsubscribed from realtime channel', { channel: key });
       }
 
       this.subscriptions.clear();
       this.initialized = false;
-      logger.info('✅ Realtime sync cleanup complete');
+      logger.debug('Realtime sync cleanup complete');
     } catch (error) {
       logger.error('Error cleaning up realtime sync', { error });
     }
