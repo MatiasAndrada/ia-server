@@ -7,7 +7,14 @@ import { SupabaseConfig } from '../config/supabase.js';
 import { RedisConfig } from '../config/redis.js';
 import { agentRegistry } from '../agents/index.js';
 import { BaileysMessage, BlockedDateEntry, Business, Customer, ReservationDraft, WaitlistEntry, WeeklyHours } from '../types/index.js';
-import { logger } from '../utils/logger.js';
+import { logger, logEvent } from '../utils/logger.js';
+import { withLogContext } from '../utils/log-context.js';
+import {
+  withTurnStats,
+  recordOutbound,
+  recordDraftStep,
+  recordBlocked,
+} from '../utils/turn-stats.js';
 import { runWithLanguage, currentLanguage, SupportedLanguage, DEFAULT_LANGUAGE, ALL_CATALOGS } from '../i18n/index.js';
 import {
   cacheDetectedLanguage,
@@ -137,7 +144,7 @@ export class WhatsAppHandler {
       const pending = this.pendingWhileProcessing.get(conversationId) ?? [];
       pending.push(message);
       this.pendingWhileProcessing.set(conversationId, pending);
-      logger.info('📥 Message queued while processing in-flight', {
+      logger.debug('Message queued while processing in-flight', {
         conversationId,
         pendingCount: pending.length,
         text: message.message.substring(0, 80),
@@ -182,7 +189,7 @@ export class WhatsAppHandler {
     };
 
     if (batch.length > 1) {
-      logger.info('📦 Batching rapid messages into one', {
+      logger.debug('Batching rapid messages into one', {
         conversationId,
         count: batch.length,
         combined: combined.message.substring(0, 120),
@@ -192,8 +199,8 @@ export class WhatsAppHandler {
     // Serialize against any in-progress processing for this conversation
     const previous = this.processingLock.get(conversationId) ?? Promise.resolve();
     const current = previous
-      .then(() => this._processMessage(combined))
-      .catch(err => { logger.error('Error in _processMessage', { conversationId, err }); })
+      .then(() => this.runTurn(conversationId, combined))
+      .catch(error => { logger.error('Error in _processMessage', { conversationId, error }); })
       .finally(() => {
         // Remove the lock BEFORE draining pending so the next batch can re-acquire it.
         if (this.processingLock.get(conversationId) === current) {
@@ -204,7 +211,7 @@ export class WhatsAppHandler {
         const pending = this.pendingWhileProcessing.get(conversationId);
         if (pending && pending.length > 0) {
           this.pendingWhileProcessing.delete(conversationId);
-          logger.info('📦 Draining pending messages accumulated during processing', {
+          logger.debug('Draining pending messages accumulated during processing', {
             conversationId,
             count: pending.length,
           });
@@ -212,6 +219,40 @@ export class WhatsAppHandler {
         }
       });
     this.processingLock.set(conversationId, current);
+  }
+
+  /**
+   * Envuelve un turno completo: abre el contexto de log (para que todo lo que
+   * se emita adentro lleve `conversationId`/`businessId`/`phone` sin repetirlo
+   * a mano) y cierra con una única línea `turn.completed`.
+   *
+   * Esa línea es el índice del sistema: con `grep '"event":"turn.completed"'`
+   * se ve el estado de todas las conversaciones, y recién si algo se ve mal
+   * hace falta bajar a `LOG_LEVEL=debug` a leer la traza.
+   */
+  private async runTurn(conversationId: string, message: BaileysMessage): Promise<void> {
+    const startedAt = Date.now();
+    const phone = this.normalizeWhatsAppNumber(message.from);
+
+    await withLogContext(
+      { businessId: message.businessId, phone, conversationId },
+      () =>
+        withTurnStats(async (stats) => {
+          try {
+            await this._processMessage(message);
+          } finally {
+            logEvent('info', 'turn.completed', {
+              durationMs: Date.now() - startedAt,
+              llmCalls: stats.llmCalls,
+              llmMs: stats.llmMs,
+              outbound: stats.outbound,
+              language: currentLanguage(),
+              ...(stats.step && { step: stats.step }),
+              ...(stats.blocked && { blocked: stats.blocked }),
+            });
+          }
+        })
+    );
   }
 
   /**
@@ -251,10 +292,10 @@ export class WhatsAppHandler {
         await client.setEx(jidMappingKey, 30 * 24 * 60 * 60, from); // 30 days TTL
         logger.debug('JID mapping cached', { phone, from, businessId });
       } catch (error) {
-        logger.warn('Failed to cache JID mapping', { error, phone, from });
+        logger.debug('Failed to cache JID mapping', { error, phone, from });
       }
 
-      logger.info('Processing WhatsApp message', {
+      logger.debug('Processing WhatsApp message', {
         businessId,
         phone,
         from,
@@ -266,7 +307,7 @@ export class WhatsAppHandler {
       // Only send inactive fallback when we can confirm inactive state from business data.
       const businessStatus = await SupabaseService.getBusinessById(businessId);
       if (!businessStatus) {
-        logger.warn('Skipping inactive fallback due to unknown business state', {
+        logger.debug('Skipping inactive fallback due to unknown business state', {
           businessId,
           phone,
           conversationId,
@@ -333,7 +374,7 @@ export class WhatsAppHandler {
 
     const detected = detectLanguage(messageText);
     if (detected && detected.confidence >= DETECTION_THRESHOLD) {
-      logger.info('Language auto-detected', {
+      logger.debug('Language auto-detected', {
         phone,
         businessId,
         language: detected.language,
@@ -400,7 +441,7 @@ export class WhatsAppHandler {
     const detected = detectLanguage(messageText);
     const hasContentBeyondGreeting = !this.isGreetingMessage(messageText);
     if (detected && detected.confidence >= DETECTION_THRESHOLD && hasContentBeyondGreeting) {
-      logger.info('Language menu skipped — inferred with confidence from first message content', {
+      logger.debug('Language menu skipped — inferred with confidence from first message content', {
         conversationId,
         businessId,
         language: detected.language,
@@ -417,7 +458,7 @@ export class WhatsAppHandler {
       jid,
       templates.languageWelcomeMenu(business?.name || 'el local')
     );
-    logger.info('Language menu sent on first contact (non-greeting message)', {
+    logger.debug('Language menu sent on first contact (non-greeting message)', {
       conversationId,
       businessId,
     });
@@ -441,7 +482,7 @@ export class WhatsAppHandler {
         if (shouldNotifyUnavailable) {
           await this.sendWhatsAppMessage(businessId, from, templates.inactiveFallback());
         } else {
-          logger.info('Inactive service fallback suppressed by throttle', {
+          logger.debug('Inactive service fallback suppressed by throttle', {
             businessId,
             phone,
             conversationId,
@@ -508,14 +549,14 @@ export class WhatsAppHandler {
           // ("salir", "dejalo"...) — close the menu, keep the reservation.
           await ReservationService.deleteDraft(conversationId);
           await this.sendWhatsAppMessage(businessId, from, templates.reservationKept());
-          logger.info('Edit menu closed via exit keyword', { conversationId });
+          logger.debug('Edit menu closed via exit keyword', { conversationId });
           return;
         }
 
         // In any other step the draft represents a flow not yet saved to DB.
         await ReservationService.deleteDraft(conversationId);
         await this.sendWhatsAppMessage(businessId, from, templates.processCancelled());
-        logger.info('Flow cancelled by exit keyword', { conversationId, step: draft.step });
+        logger.debug('Flow cancelled by exit keyword', { conversationId, step: draft.step });
         return;
       }
 
@@ -532,7 +573,7 @@ export class WhatsAppHandler {
           businessStatus.name
         );
         if (multiHandled) {
-          logger.info('Multi-action message handled', { conversationId });
+          logger.debug('Multi-action message handled', { conversationId });
           return;
         }
       }
@@ -561,7 +602,7 @@ export class WhatsAppHandler {
           conversationId
         );
         if (nameChangeHandled) {
-          logger.info('Name change intent handled', { conversationId });
+          logger.debug('Name change intent handled', { conversationId });
           return;
         }
       }
@@ -570,7 +611,7 @@ export class WhatsAppHandler {
       if (this.isGreetingMessage(messageText)) {
         const greetingHandled = await this.handleGreeting(messageText, businessId, from, conversationId);
         if (greetingHandled) {
-          logger.info('Greeting handled with reservation menu', { conversationId });
+          logger.debug('Greeting handled with reservation menu', { conversationId });
           return;
         }
         // handleGreeting may have left an in-progress draft untouched (e.g. mid-edit,
@@ -588,7 +629,7 @@ export class WhatsAppHandler {
           conversationId
         );
         if (activeReservationsHandled) {
-          logger.info('Active reservations inquiry handled', { conversationId });
+          logger.debug('Active reservations inquiry handled', { conversationId });
           return;
         }
       }
@@ -602,7 +643,7 @@ export class WhatsAppHandler {
           messageText
         );
         if (courtesyHandled) {
-          logger.info('Post-reservation courtesy handled', { conversationId, businessId, from });
+          logger.debug('Post-reservation courtesy handled', { conversationId, businessId, from });
           return;
         }
 
@@ -627,9 +668,9 @@ export class WhatsAppHandler {
         // attempts always get the canned message — never reach the LLM.
         await this.sendWhatsAppMessage(businessId, from, scopeEvaluation.message!);
 
-        logger.info('Reservation scope guard blocked WhatsApp flow', {
+        recordBlocked(scopeEvaluation.reason ?? scopeEvaluation.decision);
+        logger.debug('Reservation scope guard blocked WhatsApp flow', {
           conversationId,
-          businessId,
           decision: scopeEvaluation.decision,
           draftStep: draft?.step,
         });
@@ -647,7 +688,7 @@ export class WhatsAppHandler {
         if (isPureNoiseMessage(messageText.trim()) && scopeEvaluation.message) {
           await this.sendWhatsAppMessage(businessId, from, scopeEvaluation.message);
 
-          logger.info('Off-topic noise message bounced without reaching the LLM', {
+          logger.debug('Off-topic noise message bounced without reaching the LLM', {
             conversationId,
             businessId,
             draftStep: draft?.step,
@@ -679,7 +720,7 @@ export class WhatsAppHandler {
         );
         await this.sendWhatsAppMessage(businessId, from, this.sanitizeAgentResponse(naturalResponse.response, draft));
 
-        logger.info('Off-topic message answered by the agent instead of the canned bounce', {
+        logger.debug('Off-topic message answered by the agent instead of the canned bounce', {
           conversationId,
           businessId,
           draftStep: draft?.step,
@@ -708,7 +749,7 @@ export class WhatsAppHandler {
           from
         );
         if (prefilledReservationHandled) {
-          logger.info('Prefilled reservation request handled deterministically', {
+          logger.debug('Prefilled reservation request handled deterministically', {
             conversationId,
             businessId,
           });
@@ -746,11 +787,11 @@ export class WhatsAppHandler {
 
           if (lastMessageWasScopeGuardPrompt) {
             await this.startNewReservationFlow(conversationId, businessId, from, phone, templates.askName());
-            logger.info('Opt-in handled deterministically after scope block', { conversationId, isOptIn, isGreeting });
+            logger.debug('Opt-in handled deterministically after scope block', { conversationId, isOptIn, isGreeting });
             return;
           }
 
-          logger.info('Opt-in received but last bot message was not the scope-guard prompt — deferring to the agent', {
+          logger.debug('Opt-in received but last bot message was not the scope-guard prompt — deferring to the agent', {
             conversationId,
           });
         }
@@ -772,7 +813,7 @@ export class WhatsAppHandler {
           draft.step === 'cancel_confirm' ||
           draft.step === 'edit_customer_name')
       ) {
-        logger.info('⚡ Bypassing agent for deterministic draft step', {
+        logger.debug('Bypassing agent for deterministic draft step', {
           conversationId,
           businessId,
           step: draft.step,
@@ -788,11 +829,11 @@ export class WhatsAppHandler {
         );
 
         if (handled) {
-          logger.info('Agent response skipped (deterministic draft step handled)', {
+          logger.debug('Agent response skipped (deterministic draft step handled)', {
             conversationId,
             step: draft.step,
           });
-          logger.info('WhatsApp message processed successfully', {
+          logger.debug('WhatsApp message processed successfully', {
             businessId,
             phone,
             action: 'DRAFT_STEP_DIRECT',
@@ -859,7 +900,7 @@ export class WhatsAppHandler {
             if (isAskingForName && looksLikeName) {
               const extractedName = this.extractNameFromMessage(messageText);
               if (isObviouslyGibberish(extractedName)) {
-                logger.info('Invalid name rejected in auto-creation path — re-asking', { conversationId, candidate: extractedName });
+                logger.debug('Invalid name rejected in auto-creation path — re-asking', { conversationId, candidate: extractedName });
                 await this.sendWhatsAppMessage(
                   businessId,
                   from,
@@ -868,7 +909,7 @@ export class WhatsAppHandler {
                 return;
               }
 
-              logger.info('🎬 Auto-creating reservation draft', { conversationId, businessId, userName: messageText });
+              logger.debug('Auto-creating reservation draft', { conversationId, businessId, userName: messageText });
 
               // Create draft and set customer name (apellido is optional, never asked separately)
               await ReservationService.startReservation(conversationId, businessId);
@@ -882,7 +923,7 @@ export class WhatsAppHandler {
               draft = await ReservationService.getDraft(conversationId);
               await this.sendWhatsAppMessage(businessId, from, templates.askPartySize(autoFirst));
 
-              logger.info('✅ Draft created and name saved', {
+              logger.debug('Draft created and name saved', {
                 conversationId,
                 step: draft?.step,
                 name: draft?.customerName,
@@ -898,7 +939,7 @@ export class WhatsAppHandler {
       }
 
       // Log context before calling agent
-      logger.info('Agent context snapshot', {
+      logger.debug('Agent context snapshot', {
         conversationId,
         businessId,
         currentStep: context.currentStep,
@@ -940,10 +981,10 @@ export class WhatsAppHandler {
           await this.sendWhatsAppMessage(businessId, recipient, sanitizedAgentResponse);
         }
       } else {
-        logger.info('Agent response skipped (custom message sent)', { conversationId });
+        logger.debug('Agent response skipped (custom message sent)', { conversationId });
       }
 
-      logger.info('WhatsApp message processed successfully', {
+      logger.debug('WhatsApp message processed successfully', {
         businessId,
         phone,
         action: agentResponse.action,
@@ -969,7 +1010,7 @@ export class WhatsAppHandler {
     draft: ReservationDraft | null
   ): Promise<boolean> {
     try {
-      logger.info('🔄 Processing action', {
+      logger.debug('Processing action', {
         conversationId,
         action,
         hasDraft: !!draft,
@@ -979,7 +1020,7 @@ export class WhatsAppHandler {
 
       // If draft exists, process based on current step (reservation flow in progress)
       if (draft && draft.step !== 'completed') {
-        logger.info('📝 Processing draft step', {
+        logger.debug('Processing draft step', {
           conversationId,
           step: draft.step,
           customerName: draft.customerName,
@@ -1007,7 +1048,7 @@ export class WhatsAppHandler {
           break;
 
         default:
-          logger.info('No specific action to process', { action, conversationId });
+          logger.debug('No specific action to process', { action, conversationId });
       }
     } catch (error) {
       logger.error('Error processing action', { error, action, conversationId });
@@ -1028,7 +1069,8 @@ export class WhatsAppHandler {
     jid: string
   ): Promise<boolean> {
     try {
-      logger.info('Processing draft step', {
+      recordDraftStep(draft.step);
+      logger.debug('Processing draft step', {
         conversationId,
         step: draft.step,
         messageText: messageText.substring(0, 50),
@@ -1070,7 +1112,7 @@ export class WhatsAppHandler {
           // This happens when a scope-guard message is sent (e.g. specific-time rejection) that ends
           // with "¿Querés hacer una reserva?" and the user confirms — the draft is still at step 'name'.
           if (isGreetingOrReservationOptInMessage(messageText)) {
-            logger.info('Opt-in response received at name step — re-asking for name', {
+            logger.debug('Opt-in response received at name step — re-asking for name', {
               conversationId,
               messageText,
             });
@@ -1107,7 +1149,7 @@ export class WhatsAppHandler {
 
           const nameFlaggedByModel = nameLlmSlots?.customerName === extractedName && nameLlmSlots?.nameLooksInvalid;
           if (isObviouslyGibberish(extractedName) || nameFlaggedByModel) {
-            logger.info('Invalid name rejected — re-asking', { conversationId, candidate: extractedName });
+            logger.debug('Invalid name rejected — re-asking', { conversationId, candidate: extractedName });
             await this.sendWhatsAppMessage(
               businessId,
               jid,
@@ -1117,7 +1159,7 @@ export class WhatsAppHandler {
           }
 
           const { firstName, lastName } = this.splitFullName(extractedName);
-          logger.info('📝 Setting customer name', { conversationId, raw: messageText, firstName, lastName });
+          logger.debug('Setting customer name', { conversationId, raw: messageText, firstName, lastName });
 
           if (lastName) {
             // Full "Nombre Apellido" given in one message — store both.
@@ -1163,7 +1205,7 @@ export class WhatsAppHandler {
           const { firstName: lnFirst, lastName: lnRest } = this.splitFullName(lastNameCandidate);
           const apellido = lnRest || lnFirst;
           await ReservationService.setCustomerLastName(conversationId, apellido);
-          logger.info('✅ Customer last name set', { conversationId, apellido });
+          logger.debug('Customer last name set', { conversationId, apellido });
 
           const displayName = draft.customerName || lnFirst;
           await this.continueAfterNameCollected(
@@ -1191,7 +1233,7 @@ export class WhatsAppHandler {
               draft.awaitingNameCorrection = false;
               await ReservationService.saveDraft(draft);
               await ReservationService.setNameOnly(conversationId, correctedName);
-              logger.info('✏️ Name corrected at party_size step (follow-up)', {
+              logger.debug('Name corrected at party_size step (follow-up)', {
                 conversationId,
                 correctedName,
               });
@@ -1227,7 +1269,7 @@ export class WhatsAppHandler {
           // a party size. Re-ask without burning an invalid attempt — see the
           // identical guard on the 'name' step above for why this matters.
           if (isGreetingOrReservationOptInMessage(messageText)) {
-            logger.info('Opt-in/greeting response received at party_size step — re-asking', {
+            logger.debug('Opt-in/greeting response received at party_size step — re-asking', {
               conversationId,
               messageText,
             });
@@ -1243,11 +1285,11 @@ export class WhatsAppHandler {
 
             if (correctedName) {
               await ReservationService.setNameOnly(conversationId, correctedName);
-              logger.info('✏️ Name corrected at party_size step', { conversationId, correctedName });
+              logger.debug('Name corrected at party_size step', { conversationId, correctedName });
 
               if (partySize && partySize > 0 && partySize <= 50) {
                 await ReservationService.setPartySize(conversationId, partySize);
-                logger.info('✅ Embedded party size set alongside name correction', {
+                logger.debug('Embedded party size set alongside name correction', {
                   conversationId,
                   partySize,
                 });
@@ -1270,8 +1312,8 @@ export class WhatsAppHandler {
           }
 
           // User provided party size
-          logger.info('📝 Extracting party size', { conversationId, messageText });
-          logger.info('🔢 Party size extracted', { conversationId, partySize });
+          logger.debug('Extracting party size', { conversationId, messageText });
+          logger.debug('Party size extracted', { conversationId, partySize });
 
           // Regex found nothing usable — give the model one look (e.g. "para toda
           // la familia, unos ocho" won't match the regex's number patterns) before
@@ -1301,7 +1343,7 @@ export class WhatsAppHandler {
 
             // ----- NORMAL MODE -----
             await ReservationService.setPartySize(conversationId, resolvedPartySize);
-            logger.info('✅ Party size set', { conversationId, partySize: resolvedPartySize });
+            logger.debug('Party size set', { conversationId, partySize: resolvedPartySize });
 
             // Editing from the pre-confirmation summary: go back to it
             if (draft.returnToSummary) {
@@ -1336,7 +1378,7 @@ export class WhatsAppHandler {
           // Guard: a bare greeting/opt-in doesn't answer "1 or 2" — re-show the
           // menu instead of burning an invalid attempt (see 'name' step guard).
           if (isGreetingOrReservationOptInMessage(messageText)) {
-            logger.info('Opt-in/greeting response received at schedule_choice step — re-asking', {
+            logger.debug('Opt-in/greeting response received at schedule_choice step — re-asking', {
               conversationId,
               messageText,
             });
@@ -1612,7 +1654,7 @@ export class WhatsAppHandler {
           // Guard: a bare greeting/opt-in doesn't name a day — re-ask instead of
           // burning an invalid attempt (see 'name' step guard).
           if (isGreetingOrReservationOptInMessage(messageText)) {
-            logger.info('Opt-in/greeting response received at date step — re-asking', {
+            logger.debug('Opt-in/greeting response received at date step — re-asking', {
               conversationId,
               messageText,
             });
@@ -1807,7 +1849,7 @@ export class WhatsAppHandler {
           // hora...?": the reply got scope-blocked, the draft stayed on 'time',
           // and every later "Hola"/"Si" kept hitting the same off-topic wall.
           if (isGreetingOrReservationOptInMessage(messageText)) {
-            logger.info('Opt-in/greeting response received at time step — re-asking', {
+            logger.debug('Opt-in/greeting response received at time step — re-asking', {
               conversationId,
               messageText,
             });
@@ -2448,7 +2490,7 @@ export class WhatsAppHandler {
           if (wantsToKeep) {
             await ReservationService.deleteDraft(conversationId);
             await this.sendWhatsAppMessage(businessId, jid, templates.reservationKept());
-            logger.info('Cancellation aborted — reservation kept', {
+            logger.debug('Cancellation aborted — reservation kept', {
               conversationId,
               reservationId: confirmReservationId,
             });
@@ -2466,9 +2508,9 @@ export class WhatsAppHandler {
               jid,
               cancelled ? templates.reservationCancelled() : templates.cancelFailed()
             );
-            logger.info('Reservation cancelled via M3 flow', {
-              conversationId,
+            logEvent(cancelled ? 'info' : 'warn', 'reservation.cancelled', {
               reservationId: confirmReservationId,
+              via: 'm3_flow',
               success: cancelled,
             });
             return true;
@@ -3360,7 +3402,7 @@ export class WhatsAppHandler {
       // Extract normalized phone number for database storage
       const phone = this.normalizeWhatsAppNumber(jid);
 
-      logger.info('💾 Attempting to create reservation in Supabase', {
+      logger.debug('Attempting to create reservation in Supabase', {
         conversationId,
         businessId,
         jid,
@@ -3372,7 +3414,7 @@ export class WhatsAppHandler {
 
       const result = await ReservationService.createReservation(conversationId, phone);
 
-      logger.info('📊 Reservation creation result', {
+      logger.debug('Reservation creation result', {
         conversationId,
         success: result.success,
         hasWaitlistEntry: !!result.waitlistEntry,
@@ -3383,7 +3425,7 @@ export class WhatsAppHandler {
         // -- Duplicate: customer already has an active reservation --
         if (result.alreadyExists) {
           const entry = result.waitlistEntry;
-          logger.info('Reservation already exists, showing summary', {
+          logger.debug('Reservation already exists, showing summary', {
             conversationId,
             entryId: entry.id,
             displayCode: entry.display_code,
@@ -3399,17 +3441,17 @@ export class WhatsAppHandler {
           return;
         }
 
-        logger.info('Waitlist entry created successfully', {
-          conversationId,
+        logEvent('info', 'reservation.created', {
           entryId: result.waitlistEntry.id,
           status: result.waitlistEntry.status,
           displayCode: result.waitlistEntry.display_code,
+          source: 'ai_chat',
         });
 
         // Build and send confirmation message to customer via WhatsApp
         const entry = result.waitlistEntry;
 
-        logger.info('Building confirmation message', {
+        logger.debug('Building confirmation message', {
           businessId,
           status: entry.status,
           displayCode: entry.display_code,
@@ -3442,7 +3484,7 @@ export class WhatsAppHandler {
           );
         }
 
-        logger.info('📤 Sending confirmation message to customer', {
+        logger.debug('Sending confirmation message to customer', {
           businessId,
           jid,
           phone,
@@ -3475,7 +3517,7 @@ export class WhatsAppHandler {
           });
         }
 
-        logger.info('✅ Confirmation message sent successfully to customer', {
+        logger.debug('Confirmation message sent successfully to customer', {
           conversationId,
           jid,
           phone,
@@ -3500,7 +3542,7 @@ export class WhatsAppHandler {
           await client.lTrim(notificationKey, 0, 99); // Keep last 100 notifications
           await client.expire(notificationKey, 7 * 24 * 60 * 60); // 7 days expiration
 
-          logger.info('Reservation notification stored in Redis', { businessId });
+          logger.debug('Reservation notification stored in Redis', { businessId });
         } catch (error) {
           logger.error('Failed to store reservation notification', { businessId, error });
         }
@@ -3531,13 +3573,6 @@ export class WhatsAppHandler {
     blockedDates: ReadonlyMap<string, BlockedDateEntry>
   ): Promise<string | null> {
     const entry = blockedDates.get(dateKey);
-    logger.info('DIAG resolveBlockedDateMessage', {
-      businessId,
-      dateKey,
-      hasEntry: !!entry,
-      reason: entry?.reason ?? null,
-      reasonMessage: entry?.reasonMessage ?? null,
-    });
     if (!entry) return null;
 
     if (entry.reasonMessage) return entry.reasonMessage;
@@ -3549,15 +3584,13 @@ export class WhatsAppHandler {
     // cache it so the next customer gets the fast path.
     try {
       const business = await SupabaseService.getBusinessById(businessId);
-      logger.info('DIAG: calling LLM for blocked date', { businessId, dateKey, reason: entry.reason });
       const generated = await openRouterService.generateBlockedDateReasonMessage(
         entry.reason,
         business?.name,
         business?.type
       );
-      logger.info('DIAG: LLM returned', { businessId, dateKey, generatedLength: generated?.length, generated });
       await SupabaseService.updateBlockedDateReasonMessage(businessId, dateKey, generated);
-      logger.info('Blocked date reason_message generated on-the-fly', { businessId, dateKey });
+      logger.debug('Blocked date reason_message generated on-the-fly', { businessId, dateKey });
       return generated;
     } catch (error) {
       logger.warn('Failed to generate blocked date reason_message on-the-fly', {
@@ -3585,7 +3618,7 @@ export class WhatsAppHandler {
         lastSent.text === message &&
         Date.now() - lastSent.timestamp < DUPLICATE_OUTBOUND_WINDOW_MS
       ) {
-        logger.warn('Suppressing duplicate outbound message', {
+        logger.debug('Suppressing duplicate outbound message', {
           businessId,
           to,
           windowMs: DUPLICATE_OUTBOUND_WINDOW_MS,
@@ -3596,10 +3629,12 @@ export class WhatsAppHandler {
       const success = await this.baileysService.sendMessage(businessId, to, message);
 
       if (!success) {
-        logger.error('Failed to send WhatsApp message', { businessId, to });
+        // `BaileysService.sendMessage` ya emitió `msg.out_failed` con la causa
+        // tipificada; duplicarlo acá sólo agregaría ruido sin información.
         return;
       }
 
+      recordOutbound();
       this.lastSentByChat.set(dedupKey, {
         text: message,
         timestamp: Date.now(),
@@ -3612,7 +3647,7 @@ export class WhatsAppHandler {
   private async shouldSendInactiveFallback(businessId: string, phone: string): Promise<boolean> {
     try {
       if (!RedisConfig.isReady()) {
-        logger.warn('Redis not ready, skipping inactive fallback send to avoid false positives', {
+        logger.debug('Redis not ready, skipping inactive fallback send to avoid false positives', {
           businessId,
           phone,
         });
@@ -3647,12 +3682,12 @@ export class WhatsAppHandler {
 
     if (isTestEnv) {
       // In test we allow self-chat messages, but outbound bot echoes are filtered in BaileysService.
-      logger.info('TEST MODE: processing inbound message', { businessId, from, fromMe });
+      logger.debug('TEST MODE: processing inbound message', { businessId, from, fromMe });
       return false;
     } else {
       // En producción: ignorar todos los mensajes fromMe (respuestas del bot)
       if (fromMe) {
-        logger.info('Ignoring own message in production mode', { businessId, from });
+        logger.debug('Ignoring own message in production mode', { businessId, from });
         return true;
       }
       return false;
@@ -3737,7 +3772,7 @@ export class WhatsAppHandler {
 
       await this.sendWhatsAppMessage(businessId, jid, reminderMessage);
 
-      logger.info('Reservation overlap policy applied', {
+      logger.debug('Reservation overlap policy applied', {
         conversationId,
         businessId,
         status: conflictingReservation.status,
@@ -4047,7 +4082,7 @@ export class WhatsAppHandler {
             `${templates.firstContactNoReservations(business?.name || 'el local')}\n\n` +
               templates.languageChangeHint()
           );
-          logger.info('First-contact welcome sent instead of the terse no-reservations reply', {
+          logger.debug('First-contact welcome sent instead of the terse no-reservations reply', {
             conversationId,
             businessId,
           });
@@ -4059,7 +4094,7 @@ export class WhatsAppHandler {
           jid,
           templates.noActiveReservationsInquiry()
         );
-        logger.info('No active reservations to report', { conversationId });
+        logger.debug('No active reservations to report', { conversationId });
         return true;
       }
 
@@ -4081,7 +4116,7 @@ export class WhatsAppHandler {
           templates.activeReservationsMenu(quickOptions)
         );
 
-        logger.info('Active reservations inquiry handled with selection menu', {
+        logger.debug('Active reservations inquiry handled with selection menu', {
           conversationId,
           reservationCount: activeReservations.length,
         });
@@ -4093,7 +4128,7 @@ export class WhatsAppHandler {
       // should choose what to do (modificar/cancelar), not just see a summary.
       await this.startEditMenuFlow(conversationId, businessId, jid, activeReservations[0]);
 
-      logger.info('Active reservations inquiry handled — routed straight to edit menu', {
+      logger.debug('Active reservations inquiry handled — routed straight to edit menu', {
         conversationId,
         reservationCount: activeReservations.length,
       });
@@ -4183,7 +4218,7 @@ export class WhatsAppHandler {
       scheduledAt: activeReservation.scheduled_at ?? null,
     });
 
-    logger.info('Cancel confirm shown directly (M3, menu skipped)', {
+    logger.debug('Cancel confirm shown directly (M3, menu skipped)', {
       conversationId,
       reservationId: activeReservation.id,
     });
@@ -4223,7 +4258,7 @@ export class WhatsAppHandler {
       // need to know how to switch it if it's wrong.
       const greeting = `${templates.welcomeBackAskPartySize(knownCustomer.name)}\n\n${templates.languageChangeHint()}`;
       await this.sendWhatsAppMessage(businessId, jid, greeting);
-      logger.info('Reservation flow started for known customer — name step skipped', {
+      logger.debug('Reservation flow started for known customer — name step skipped', {
         conversationId,
         businessId,
         hasChosenLanguage,
@@ -4242,7 +4277,7 @@ export class WhatsAppHandler {
         jid,
         templates.languageWelcomeMenu(business?.name || 'el local')
       );
-      logger.info('Language menu sent on first contact', { conversationId, businessId });
+      logger.debug('Language menu sent on first contact', { conversationId, businessId });
       return;
     }
 
@@ -4309,7 +4344,7 @@ export class WhatsAppHandler {
       templates.activeReservationsMenu(quickOptions, action)
     );
 
-    logger.info('Reservation selection menu shown for direct action', {
+    logger.debug('Reservation selection menu shown for direct action', {
       conversationId,
       action,
       reservationCount: activeReservations.length,
@@ -4682,7 +4717,7 @@ export class WhatsAppHandler {
       }
 
       await persistLanguage(businessId, phone, choice.language);
-      logger.info('Language selected from welcome menu', {
+      logger.debug('Language selected from welcome menu', {
         conversationId,
         businessId,
         language: choice.language,
@@ -4703,7 +4738,7 @@ export class WhatsAppHandler {
     const previous = currentLanguage();
     await persistLanguage(businessId, phone, request.language);
 
-    logger.info('Language changed by customer request', {
+    logger.debug('Language changed by customer request', {
       conversationId,
       businessId,
       phone,
@@ -4829,7 +4864,7 @@ export class WhatsAppHandler {
           existingDraft.step === 'edit_menu');
 
       if (isProtectedDraft) {
-        logger.info('Greeting ignored — preserving in-progress draft', {
+        logger.debug('Greeting ignored — preserving in-progress draft', {
           conversationId,
           step: existingDraft!.step,
           editMode: existingDraft!.editMode ?? false,
@@ -4840,13 +4875,13 @@ export class WhatsAppHandler {
       // 1. Cancel any active draft silently
       if (existingDraft && existingDraft.step !== 'completed') {
         await ReservationService.deleteDraft(conversationId);
-        logger.info('Draft cancelled on greeting', { conversationId, step: existingDraft.step });
+        logger.debug('Draft cancelled on greeting', { conversationId, step: existingDraft.step });
       }
 
       // 2. Clear LLM conversation history so the agent starts fresh
       try {
         await agentService.clearConversationHistory(conversationId);
-        logger.info('Conversation history cleared on greeting', { conversationId });
+        logger.debug('Conversation history cleared on greeting', { conversationId });
       } catch (err) {
         logger.warn('Failed to clear conversation history on greeting', { err });
       }
@@ -4864,7 +4899,7 @@ export class WhatsAppHandler {
         // 4a. Single reservation: show the edit menu directly.
         await this.startEditMenuFlow(conversationId, businessId, jid, activeReservation);
 
-        logger.info('Greeting handled — single active reservation shown', {
+        logger.debug('Greeting handled — single active reservation shown', {
           conversationId,
           reservationId: activeReservation.id,
         });
@@ -4889,7 +4924,7 @@ export class WhatsAppHandler {
           templates.activeReservationsMenu(quickOptions)
         );
 
-        logger.info('Greeting handled — multiple active reservations shown', {
+        logger.debug('Greeting handled — multiple active reservations shown', {
           conversationId,
           reservationCount: activeReservations.length,
         });
@@ -4906,7 +4941,7 @@ export class WhatsAppHandler {
         phone,
         templates.welcomeMessage(business?.name || 'el local')
       );
-      logger.info('Greeting handled — reservation flow started', {
+      logger.debug('Greeting handled — reservation flow started', {
         conversationId,
       });
       return true;
@@ -5023,7 +5058,7 @@ export class WhatsAppHandler {
 
       await ReservationService.startReservation(conversationId, businessId);
 
-      logger.info('Prefilled reservation data captured', {
+      logger.debug('Prefilled reservation data captured', {
         conversationId,
         firstName,
         lastName,
@@ -5178,7 +5213,7 @@ export class WhatsAppHandler {
 
     if (validEmbedded) {
       await ReservationService.setPartySize(conversationId, validEmbedded);
-      logger.info('✅ Embedded party size set after name collected', { conversationId, partySize: validEmbedded });
+      logger.debug('Embedded party size set after name collected', { conversationId, partySize: validEmbedded });
     }
 
     await this.resolveEmbeddedScheduleOrPromptChoice(conversationId, businessId, jid, messageText);
@@ -5433,7 +5468,7 @@ export class WhatsAppHandler {
   ): Promise<boolean> {
     try {
       const phone = this.normalizeWhatsAppNumber(jid);
-      logger.info('🎯 Starting CREATE_RESERVATION action', { conversationId, businessId, phone });
+      logger.debug('Starting CREATE_RESERVATION action', { conversationId, businessId, phone });
 
       // Start reservation flow regardless of existing active reservations.
       // Known customers (phone already in `customers`) skip straight to
@@ -5448,7 +5483,7 @@ export class WhatsAppHandler {
             knownCustomer.lastName
           )
         : await ReservationService.startReservation(conversationId, businessId);
-      logger.info('✅ Reservation flow started', {
+      logger.debug('Reservation flow started', {
         conversationId,
         draftStep: draft.step,
       });
@@ -5473,7 +5508,7 @@ export class WhatsAppHandler {
 
       return false;
     } catch (error) {
-      logger.error('❌ Error handling create reservation', { error, conversationId });
+      logger.error('Error handling create reservation', { error, conversationId });
       return false;
     }
   }
@@ -5514,11 +5549,11 @@ export class WhatsAppHandler {
         .single();
 
       if (!reservation) {
-        logger.info('No active reservation found', { customerId: customer.id });
+        logger.debug('No active reservation found', { customerId: customer.id });
         return;
       }
 
-      logger.info('Reservation status queried', {
+      logger.debug('Reservation status queried', {
         customerId: customer.id,
       });
     } catch (error) {
@@ -5570,9 +5605,10 @@ export class WhatsAppHandler {
         'CANCELLED'
       );
 
-      logger.info('Reservation cancelled', {
+      logEvent('info', 'reservation.cancelled', {
         customerId: customer.id,
         displayCode: (reservation as any).display_code,
+        via: 'cancel_action',
       });
     } catch (error) {
       logger.error('Error handling cancel', { error, conversationId });
@@ -5599,7 +5635,7 @@ export class WhatsAppHandler {
       // Get tables to show capacity info
       const tables = await SupabaseService.getTablesByBusiness(businessId);
 
-      logger.info('Business info retrieved', {
+      logger.debug('Business info retrieved', {
         businessId,
         name: business.name,
         tablesCount: tables.length,
