@@ -77,7 +77,7 @@ export function validate(schema: z.ZodSchema) {
       return next();
     } catch (error) {
       if (error instanceof ZodError) {
-        logger.warn('Validation error', {
+        logger.debug('Validation error', {
           path: req.path,
           errors: error.errors,
         });

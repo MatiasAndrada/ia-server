@@ -7,7 +7,9 @@ import {
   OpenRouterChatCompletionRequest,
   OpenRouterChatCompletionResponse,
 } from '../types/index.js';
-import { logger } from '../utils/logger.js';
+import { logger, logEvent } from '../utils/logger.js';
+import type { AiCallPurpose } from '../utils/log-events.js';
+import { recordLlmCall } from '../utils/turn-stats.js';
 import { buildBlockedDateReasonPrompt, buildFallbackResponse } from '../utils/prompts.js';
 import { AxiosError } from 'axios';
 
@@ -23,6 +25,8 @@ export interface ChatWithActionsResult {
   content: string;
   toolCalls: LlmToolCall[];
   model: string;
+  /** Consumo informado por OpenRouter, cuando viene en la respuesta. */
+  usage?: OpenRouterChatCompletionResponse['usage'];
 }
 
 export class OpenRouterService {
@@ -35,9 +39,10 @@ export class OpenRouterService {
   async chat(
     messages: LlmMessage[],
     systemPrompt?: string,
-    options?: LlmGenerationOptions
+    options?: LlmGenerationOptions,
+    purpose: AiCallPurpose = 'agent'
   ): Promise<string> {
-    const result = await this.chatWithActions(messages, systemPrompt, undefined, options);
+    const result = await this.chatWithActions(messages, systemPrompt, undefined, options, purpose);
     return result.content;
   }
 
@@ -50,7 +55,8 @@ export class OpenRouterService {
     messages: LlmMessage[],
     systemPrompt?: string,
     tools?: LlmToolDefinition[],
-    options?: LlmGenerationOptions
+    options?: LlmGenerationOptions,
+    purpose: AiCallPurpose = 'agent'
   ): Promise<ChatWithActionsResult> {
     const fullMessages: LlmMessage[] = systemPrompt
       ? [{ role: 'system', content: systemPrompt }, ...messages]
@@ -59,26 +65,43 @@ export class OpenRouterService {
     let lastError: Error | null = null;
 
     for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+      const startedAt = Date.now();
       try {
-        logger.info(`OpenRouter request attempt ${attempt}/${this.maxRetries}`, {
+        logger.debug('OpenRouter request', {
+          purpose,
+          attempt,
           messageCount: fullMessages.length,
           hasTools: !!tools?.length,
         });
 
         const result = await this.makeRequest(fullMessages, tools, options);
+        const durationMs = Date.now() - startedAt;
+        recordLlmCall(durationMs);
 
-        logger.info('OpenRouter response received', {
-          length: result.content.length,
-          toolCallCount: result.toolCalls.length,
-          attempt,
+        // El evento que antes no existía: latencia y consumo por llamada. El
+        // `usage` ya venía en la respuesta y sólo se leía dentro del warn de
+        // truncamiento, así que no había forma de medir gasto ni lentitud.
+        logEvent('info', 'ai.call', {
+          purpose,
           model: result.model,
+          durationMs,
+          promptTokens: result.usage?.prompt_tokens,
+          completionTokens: result.usage?.completion_tokens,
+          totalTokens: result.usage?.total_tokens,
+          toolCalls: result.toolCalls.length,
+          responseLength: result.content.length,
+          ...(attempt > 1 && { attempt }),
         });
 
         return result;
       } catch (error) {
         lastError = error as Error;
-        logger.warn(`OpenRouter request failed (attempt ${attempt}/${this.maxRetries})`, {
-          error: error instanceof Error ? error.message : 'Unknown error',
+        recordLlmCall(Date.now() - startedAt);
+        logger.debug('OpenRouter request failed, will retry', {
+          purpose,
+          attempt,
+          maxRetries: this.maxRetries,
+          error,
         });
 
         if (attempt < this.maxRetries) {
@@ -87,13 +110,15 @@ export class OpenRouterService {
       }
     }
 
-    logger.error('All OpenRouter request attempts failed', {
-      error: lastError?.message,
+    logEvent('error', 'ai.failed', {
+      purpose,
       attempts: this.maxRetries,
+      error: lastError,
     });
 
     // Never let an AI outage break the request — degrade to a fallback
     // response with no tool calls, same resilience contract as before.
+    logEvent('warn', 'ai.degraded', { purpose });
     return { content: buildFallbackResponse(), toolCalls: [], model: 'none' };
   }
 
@@ -116,7 +141,8 @@ export class OpenRouterService {
       const response = await this.chat(
         [{ role: 'user', content: `Motivo indicado por el dueño del negocio: "${trimmedReason}"` }],
         buildBlockedDateReasonPrompt(name, businessType),
-        { temperature: 0.4, maxTokens: 350 }
+        { temperature: 0.4, maxTokens: 350 },
+        'blocked_date_reason'
       );
 
       const message = response.trim().replace(/^"|"$/g, '');
@@ -127,7 +153,7 @@ export class OpenRouterService {
       return message;
     } catch (error) {
       logger.warn('Failed to generate blocked-date reason message, using fallback', {
-        error: error instanceof Error ? error.message : 'Unknown error',
+        error,
         reason: trimmedReason,
       });
 
@@ -173,7 +199,7 @@ export class OpenRouterService {
       }
 
       if (choice.finish_reason === 'length') {
-        logger.warn('OpenRouter response was truncated by max_tokens', {
+        logger.debug('OpenRouter response was truncated by max_tokens', {
           model: response.data.model,
           maxTokens: request.max_tokens,
           completionTokens: response.data.usage?.completion_tokens,
@@ -181,7 +207,7 @@ export class OpenRouterService {
       }
 
       if (response.data.model !== model) {
-        logger.warn('OpenRouter served a fallback model instead of the primary model', {
+        logEvent('warn', 'ai.fallback_model', {
           requested: model,
           served: response.data.model,
         });
@@ -191,6 +217,7 @@ export class OpenRouterService {
         content: choice.message.content ?? '',
         toolCalls: choice.message.tool_calls ?? [],
         model: response.data.model,
+        usage: response.data.usage,
       };
     } catch (error) {
       if (error instanceof AxiosError) {

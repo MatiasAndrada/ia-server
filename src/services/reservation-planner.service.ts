@@ -68,12 +68,13 @@ export async function planReservationActions(
       messages,
       systemPrompt,
       [buildReservationPlannerTool()],
-      PLANNER_GENERATION_OPTIONS
+      PLANNER_GENERATION_OPTIONS,
+      'reservation_planner'
     );
 
     const call = toolCalls.find((tc) => tc.function?.name === 'plan_reservation_actions');
     if (!call) {
-      logger.info('Reservation planner: no tool call returned');
+      logger.debug('Reservation planner: no tool call returned');
       return null;
     }
 
@@ -82,7 +83,7 @@ export async function planReservationActions(
       (action): action is PlannedAction => !!action && typeof action.intent === 'string'
     );
 
-    logger.info('Reservation planner: actions extracted', {
+    logger.debug('Reservation planner: actions extracted', {
       count: actions.length,
       intents: actions.map((a) => a.intent),
     });

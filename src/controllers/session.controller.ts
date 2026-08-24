@@ -19,7 +19,7 @@ export const startSession = async (req: Request, res: Response): Promise<void> =
       return;
     }
 
-    logger.info('Starting WhatsApp session via HTTP', { businessId });
+    logger.debug('Starting WhatsApp session via HTTP', { businessId });
 
     if (baileysService.isSessionStartInProgress(businessId)) {
       res.status(202).json({
@@ -82,7 +82,7 @@ export const stopSession = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
-    logger.info('Stopping WhatsApp session via HTTP', { businessId });
+    logger.debug('Stopping WhatsApp session via HTTP', { businessId });
     
     // Check if session exists
     if (!baileysService.hasSession(businessId)) {

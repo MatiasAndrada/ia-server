@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { randomUUID } from 'node:crypto';
 import express, { Request, Response, NextFunction } from 'express';
 import { createServer as createHTTPServer } from 'http';
 import { createServer as createHTTPSServer } from 'https';
@@ -14,7 +15,8 @@ import { RealtimeSyncService } from './services/realtime-sync.service.js';
 import { ReservationService } from './services/reservation.service.js';
 import { PostVisitService } from './services/post-visit.service.js';
 import { EnvConfig } from './types/index.js';
-import { logger, logRequest } from './utils/logger.js';
+import { logger, logEvent } from './utils/logger.js';
+import { withLogContext } from './utils/log-context.js';
 import { authMiddleware } from './middleware/auth.middleware.js';
 import {
   generalRateLimiter,
@@ -52,6 +54,9 @@ import { createBlockedDateHandler } from './controllers/blocked-date.controller.
 // Import new HTTP-only routes
 import sessionsRoutes from './routes/sessions.routes.js';
 import messagesRoutes from './routes/messages.routes.js';
+
+/** Por encima de esto una request se considera lenta y sube a `warn`. */
+const SLOW_REQUEST_MS = 1000;
 
 // Load and validate environment variables
 function getEnvConfig(): EnvConfig {
@@ -94,52 +99,54 @@ function getEnvConfig(): EnvConfig {
 // Initialize app
 async function initializeApp() {
   try {
-    logger.info('Starting IA Server...');
+    logEvent('info', 'server.starting', { nodeEnv: process.env.NODE_ENV || 'development' });
 
     // Load configuration
     const config = getEnvConfig();
 
-    logger.info('Configuration loaded', {
-      port: config.port,
-      nodeEnv: config.nodeEnv,
-      openRouterModel: config.openRouterModel,
-      openRouterFallbackModels: config.openRouterFallbackModels,
+    logger.debug('Configuration loaded', {
       allowedOrigins: config.allowedOrigins,
+      openRouterTimeout: config.openRouterTimeout,
     });
 
     // Initialize OpenRouter
     OpenRouterConfig.initialize(config);
-    logger.info('OpenRouter client initialized');
 
     // Verify OpenRouter connection
     const openRouterHealthy = await OpenRouterConfig.healthCheck();
     if (!openRouterHealthy) {
-      logger.warn('OpenRouter is not responding. Check OPENROUTER_API_KEY and network connectivity.');
+      logEvent('warn', 'dep.degraded', {
+        dependency: 'openrouter',
+        reason: 'health check failed — check OPENROUTER_API_KEY and connectivity',
+      });
     } else {
-      logger.info('OpenRouter connection verified');
+      logEvent('info', 'dep.ready', { dependency: 'openrouter', model: config.openRouterModel });
     }
 
     // Initialize Redis
     await RedisConfig.initialize(config.redisUrl);
-    logger.info('Redis client initialized');
+    logEvent('info', 'dep.ready', { dependency: 'redis' });
 
     // Initialize Supabase (optional)
     if (config.supabaseUrl && config.supabaseKey) {
       SupabaseConfig.initialize(config.supabaseUrl, config.supabaseKey);
-      logger.info('Supabase client initialized');
+      logEvent('info', 'dep.ready', { dependency: 'supabase' });
 
       // Load initial cache for businesses
-      logger.info('📦 Loading initial business cache...');
+      logger.debug('Loading initial business cache');
       await ReservationService.loadAndCacheAllBusinesses();
 
       // Initialize realtime synchronization
-      logger.info('🔄 Initializing realtime data synchronization...');
+      logger.debug('Initializing realtime data synchronization');
       await RealtimeSyncService.initializeRealtimeSync();
 
       // Start the post-visit (M12) scanner
       PostVisitService.start();
     } else {
-      logger.warn('Supabase credentials not provided, skipping initialization');
+      logEvent('warn', 'dep.degraded', {
+        dependency: 'supabase',
+        reason: 'credentials not provided, skipping initialization',
+      });
     }
 
     // Create Express app
@@ -163,11 +170,11 @@ async function initializeApp() {
       };
       
       server = createHTTPSServer(httpsOptions, app);
-      logger.info('HTTPS server created', { keyPath: config.sslKeyPath, certPath: config.sslCertPath });
+      logger.debug('HTTPS server created', { keyPath: config.sslKeyPath, certPath: config.sslCertPath });
     } else {
       // HTTP server (fallback)
       server = createHTTPServer(app);
-      logger.info('HTTP server created (fallback - consider using HTTPS for production)');
+      logger.debug('HTTP server created (fallback - consider using HTTPS for production)');
     }
 
     // Initialize BaileysService
@@ -195,7 +202,7 @@ async function initializeApp() {
             return callback(null, true);
           }
 
-          logger.warn('CORS blocked request', { origin });
+          logEvent('warn', 'auth.rejected', { reason: 'cors', origin });
           callback(new Error('Not allowed by CORS'));
         },
       })
@@ -207,16 +214,40 @@ async function initializeApp() {
     // Parse JSON bodies
     app.use(express.json({ limit: '1mb' }));
 
-    // Request logging middleware
+    // Request logging + correlation.
+    //
+    // Antes se emitía un `info` por request, lo que convertía a `/health`
+    // (pollado cada pocos segundos) en la línea más frecuente del sistema:
+    // 3310 ocurrencias en una muestra de 20 MB. Ahora `/health` no se loguea y
+    // el resto sólo sube a `info` cuando falla o cuando tarda demasiado.
     app.use((req: Request, res: Response, next: NextFunction) => {
       const startTime = Date.now();
+      const requestId = randomUUID();
+      res.setHeader('X-Request-Id', requestId);
 
-      res.on('finish', () => {
-        const duration = Date.now() - startTime;
-        logRequest(req.method, req.path, res.statusCode, duration);
+      withLogContext({ requestId }, () => {
+        res.on('finish', () => {
+          if (req.path === '/health') return;
+
+          const duration = Date.now() - startTime;
+          const meta = {
+            method: req.method,
+            path: req.path,
+            status: res.statusCode,
+            durationMs: duration,
+          };
+
+          if (res.statusCode >= 400) {
+            logEvent(res.statusCode >= 500 ? 'error' : 'warn', 'http.error', meta);
+          } else if (duration > SLOW_REQUEST_MS) {
+            logEvent('warn', 'http.error', { ...meta, reason: 'slow' });
+          } else {
+            logger.debug('HTTP request', meta);
+          }
+        });
+
+        next();
       });
-
-      next();
     });
 
     // Health check endpoint (no auth required)
@@ -277,10 +308,11 @@ async function initializeApp() {
 
     // Error handler
     app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
-      logger.error('Unhandled error', {
-        error: err.message,
-        stack: err.stack,
+      logEvent('error', 'http.error', {
+        error: err,
+        method: req.method,
         path: req.path,
+        status: 500,
       });
 
       res.status(500).json({
@@ -290,25 +322,32 @@ async function initializeApp() {
     });
 
     // Recover existing Baileys sessions
-    logger.info('Recovering WhatsApp sessions...');
+    logger.debug('Recovering WhatsApp sessions');
     await baileysService.recoverSessions();
 
-    // Start server
+    // Start server.
+    //
+    // Una sola línea de arranque en vez de las seis que había: todo lo que
+    // hacía falta saber (puerto, protocolo, entorno, modelo, nivel de log,
+    // sesiones recuperadas) entra en un único evento correlacionable.
     const serverInstance = server.listen(config.port, () => {
-      const protocol = config.useHttps ? 'https' : 'http';
-      logger.info(`🚀 IA Server running on port ${config.port}`, { protocol });
-      logger.info(`📡 Environment: ${config.nodeEnv}`);
-      logger.info(`🤖 OpenRouter model: ${config.openRouterModel}`);
-      logger.info(`💬 WebSocket server ready`, { secure: config.useHttps });
-      logger.info(`✅ Server ready to accept requests`);
+      logEvent('info', 'server.ready', {
+        port: config.port,
+        protocol: config.useHttps ? 'https' : 'http',
+        nodeEnv: config.nodeEnv,
+        logLevel: config.logLevel,
+        model: config.openRouterModel,
+        fallbackModels: config.openRouterFallbackModels,
+        recoveredSessions: baileysService.getAllSessions().length,
+      });
     });
 
     // Graceful shutdown
     const shutdown = async (signal: string) => {
-      logger.info(`${signal} received, starting graceful shutdown...`);
+      logEvent('info', 'server.shutdown', { signal });
 
       serverInstance.close(async () => {
-        logger.info('HTTP server closed');
+        logger.debug('HTTP server closed');
 
         try {
           // Stop the post-visit scanner
@@ -316,29 +355,25 @@ async function initializeApp() {
 
           // Clean up realtime sync
           await RealtimeSyncService.cleanup();
-          logger.info('Realtime sync cleaned up');
+          logger.debug('Realtime sync cleaned up');
         } catch (error) {
-          logger.error('Error cleaning up realtime sync', {
-            error: error instanceof Error ? error.message : 'Unknown error',
-          });
+          logger.error('Error cleaning up realtime sync', { error });
         }
 
         try {
           await RedisConfig.disconnect();
-          logger.info('Redis connection closed');
+          logger.debug('Redis connection closed');
         } catch (error) {
-          logger.error('Error during shutdown', {
-            error: error instanceof Error ? error.message : 'Unknown error',
-          });
+          logger.error('Error closing Redis connection', { error });
         }
 
-        logger.info('Graceful shutdown completed');
+        logEvent('info', 'server.shutdown', { signal, phase: 'completed' });
         process.exit(0);
       });
 
       // Force shutdown after 10 seconds
       setTimeout(() => {
-        logger.error('Forced shutdown after timeout');
+        logEvent('error', 'server.fatal', { reason: 'forced shutdown after timeout', signal });
         process.exit(1);
       }, 10000);
     };
@@ -348,24 +383,16 @@ async function initializeApp() {
 
     // Handle uncaught exceptions
     process.on('uncaughtException', (error: Error) => {
-      logger.error('Uncaught exception', {
-        error: error.message,
-        stack: error.stack,
-      });
+      logEvent('error', 'server.fatal', { reason: 'uncaughtException', error });
       process.exit(1);
     });
 
-    process.on('unhandledRejection', (reason: any) => {
-      logger.error('Unhandled rejection', {
-        reason: reason instanceof Error ? reason.message : String(reason),
-      });
+    process.on('unhandledRejection', (reason: unknown) => {
+      logEvent('error', 'server.fatal', { reason: 'unhandledRejection', error: reason });
       process.exit(1);
     });
   } catch (error) {
-    logger.error('Failed to initialize app', {
-      error: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : undefined,
-    });
+    logEvent('error', 'server.fatal', { reason: 'bootstrap failed', error });
     process.exit(1);
   }
 }

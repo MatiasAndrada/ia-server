@@ -1,6 +1,6 @@
 import rateLimit from 'express-rate-limit';
 import { Request } from 'express';
-import { logger } from '../utils/logger.js';
+import { logEvent } from '../utils/logger.js';
 
 /**
  * Rate limiting por negocio, no por IP.
@@ -92,7 +92,8 @@ export const generalRateLimiter = rateLimit({
   standardHeaders: true, // Return rate limit info in `RateLimit-*` headers
   legacyHeaders: false, // Disable `X-RateLimit-*` headers
   handler: (req, res) => {
-    logger.warn('Rate limit exceeded', {
+    logEvent('warn', 'ratelimit.exceeded', {
+      scope: 'general',
       key: resolveRateLimitKey(req),
       ip: req.ip,
       path: req.path,
@@ -122,7 +123,8 @@ export const batchRateLimiter = rateLimit({
   legacyHeaders: false,
   skipSuccessfulRequests: false,
   handler: (req, res) => {
-    logger.warn('Batch rate limit exceeded', {
+    logEvent('warn', 'ratelimit.exceeded', {
+      scope: 'batch',
       key: resolveRateLimitKey(req),
       ip: req.ip,
       path: req.path,

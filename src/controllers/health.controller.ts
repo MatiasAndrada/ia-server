@@ -3,7 +3,7 @@ import { HealthResponse } from '../types/index.js';
 import { openRouterService } from '../services/openrouter.service.js';
 import { RedisConfig } from '../config/redis.js';
 import { OpenRouterConfig } from '../config/openrouter.js';
-import { logger } from '../utils/logger.js';
+import { logger, logEvent } from '../utils/logger.js';
 
 const startTime = Date.now();
 
@@ -48,18 +48,24 @@ export async function healthHandler(_req: Request, res: Response) {
     // Return appropriate status code
     const statusCode = status === 'healthy' ? 200 : status === 'degraded' ? 200 : 503;
 
-    logger.info('Health check completed', {
-      status,
-      llm: llmAvailable,
-      redis: redisAvailable,
-      uptime,
-    });
+    // El healthcheck se pollea cada pocos segundos: en el log anterior generó
+    // 1914 líneas `info` que nunca dijeron nada. Sólo se reporta cuando el
+    // estado deja de ser sano.
+    if (status === 'healthy') {
+      logger.debug('Health check completed', { status, llm: llmAvailable, redis: redisAvailable });
+    } else {
+      logEvent('warn', 'dep.degraded', {
+        dependency: llmAvailable ? 'redis' : 'openrouter',
+        status,
+        llm: llmAvailable,
+        redis: redisAvailable,
+        uptime,
+      });
+    }
 
     res.status(statusCode).json(response);
   } catch (error) {
-    logger.error('Health check failed', {
-      error: error instanceof Error ? error.message : 'Unknown error',
-    });
+    logEvent('error', 'dep.degraded', { dependency: 'openrouter', reason: 'health check threw', error });
 
     res.status(503).json({
       status: 'unhealthy',

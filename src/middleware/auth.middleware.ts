@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { logger } from '../utils/logger.js';
+import { logEvent } from '../utils/logger.js';
 
 /**
  * Middleware to validate API key from Authorization header
@@ -9,7 +9,8 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
   const authHeader = req.headers.authorization;
 
   if (!authHeader) {
-    logger.warn('Request without authorization header', {
+    logEvent('warn', 'auth.rejected', {
+      reason: 'missing_header',
       ip: req.ip,
       path: req.path,
     });
@@ -23,7 +24,8 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
   const parts = authHeader.split(' ');
   
   if (parts.length !== 2 || parts[0] !== 'Bearer') {
-    logger.warn('Invalid authorization header format', {
+    logEvent('warn', 'auth.rejected', {
+      reason: 'malformed_header',
       ip: req.ip,
       path: req.path,
     });
@@ -37,7 +39,7 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
   const validApiKey = process.env.API_KEY;
 
   if (!validApiKey) {
-    logger.error('API_KEY environment variable not set');
+    logEvent('error', 'server.fatal', { reason: 'API_KEY environment variable not set' });
     return res.status(500).json({
       error: 'Internal Server Error',
       message: 'Server configuration error',
@@ -46,7 +48,8 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
 
   // Validate token
   if (token !== validApiKey) {
-    logger.warn('Invalid API key attempt', {
+    logEvent('warn', 'auth.rejected', {
+      reason: 'invalid_key',
       ip: req.ip,
       path: req.path,
     });

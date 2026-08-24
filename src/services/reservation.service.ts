@@ -6,7 +6,7 @@ import {
   CreateReservationResponse,
   WeeklyHours
 } from '../types/index.js';
-import { logger } from '../utils/logger.js';
+import { logger, logEvent } from '../utils/logger.js';
 import { formatName } from '../utils/formatters.js';
 import * as templates from '../utils/message-templates.js';
 import {
@@ -34,7 +34,7 @@ export class ReservationService {
   static async getDraft(conversationId: string): Promise<ReservationDraft | null> {
     try {
       if (!RedisConfig.isReady()) {
-        logger.warn('Redis not connected');
+        logger.debug('Redis not connected');
         return null;
       }
 
@@ -59,7 +59,7 @@ export class ReservationService {
   static async saveDraft(draft: ReservationDraft): Promise<boolean> {
     try {
       if (!RedisConfig.isReady()) {
-        logger.warn('Redis not connected');
+        logger.debug('Redis not connected');
         return false;
       }
 
@@ -74,14 +74,18 @@ export class ReservationService {
         JSON.stringify(draft)
       );
 
-      logger.info('Reservation draft saved', { 
+      logger.debug('Reservation draft saved', { 
         conversationId: draft.conversationId,
         step: draft.step,
       });
 
       return true;
     } catch (error) {
-      logger.error('Error saving reservation draft', { error, draft });
+      logger.error('Error saving reservation draft', {
+        error,
+        conversationId: draft.conversationId,
+        step: draft.step,
+      });
       return false;
     }
   }
@@ -99,7 +103,7 @@ export class ReservationService {
       const key = `${this.DRAFT_KEY_PREFIX}${conversationId}`;
       await client.del(key);
 
-      logger.info('Reservation draft deleted', { conversationId });
+      logger.debug('Reservation draft deleted', { conversationId });
       return true;
     } catch (error) {
       logger.error('Error deleting reservation draft', { error, conversationId });
@@ -115,7 +119,7 @@ export class ReservationService {
     businessId: string,
     awaitingLanguageChoice: boolean = false
   ): Promise<ReservationDraft> {
-      logger.info('Starting reservation flow', { businessId, conversationId });
+      logger.debug('Starting reservation flow', { businessId, conversationId });
 
     const draft: ReservationDraft = {
       conversationId,
@@ -130,7 +134,7 @@ export class ReservationService {
     }
 
     await this.saveDraft(draft);
-    logger.info('Reservation flow started', {
+    logEvent('info', 'reservation.draft_started', {
       conversationId,
       businessId,
       awaitingLanguageChoice,
@@ -176,7 +180,7 @@ export class ReservationService {
     };
 
     await this.saveDraft(draft);
-    logger.info('Reservation flow started for known customer (name step skipped)', {
+    logger.debug('Reservation flow started for known customer (name step skipped)', {
       conversationId,
       businessId,
     });
@@ -201,7 +205,7 @@ export class ReservationService {
     };
 
     await this.saveDraft(draft);
-    logger.info('Reservation selection flow started', {
+    logger.debug('Reservation selection flow started', {
       conversationId,
       businessId,
       availableReservationIds,
@@ -223,7 +227,7 @@ export class ReservationService {
     const draft = await this.getDraft(conversationId);
 
     if (!draft) {
-      logger.warn('Draft not found for setting name', { conversationId });
+      logger.debug('Draft not found for setting name', { conversationId });
       return null;
     }
 
@@ -247,7 +251,7 @@ export class ReservationService {
   ): Promise<ReservationDraft | null> {
     const draft = await this.getDraft(conversationId);
     if (!draft) {
-      logger.warn('Draft not found for setting name parts', { conversationId });
+      logger.debug('Draft not found for setting name parts', { conversationId });
       return null;
     }
 
@@ -272,7 +276,7 @@ export class ReservationService {
   ): Promise<ReservationDraft | null> {
     const draft = await this.getDraft(conversationId);
     if (!draft) {
-      logger.warn('Draft not found for setting last name', { conversationId });
+      logger.debug('Draft not found for setting last name', { conversationId });
       return null;
     }
 
@@ -293,7 +297,7 @@ export class ReservationService {
   ): Promise<ReservationDraft | null> {
     const draft = await this.getDraft(conversationId);
     if (!draft) {
-      logger.warn('Draft not found for setLastNameOnly', { conversationId });
+      logger.debug('Draft not found for setLastNameOnly', { conversationId });
       return null;
     }
 
@@ -313,7 +317,7 @@ export class ReservationService {
     const draft = await this.getDraft(conversationId);
 
     if (!draft) {
-      logger.warn('Draft not found for setNameOnly', { conversationId });
+      logger.debug('Draft not found for setNameOnly', { conversationId });
       return null;
     }
 
@@ -333,7 +337,7 @@ export class ReservationService {
     const draft = await this.getDraft(conversationId);
     
     if (!draft) {
-      logger.warn('Draft not found for setting party size', { conversationId });
+      logger.debug('Draft not found for setting party size', { conversationId });
       return null;
     }
 
@@ -353,7 +357,7 @@ export class ReservationService {
   static async moveToScheduleChoice(conversationId: string): Promise<ReservationDraft | null> {
     const draft = await this.getDraft(conversationId);
     if (!draft) {
-      logger.warn('Draft not found for moveToScheduleChoice', { conversationId });
+      logger.debug('Draft not found for moveToScheduleChoice', { conversationId });
       return null;
     }
 
@@ -368,7 +372,7 @@ export class ReservationService {
   static async setInstantSchedule(conversationId: string): Promise<ReservationDraft | null> {
     const draft = await this.getDraft(conversationId);
     if (!draft) {
-      logger.warn('Draft not found for setInstantSchedule', { conversationId });
+      logger.debug('Draft not found for setInstantSchedule', { conversationId });
       return null;
     }
 
@@ -395,7 +399,7 @@ export class ReservationService {
   ): Promise<ReservationDraft | null> {
     const draft = await this.getDraft(conversationId);
     if (!draft) {
-      logger.warn('Draft not found for moveToConfirmSlot', { conversationId });
+      logger.debug('Draft not found for moveToConfirmSlot', { conversationId });
       return null;
     }
 
@@ -411,7 +415,7 @@ export class ReservationService {
   static async moveToDateStep(conversationId: string): Promise<ReservationDraft | null> {
     const draft = await this.getDraft(conversationId);
     if (!draft) {
-      logger.warn('Draft not found for moveToDateStep', { conversationId });
+      logger.debug('Draft not found for moveToDateStep', { conversationId });
       return null;
     }
 
@@ -429,7 +433,7 @@ export class ReservationService {
   ): Promise<ReservationDraft | null> {
     const draft = await this.getDraft(conversationId);
     if (!draft) {
-      logger.warn('Draft not found for setting scheduled date', { conversationId });
+      logger.debug('Draft not found for setting scheduled date', { conversationId });
       return null;
     }
 
@@ -449,7 +453,7 @@ export class ReservationService {
   ): Promise<ReservationDraft | null> {
     const draft = await this.getDraft(conversationId);
     if (!draft) {
-      logger.warn('Draft not found for setting scheduled time', { conversationId });
+      logger.debug('Draft not found for setting scheduled time', { conversationId });
       return null;
     }
 
@@ -469,14 +473,14 @@ export class ReservationService {
     let acquiredLock: { key: string; token: string } | null = null;
 
     try {
-      logger.info('💾 ReservationService.createReservation called', {
+      logger.debug('ReservationService.createReservation called', {
         conversationId,
         customerPhone,
       });
 
       const draft = await this.getDraft(conversationId);
 
-      logger.info('📋 Draft retrieved', {
+      logger.debug('Draft retrieved', {
         conversationId,
         hasDraft: !!draft,
         draftStep: draft?.step,
@@ -493,8 +497,9 @@ export class ReservationService {
 
       // Validate all required fields
       if (!draft.customerName || !draft.partySize) {
-        logger.warn('❌ Incomplete reservation data', {
+        logEvent('warn', 'reservation.rejected', {
           conversationId,
+          reason: 'incomplete_data',
           hasCustomerName: !!draft.customerName,
           hasPartySize: !!draft.partySize,
         });
@@ -529,8 +534,9 @@ export class ReservationService {
         const nowBA = nowInBuenosAires();
 
         if (isDateBlocked(dateKey, blockedDates)) {
-          logger.warn('Reservation creation rejected by safety net — date is blocked', {
+          logEvent('warn', 'reservation.rejected', {
             conversationId,
+            reason: 'date_blocked',
             businessId: request.businessId,
             dateKey,
           });
@@ -552,8 +558,9 @@ export class ReservationService {
             closingMargin
           )
         ) {
-          logger.warn('Reservation creation rejected by safety net — future reservations blocked today', {
+          logEvent('warn', 'reservation.rejected', {
             conversationId,
+            reason: 'future_reservations_blocked_today',
             businessId: request.businessId,
             dateKey,
           });
@@ -565,9 +572,11 @@ export class ReservationService {
         }
       }
 
-      logger.info('📤 Sending reservation to Supabase', {
+      logger.debug('Sending reservation to Supabase', {
         conversationId,
-        request,
+        businessId: request.businessId,
+        partySize: request.partySize,
+        scheduledAt: request.scheduledAt,
       });
 
       acquiredLock = await this.acquireReservationCreateLock(
@@ -610,7 +619,7 @@ export class ReservationService {
       // Create reservation in Supabase
       const result = await SupabaseService.createReservation(request);
 
-      logger.info('📥 Supabase response', {
+      logger.debug('Supabase response', {
         conversationId,
         success: result.success,
         error: result.error,
@@ -625,11 +634,13 @@ export class ReservationService {
         // Delete draft after a short delay
         setTimeout(() => {
           this.deleteDraft(conversationId).catch((err) => {
-            logger.error('Error deleting completed draft', { err, conversationId });
+            logger.error('Error deleting completed draft', { error: err, conversationId });
           });
         }, 5000);
 
-        logger.info('Reservation created successfully', {
+        // `reservation.created` sale del handler de WhatsApp, que tiene el
+        // display_code y el status finales. Acá alcanza con la traza.
+        logger.debug('Reservation persisted', {
           conversationId,
           entryId: result.waitlistEntry?.id,
         });
@@ -664,7 +675,7 @@ export class ReservationService {
   ): Promise<{ key: string; token: string } | null> {
     try {
       if (!RedisConfig.isReady()) {
-        logger.warn('Redis not connected, reservation create lock skipped', {
+        logger.debug('Redis not connected, reservation create lock skipped', {
           businessId,
           conversationId,
           customerPhone,
@@ -772,7 +783,7 @@ export class ReservationService {
     };
 
     await this.saveDraft(draft);
-    logger.info('Edit reservation draft started', {
+    logger.debug('Edit reservation draft started', {
       conversationId,
       reservationId,
       step: 'party_size',
@@ -807,7 +818,7 @@ export class ReservationService {
     };
 
     await this.saveDraft(draft);
-    logger.info('Edit schedule draft started', {
+    logger.debug('Edit schedule draft started', {
       conversationId,
       reservationId,
       step: 'schedule_choice',
@@ -840,7 +851,7 @@ export class ReservationService {
     };
 
     await this.saveDraft(draft);
-    logger.info('Edit menu draft started', { conversationId, reservationId });
+    logger.debug('Edit menu draft started', { conversationId, reservationId });
     return draft;
   }
 
@@ -870,7 +881,7 @@ export class ReservationService {
     };
 
     await this.saveDraft(draft);
-    logger.info('Edit date draft started', { conversationId, reservationId });
+    logger.debug('Edit date draft started', { conversationId, reservationId });
     return draft;
   }
 
@@ -900,7 +911,7 @@ export class ReservationService {
     };
 
     await this.saveDraft(draft);
-    logger.info('Edit time draft started', { conversationId, reservationId });
+    logger.debug('Edit time draft started', { conversationId, reservationId });
     return draft;
   }
 
@@ -928,7 +939,7 @@ export class ReservationService {
     };
 
     await this.saveDraft(draft);
-    logger.info('Cancel menu draft started', { conversationId, reservationId });
+    logger.debug('Cancel menu draft started', { conversationId, reservationId });
     return draft;
   }
 
@@ -958,7 +969,7 @@ export class ReservationService {
     };
 
     await this.saveDraft(draft);
-    logger.info('Cancel confirm draft started (direct)', { conversationId, reservationId });
+    logger.debug('Cancel confirm draft started (direct)', { conversationId, reservationId });
     return draft;
   }
 
@@ -981,7 +992,7 @@ export class ReservationService {
     };
 
     await this.saveDraft(draft);
-    logger.info('Customer name edit draft started', { conversationId, field });
+    logger.debug('Customer name edit draft started', { conversationId, field });
     return draft;
   }
 
@@ -991,7 +1002,7 @@ export class ReservationService {
   static async moveToConfirmSummary(conversationId: string): Promise<ReservationDraft | null> {
     const draft = await this.getDraft(conversationId);
     if (!draft) {
-      logger.warn('Draft not found for moveToConfirmSummary', { conversationId });
+      logger.debug('Draft not found for moveToConfirmSummary', { conversationId });
       return null;
     }
 
@@ -1015,7 +1026,7 @@ export class ReservationService {
    */
   static async loadAndCacheAllBusinesses(): Promise<void> {
     try {
-      logger.info('💾 Loading and caching all businesses...');
+      logger.debug('Loading and caching all businesses...');
 
       const businesses = await SupabaseService.getAllBusinesses();
 
@@ -1044,7 +1055,7 @@ export class ReservationService {
         JSON.stringify(businessIds)
       );
 
-      logger.info('✅ All businesses cached in Redis', {
+      logger.debug('All businesses cached in Redis', {
         count: businesses.length,
       });
     } catch (error) {

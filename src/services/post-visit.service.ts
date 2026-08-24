@@ -1,6 +1,7 @@
 import { RedisConfig } from '../config/redis.js';
 import { SupabaseConfig } from '../config/supabase.js';
-import { logger } from '../utils/logger.js';
+import { logger, logEvent } from '../utils/logger.js';
+import { withLogContext } from '../utils/log-context.js';
 import { getTemplates } from '../i18n/index.js';
 import { resolveLanguage } from '../i18n/language-store.js';
 import type { Database } from '../types/supabase.js';
@@ -40,7 +41,7 @@ export class PostVisitService {
   static async schedulePostVisit(entryId: string, businessId: string): Promise<void> {
     try {
       if (!RedisConfig.isReady()) {
-        logger.warn('[POSTVISIT] Redis not ready, cannot schedule post-visit message', { entryId });
+        logger.debug('Post-visit: Redis not ready, cannot schedule', { entryId });
         return;
       }
 
@@ -55,14 +56,14 @@ export class PostVisitService {
       const dueAt = Date.now() + this.getDelayMinutes() * 60 * 1000;
       await client.zAdd(this.QUEUE_KEY, { score: dueAt, value: `${entryId}:${businessId}` });
 
-      logger.info('[POSTVISIT] Scheduled post-visit message', {
+      logger.debug('Post-visit scheduled', {
         entryId,
         businessId,
         dueAt: new Date(dueAt).toISOString(),
         delayMinutes: this.getDelayMinutes(),
       });
     } catch (error) {
-      logger.error('[POSTVISIT] Failed to schedule post-visit message', { error, entryId, businessId });
+      logger.warn('Post-visit: failed to schedule', { error, entryId, businessId });
     }
   }
 
@@ -73,21 +74,21 @@ export class PostVisitService {
     }
     this.timer = setInterval(() => {
       this.processDueEntries().catch((error) => {
-        logger.error('[POSTVISIT] Error processing due entries', { error });
+        logger.error('Post-visit: error processing due entries', { error });
       });
     }, this.SCAN_INTERVAL_MS);
     // No mantener vivo el event loop sólo por este timer.
     if (typeof this.timer.unref === 'function') {
       this.timer.unref();
     }
-    logger.info('[POSTVISIT] Post-visit scanner started', { intervalMs: this.SCAN_INTERVAL_MS });
+    logger.debug('Post-visit scanner started', { intervalMs: this.SCAN_INTERVAL_MS });
   }
 
   static stop(): void {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
-      logger.info('[POSTVISIT] Post-visit scanner stopped');
+      logger.debug('Post-visit scanner stopped');
     }
   }
 
@@ -112,9 +113,11 @@ export class PostVisitService {
         const entryId = sep >= 0 ? member.slice(0, sep) : member;
         const businessId = sep >= 0 ? member.slice(sep + 1) : '';
 
-        await this.sendPostVisitMessage(entryId, businessId);
+        await withLogContext({ businessId, entryId }, () =>
+          this.sendPostVisitMessage(entryId, businessId)
+        );
       } catch (error) {
-        logger.error('[POSTVISIT] Failed to process due member', { error, member });
+        logger.error('Post-visit: failed to process due member', { error, member });
       } finally {
         // Siempre remover de la cola: reintentar indefinidamente generaría spam.
         await client.zRem(this.QUEUE_KEY, member);
@@ -141,15 +144,12 @@ export class PostVisitService {
       .single();
 
     if (entryError || !entryData) {
-      logger.warn('[POSTVISIT] Entry not found, skipping post-visit message', { entryId, error: entryError });
+      logger.debug('Post-visit: entry not found, skipping', { error: entryError });
       return;
     }
 
     if (entryData.status !== 'SEATED') {
-      logger.info('[POSTVISIT] Entry is no longer SEATED, skipping post-visit message', {
-        entryId,
-        status: entryData.status,
-      });
+      logger.debug('Post-visit: entry no longer SEATED, skipping', { status: entryData.status });
       return;
     }
 
@@ -161,13 +161,13 @@ export class PostVisitService {
       .single();
 
     if (customerError || !customerData) {
-      logger.error('[POSTVISIT] Customer not found for post-visit message', { entryId, error: customerError });
+      logger.warn('Post-visit: customer not found', { error: customerError });
       return;
     }
 
     const customer = customerData as CustomersRow;
     if (!customer.phone) {
-      logger.error('[POSTVISIT] Customer has no phone, skipping post-visit message', { entryId });
+      logger.debug('Post-visit: customer has no phone, skipping');
       return;
     }
 
@@ -191,9 +191,10 @@ export class PostVisitService {
 
     if (sent) {
       await client.setEx(`${this.SENT_KEY_PREFIX}${entryId}`, this.SENT_TTL_SECONDS, '1');
-      logger.info('[POSTVISIT] Post-visit message sent (M12)', { entryId, businessId, phone: customer.phone });
+      logEvent('info', 'job.postvisit_sent', { phone: customer.phone });
     } else {
-      logger.error('[POSTVISIT] Failed to send post-visit message', { entryId, businessId, phone: customer.phone });
+      // `msg.out_failed` ya lo emitió BaileysService con la causa tipificada.
+      logger.debug('Post-visit message could not be delivered', { phone: customer.phone });
     }
   }
 }

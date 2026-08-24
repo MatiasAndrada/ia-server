@@ -17,7 +17,7 @@ export async function chatHandler(req: Request, res: Response) {
   try {
     const { phone, message, businessId, context }: ChatRequest = req.body;
 
-    logger.info('Processing chat request', {
+    logger.debug('Processing chat request', {
       phone,
       businessId,
       messageLength: message.length,
@@ -45,7 +45,9 @@ export async function chatHandler(req: Request, res: Response) {
     const { content: aiResponse, toolCalls } = await openRouterService.chatWithActions(
       llmMessages,
       systemPrompt,
-      [buildActionTool()]
+      [buildActionTool()],
+      undefined,
+      'agent'
     );
 
     // Parse actions from tool calls (schema-validated, not regex-guessed)
@@ -63,7 +65,7 @@ export async function chatHandler(req: Request, res: Response) {
 
     const duration = Date.now() - startTime;
 
-    logger.info('Chat request completed', {
+    logger.debug('Chat request completed', {
       phone,
       businessId,
       actionsCount: actions.length,
@@ -102,14 +104,14 @@ export async function analyzeIntentHandler(req: Request, res: Response) {
   try {
     const { message, context } = req.body;
 
-    logger.info('Analyzing intent', {
+    logger.debug('Analyzing intent', {
       messageLength: message.length,
       hasContext: !!context,
     });
 
     const result = await intentService.analyzeIntent(message, context);
 
-    logger.info('Intent analysis completed', {
+    logger.debug('Intent analysis completed', {
       intent: result.intent,
       confidence: result.confidence,
     });
@@ -135,15 +137,15 @@ export async function clearConversationHandler(req: Request, res: Response) {
   try {
     const { phone } = req.params;
 
-    logger.info('Clearing conversation', { phone });
+    logger.debug('Clearing conversation', { phone });
 
     const cleared = await conversationService.clearHistory(phone);
 
     if (cleared) {
-      logger.info('Conversation cleared', { phone });
+      logger.debug('Conversation cleared', { phone });
       res.status(204).send();
     } else {
-      logger.info('No conversation found to clear', { phone });
+      logger.debug('No conversation found to clear', { phone });
       res.status(404).json({
         error: 'Not Found',
         message: 'No conversation history found for this phone number',
@@ -171,7 +173,7 @@ export async function batchHandler(req: Request, res: Response) {
   try {
     const { messages }: BatchRequest = req.body;
 
-    logger.info('Processing batch request', {
+    logger.debug('Processing batch request', {
       count: messages.length,
     });
 
@@ -201,7 +203,9 @@ export async function batchHandler(req: Request, res: Response) {
           const { content: aiResponse, toolCalls } = await openRouterService.chatWithActions(
             llmMessages,
             systemPrompt,
-            [buildActionTool()]
+            [buildActionTool()],
+            undefined,
+            'agent'
           );
 
           // Parse actions from tool calls
@@ -259,7 +263,7 @@ export async function batchHandler(req: Request, res: Response) {
 
     const duration = Date.now() - startTime;
 
-    logger.info('Batch request completed', {
+    logger.debug('Batch request completed', {
       total: messages.length,
       successful: successCount,
       failed: failedCount,

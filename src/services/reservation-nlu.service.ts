@@ -84,13 +84,14 @@ export async function extractReservationUpdate(
       messages,
       systemPrompt,
       [buildReservationSlotsTool()],
-      EXTRACTION_GENERATION_OPTIONS
+      EXTRACTION_GENERATION_OPTIONS,
+      'reservation_nlu'
     );
 
     const call = toolCalls.find((tc) => tc.function?.name === 'update_reservation');
     if (!call) {
       reservationNluMetrics.empty += 1;
-      logger.info('Reservation NLU: no tool call returned, caller will fall back to regex', {
+      logger.debug('Reservation NLU: no tool call returned, caller will fall back to regex', {
         step: draft?.step,
       });
       return null;
@@ -98,7 +99,7 @@ export async function extractReservationUpdate(
 
     const parsed = JSON.parse(call.function.arguments) as ReservationSlots;
     reservationNluMetrics.extracted += 1;
-    logger.info('Reservation NLU: extracted slots', {
+    logger.debug('Reservation NLU: extracted slots', {
       step: draft?.step,
       fields: Object.keys(parsed),
     });

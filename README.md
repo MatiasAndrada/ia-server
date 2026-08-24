@@ -698,13 +698,31 @@ instances: 1
 
 ### Ver Logs
 
+El proceso escribe **sólo a stdout/stderr** en JSON estructurado; PM2 lo persiste
+y `pm2-logrotate` lo rota. Detalle completo del contrato en [docs/LOGGING.md](docs/LOGGING.md).
+
 ```bash
-# PM2 logs
+# Todo (info/warn/debug) — logs/pm2-out.log
 pm2 logs ia-server
 
-# Archivos de logs
-tail -f logs/combined.log
-tail -f logs/error.log
+# Sólo errores — logs/pm2-error.log
+pm2 logs ia-server --err
+
+# Cada línea es un JSON válido, así que se puede filtrar por evento
+pm2 logs ia-server --raw | grep '"event":"turn.completed"'
+pm2 logs ia-server --raw | jq 'select(.conversationId == "<businessId>-<phone>")'
+
+# Ver la traza paso a paso de un problema puntual
+LOG_LEVEL=debug pm2 restart ia-server
+```
+
+Rotación (una sola vez por servidor, `deploy.sh` ya lo hace):
+
+```bash
+pm2 install pm2-logrotate
+pm2 set pm2-logrotate:max_size 20M
+pm2 set pm2-logrotate:retain 14
+pm2 set pm2-logrotate:compress true
 ```
 
 ## 📊 Monitoreo
@@ -755,11 +773,11 @@ ia-server/
 │   ├── i18n/                           # Detección/selección de idioma + catálogos es/en/pt
 │   ├── middleware/                     # Auth, rate limiting, validación (Zod)
 │   ├── routes/                         # Sessions API y Messages API de WhatsApp
-│   ├── utils/                          # Prompts, plantillas de mensajes, fechas/horarios, logger
+│   ├── utils/                          # Prompts, plantillas, fechas/horarios, logger + catálogo de eventos
 │   ├── types/                          # Tipos de TypeScript (incl. generados desde Supabase)
 │   └── __tests__/                      # Jest: unit, integration, escenarios de conversación
 ├── scripts/                            # Simulador de chat, utilidades de setup/tipos
-├── logs/                                # Log files
+├── logs/                                # Salida de PM2 (pm2-out.log / pm2-error.log)
 ├── dist/                                # Compiled JS
 ├── docs/                                # AGENTS.md, ENDPOINTS.md, TYPES_GENERATION.md
 ├── .env                                 # Environment variables

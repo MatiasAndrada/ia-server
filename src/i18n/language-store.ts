@@ -83,7 +83,7 @@ async function writeCache(
     const client = RedisConfig.getClient();
     await client.setEx(buildKey(businessId, phone), TTL_SECONDS, JSON.stringify(entry));
   } catch (error) {
-    logger.warn('Failed to cache language', { error, businessId, phone, entry });
+    logger.debug('Failed to cache language', { error, businessId, phone });
   }
 }
 

@@ -36,6 +36,18 @@ echo -e "${GREEN}✅ Build completed${NC}"
 if command -v pm2 &> /dev/null; then
     echo "🔄 Restarting PM2..."
     
+    # Rotación de logs: PM2 no rota out_file/error_file por su cuenta.
+    # Sin esto, logs/pm2-out.log crece sin techo (llegó a 94 MB).
+    if ! pm2 list | grep -q "pm2-logrotate"; then
+        echo "🌀 Installing pm2-logrotate..."
+        pm2 install pm2-logrotate
+        pm2 set pm2-logrotate:max_size 20M
+        pm2 set pm2-logrotate:retain 14
+        pm2 set pm2-logrotate:compress true
+        pm2 set pm2-logrotate:rotateInterval '0 0 * * *'
+        echo -e "${GREEN}✅ Log rotation configured${NC}"
+    fi
+
     if pm2 list | grep -q "ia-server"; then
         pm2 restart ia-server
         echo -e "${GREEN}✅ Server restarted${NC}"
@@ -57,5 +69,6 @@ echo ""
 echo -e "${GREEN}🎉 Deployment completed!${NC}"
 echo ""
 echo "Monitor logs with: pm2 logs ia-server"
+echo "Filter by event:   pm2 logs ia-server --raw | grep '\"event\":\"turn.completed\"'"
 echo "Check status with: pm2 status"
 echo ""
