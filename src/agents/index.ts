@@ -19,7 +19,7 @@ class AgentRegistry {
   private registerDefaultAgents(): void {
     this.register(waitlistAgent);
     
-    logger.info('Default agents registered', {
+    logger.debug('Default agents registered', {
       count: this.agents.size,
       agents: Array.from(this.agents.keys())
     });
@@ -34,7 +34,7 @@ class AgentRegistry {
     }
     
     this.agents.set(agent.id, agent);
-    logger.info(`Agent registered: ${agent.id} - ${agent.name}`);
+    logger.debug(`Agent registered: ${agent.id} - ${agent.name}`);
   }
 
   /**
@@ -44,12 +44,12 @@ class AgentRegistry {
     const agent = this.agents.get(agentId);
     
     if (!agent) {
-      logger.warn(`Agent not found: ${agentId}`);
+      logger.debug(`Agent not found: ${agentId}`);
       return undefined;
     }
 
     if (!agent.enabled) {
-      logger.warn(`Agent disabled: ${agentId}`);
+      logger.debug(`Agent disabled: ${agentId}`);
       return undefined;
     }
 
@@ -92,7 +92,7 @@ class AgentRegistry {
   unregister(agentId: string): boolean {
     const deleted = this.agents.delete(agentId);
     if (deleted) {
-      logger.info(`Agent unregistered: ${agentId}`);
+      logger.debug(`Agent unregistered: ${agentId}`);
     }
     return deleted;
   }
@@ -107,7 +107,7 @@ class AgentRegistry {
     }
     
     agent.enabled = enabled;
-    logger.info(`Agent ${agentId} ${enabled ? 'enabled' : 'disabled'}`);
+    logger.debug(`Agent ${agentId} ${enabled ? 'enabled' : 'disabled'}`);
     return true;
   }
 }

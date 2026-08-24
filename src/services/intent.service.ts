@@ -31,13 +31,15 @@ export class IntentService {
 
       const response = await openRouterService.chat(
         [{ role: 'user', content: userMessage }],
-        systemPrompt
+        systemPrompt,
+        undefined,
+        'intent'
       );
 
       // Parse JSON response
       const result = this.parseIntentResponse(response);
 
-      logger.info('Intent analyzed', {
+      logger.debug('Intent analyzed', {
         intent: result.intent,
         confidence: result.confidence,
         entitiesCount: Object.keys(result.entities).length,
@@ -154,7 +156,7 @@ export class IntentService {
   async batchAnalyze(
     messages: Array<{ text: string; context?: Partial<BusinessContext> }>
   ): Promise<IntentResponse[]> {
-    logger.info('Batch analyzing intents', { count: messages.length });
+    logger.debug('Batch analyzing intents', { count: messages.length });
 
     const results = await Promise.all(
       messages.map(({ text, context }) => this.analyzeIntent(text, context))

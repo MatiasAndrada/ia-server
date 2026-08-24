@@ -29,7 +29,7 @@ class AgentService {
     const startTime = Date.now();
 
     try {
-      logger.info('Generating response with agent', {
+      logger.debug('Generating response with agent', {
         agentId: agent.id,
         conversationId,
         messageLength: message.length
@@ -45,7 +45,7 @@ class AgentService {
 
           const processingTime = Date.now() - startTime;
 
-          logger.info('Reservation intro returned deterministically', {
+          logger.debug('Reservation intro returned deterministically', {
             agentId: agent.id,
             conversationId,
             processingTime,
@@ -84,7 +84,7 @@ class AgentService {
 
           const processingTime = Date.now() - startTime;
 
-          logger.info('Reservation scope guard blocked agent response', {
+          logger.debug('Reservation scope guard blocked agent response', {
             agentId: agent.id,
             conversationId,
             decision: scopeEvaluation.decision,
@@ -158,7 +158,12 @@ class AgentService {
       // agent.numCtx no aplica a modelos vía OpenRouter (context window fijo por modelo, no configurable por request)
 
       // Generar respuesta con el LLM (OpenRouter)
-      const aiResponse = await openRouterService.chat(messages, systemPrompt, generationOptions);
+      const aiResponse = await openRouterService.chat(
+        messages,
+        systemPrompt,
+        generationOptions,
+        'agent'
+      );
 
       // Inferir acción basada en las keywords del agente
       const inferredAction = agent.actions && agent.actions.length > 0
@@ -172,7 +177,7 @@ class AgentService {
 
       const processingTime = Date.now() - startTime;
 
-      logger.info('Response generated successfully', {
+      logger.debug('Response generated successfully', {
         agentId: agent.id,
         conversationId,
         action: inferredAction,
@@ -348,7 +353,7 @@ class AgentService {
       const key = `${this.HISTORY_KEY_PREFIX}${conversationId}`;
       await client.del(key);
 
-      logger.info('Conversation history cleared', { conversationId });
+      logger.debug('Conversation history cleared', { conversationId });
     } catch (error) {
       logger.error('Error clearing conversation history', {
         conversationId,
