@@ -11,7 +11,9 @@
 
 import { LANGUAGE_MENU_ORDER, LANGUAGE_NATIVE_NAMES } from '../languages.js';
 
-const NUMBER_EMOJI = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
+/** Numeración de los menús. Compartida por los tres catálogos: los dígitos
+ * no se traducen, y así el orden de las opciones no puede divergir. */
+export const NUMBER_EMOJI = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
 
 /**
  * Filas del menú de idiomas, compartidas por los tres catálogos (no se
@@ -95,12 +97,19 @@ export const esCatalog = {
     );
   },
 
-  askScheduleChoice(): string {
+  askScheduleChoice(eventTitles: string[] = [], includeToday: boolean = true): string {
+    const options: string[] = [];
+    if (includeToday) options.push('Hoy (turno actual)');
+    options.push('Otra fecha');
+    options.push(...eventTitles);
+
+    const lines = options.map((option, index) => `${NUMBER_EMOJI[index]} ${option}`).join('\n');
+    const eventsNote = eventTitles.length > 0 ? ` También podés elegir uno de nuestros eventos.` : '';
+
     return (
       `📅 ¿La reserva es para...?\n\n` +
-      `1️⃣ Hoy (turno actual)\n` +
-      `2️⃣ Otra fecha\n\n` +
-      `Respondé con el *número* de la opción, o directamente decime el día (ej: "el viernes").`
+      `${lines}\n\n` +
+      `Respondé con el *número* de la opción, o directamente decime el día (ej: "el viernes").${eventsNote}`
     );
   },
 
@@ -167,16 +176,48 @@ export const esCatalog = {
     );
   },
 
+  /**
+   * Confirma la elección del evento y da paso al resumen. Se envía DESPUÉS de
+   * las fotos, para que el texto quede como último mensaje del bloque.
+   */
+  eventSelected(title: string, description: string | null, whenLabel: string): string {
+    const descriptionBlock = description ? `${description}\n\n` : '';
+    return (
+      `🎉 *${title}*\n\n` +
+      `${descriptionBlock}` +
+      `📅 ${whenLabel}\n\n` +
+      `Genial, sigamos con tu reserva para el evento.`
+    );
+  },
+
+  /** El evento dejó de estar disponible entre que se mostró el menú y la respuesta. */
+  eventNoLongerAvailable(title: string): string {
+    return `😔 *${title}* ya no está disponible. Elegí otra opción, por favor.`;
+  },
+
+  /** Menú de edición del resumen cuando la reserva es para un evento: la fecha y el horario los fija el evento. */
+  summaryEditMenuEvent(): string {
+    return (
+      `¿Qué querés modificar?\n\n` +
+      `1️⃣ Cantidad de personas\n` +
+      `2️⃣ Elegir otra fecha o evento\n\n` +
+      `Respondé con el *número* de la opción.`
+    );
+  },
+
   reservationSummary(
     name: string,
     partySize: number,
     whenLabel: string,
-    fullName: string = name
+    fullName: string = name,
+    eventTitle?: string | null
   ): string {
+    const eventLine = eventTitle ? `🎉 Evento: ${eventTitle}\n` : '';
     return (
       `📋 Antes de confirmar, verificá que los datos sean correctos:\n\n` +
       `👤 Nombre: ${fullName}\n` +
       `👥 Personas: ${partySize}\n` +
+      `${eventLine}` +
       `📅 Fecha y hora: ${whenLabel}\n\n` +
       `¿Está todo correcto?\n\n` +
       `1️⃣ Confirmar reserva\n` +
@@ -571,8 +612,11 @@ export const esCatalog = {
     return `Por ahora solo puedo tomar reservas dentro de los próximos 7 días. ¿Para qué día de esa semana la querés?`;
   },
 
-  scheduleChoiceInvalid(): string {
-    return `❌ Respondé *1* para ahora o *2* para elegir día y horario.`;
+  scheduleChoiceInvalid(optionCount: number = 2): string {
+    if (optionCount <= 2) {
+      return `❌ Respondé *1* para ahora o *2* para elegir día y horario.`;
+    }
+    return `❌ Respondé con un *número* del *1* al *${optionCount}*, o decime directamente qué día querés.`;
   },
 
   didntUnderstandTimeSuggest(slotTime: string): string {

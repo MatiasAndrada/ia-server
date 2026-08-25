@@ -11,7 +11,7 @@
  */
 
 import type { MessageCatalog } from './es.js';
-import { buildLanguageMenuLines } from './es.js';
+import { buildLanguageMenuLines, NUMBER_EMOJI } from './es.js';
 
 /**
  * `checkBusinessHours` puede no devolver motivo. Antes se interpolaba directo y
@@ -81,12 +81,19 @@ export const enCatalog: MessageCatalog = {
     );
   },
 
-  askScheduleChoice(): string {
+  askScheduleChoice(eventTitles: string[] = [], includeToday: boolean = true): string {
+    const options: string[] = [];
+    if (includeToday) options.push('Today (current service)');
+    options.push('Another date');
+    options.push(...eventTitles);
+
+    const lines = options.map((option, index) => `${NUMBER_EMOJI[index]} ${option}`).join('\n');
+    const eventsNote = eventTitles.length > 0 ? ` You can also pick one of our events.` : '';
+
     return (
       `📅 Is the booking for...?\n\n` +
-      `1️⃣ Today (current service)\n` +
-      `2️⃣ Another date\n\n` +
-      `Reply with the *number* of your choice, or just tell me the day (e.g. "Friday").`
+      `${lines}\n\n` +
+      `Reply with the *number* of your choice, or just tell me the day (e.g. "Friday").${eventsNote}`
     );
   },
 
@@ -153,16 +160,48 @@ export const enCatalog: MessageCatalog = {
     );
   },
 
+  /**
+   * Confirms the event choice and leads into the summary. Sent AFTER the
+   * photos so the text is the last message of the block.
+   */
+  eventSelected(title: string, description: string | null, whenLabel: string): string {
+    const descriptionBlock = description ? `${description}\n\n` : '';
+    return (
+      `🎉 *${title}*\n\n` +
+      `${descriptionBlock}` +
+      `📅 ${whenLabel}\n\n` +
+      `Great, let's continue with your booking for the event.`
+    );
+  },
+
+  /** The event stopped being available between showing the menu and the reply. */
+  eventNoLongerAvailable(title: string): string {
+    return `😔 *${title}* is no longer available. Please pick another option.`;
+  },
+
+  /** Summary edit menu for an event booking: the event fixes the date and time. */
+  summaryEditMenuEvent(): string {
+    return (
+      `What would you like to change?\n\n` +
+      `1️⃣ Number of people\n` +
+      `2️⃣ Pick another date or event\n\n` +
+      `Reply with the *number* of your choice.`
+    );
+  },
+
   reservationSummary(
     name: string,
     partySize: number,
     whenLabel: string,
-    fullName: string = name
+    fullName: string = name,
+    eventTitle?: string | null
   ): string {
+    const eventLine = eventTitle ? `🎉 Event: ${eventTitle}\n` : '';
     return (
       `📋 Before confirming, please check that everything is correct:\n\n` +
       `👤 Name: ${fullName}\n` +
       `👥 People: ${partySize}\n` +
+      `${eventLine}` +
       `📅 Date and time: ${whenLabel}\n\n` +
       `Is everything correct?\n\n` +
       `1️⃣ Confirm booking\n` +
@@ -543,8 +582,11 @@ export const enCatalog: MessageCatalog = {
     return `For now I can only take bookings within the next 7 days. Which day of that week would you like?`;
   },
 
-  scheduleChoiceInvalid(): string {
-    return `❌ Reply *1* for now, or *2* to choose a day and time.`;
+  scheduleChoiceInvalid(optionCount: number = 2): string {
+    if (optionCount <= 2) {
+      return `❌ Reply *1* for now, or *2* to choose a day and time.`;
+    }
+    return `❌ Reply with a *number* from *1* to *${optionCount}*, or just tell me which day you'd like.`;
   },
 
   didntUnderstandTimeSuggest(slotTime: string): string {
