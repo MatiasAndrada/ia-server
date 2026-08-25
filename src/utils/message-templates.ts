@@ -58,8 +58,17 @@ export function welcomeBackAskPartySize(customerName: string): string {
   return catalog().welcomeBackAskPartySize(customerName);
 }
 
-export function askScheduleChoice(): string {
-  return catalog().askScheduleChoice();
+/**
+ * Menú del paso `schedule_choice`. Es dinámico: "Hoy" desaparece cuando el día
+ * ya no tiene disponibilidad, y detrás de "Otra fecha" va un ítem por cada
+ * evento activo del comercio. Los call sites lo arman con
+ * `WhatsAppHandler.buildScheduleChoiceMessage`, que resuelve ambas cosas.
+ */
+export function askScheduleChoice(
+  eventTitles: string[] = [],
+  includeToday: boolean = true
+): string {
+  return catalog().askScheduleChoice(eventTitles, includeToday);
 }
 
 export function askDayClosedToday(openDays?: string | null): string {
@@ -103,14 +112,38 @@ export function reservationSummary(
   name: string,
   partySize: number,
   whenLabel: string,
-  fullName: string = name
+  fullName: string = name,
+  eventTitle?: string | null
 ): string {
-  return catalog().reservationSummary(name, partySize, whenLabel, fullName);
+  return catalog().reservationSummary(name, partySize, whenLabel, fullName, eventTitle);
 }
 
 /** Submenú de modificación dentro del resumen (estilo M2, sobre el borrador). */
 export function summaryEditMenu(): string {
   return catalog().summaryEditMenu();
+}
+
+/**
+ * Submenú de modificación cuando la reserva es para un evento: la fecha y el
+ * horario los fija el evento, así que sólo se puede cambiar la cantidad de
+ * personas o salirse del evento.
+ */
+export function summaryEditMenuEvent(): string {
+  return catalog().summaryEditMenuEvent();
+}
+
+/** Presentación del evento elegido, enviada después de las fotos. */
+export function eventSelected(
+  title: string,
+  description: string | null,
+  whenLabel: string
+): string {
+  return catalog().eventSelected(title, description, whenLabel);
+}
+
+/** El evento se desactivó entre que se mostró el menú y llegó la respuesta. */
+export function eventNoLongerAvailable(title: string): string {
+  return catalog().eventNoLongerAvailable(title);
 }
 
 /** Confirmación final de reserva (M1 — "Reserva confirmada"). */
@@ -503,8 +536,8 @@ export function outOfWindowAskDay(): string {
   return catalog().outOfWindowAskDay();
 }
 
-export function scheduleChoiceInvalid(): string {
-  return catalog().scheduleChoiceInvalid();
+export function scheduleChoiceInvalid(optionCount: number = 2): string {
+  return catalog().scheduleChoiceInvalid(optionCount);
 }
 
 export function didntUnderstandTimeSuggest(slotTime: string): string {
