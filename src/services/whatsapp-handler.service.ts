@@ -9,6 +9,14 @@ import { agentRegistry } from '../agents/index.js';
 import { BaileysMessage, BlockedDateEntry, Business, Customer, ReservationDraft, WaitlistEntry, WeeklyHours } from '../types/index.js';
 import { logger, logEvent } from '../utils/logger.js';
 import { withLogContext } from '../utils/log-context.js';
+import { normalizePhone } from '../utils/phone.js';
+import {
+  clearNotified,
+  createdNotificationKey,
+  ECHO_TTL_SECONDS,
+  markNotified,
+  statusNotificationKey,
+} from '../utils/notification-dedup.js';
 import {
   withTurnStats,
   recordOutbound,
@@ -2499,10 +2507,7 @@ export class WhatsAppHandler {
 
           if (wantsToCancel) {
             await ReservationService.deleteDraft(conversationId);
-            const cancelled = await SupabaseService.updateReservationStatus(
-              confirmReservationId,
-              'CANCELLED'
-            );
+            const cancelled = await this.cancelReservationForCustomer(confirmReservationId);
             await this.sendWhatsAppMessage(
               businessId,
               jid,
@@ -3497,25 +3502,13 @@ export class WhatsAppHandler {
         await agentService.recordAssistantMessage(conversationId, confirmationMessage);
 
         // Mark dedup keys after sending:
-        // - For CONFIRMED/NOTIFIED: short-lived key (90s) to prevent realtime duplicate.
+        // - For CONFIRMED/NOTIFIED: short-lived key to prevent realtime duplicate.
         // - For WAITING: mark as "creation notification sent" so realtime fallback skips it.
-        try {
-          if (RedisConfig.isReady()) {
-            const redisClient = RedisConfig.getClient();
-            if (entry.status === 'CONFIRMED' || entry.status === 'NOTIFIED') {
-              await redisClient.setEx(`wa:status:sent:${entry.id}:${entry.status}`, 90, '1');
-            }
-            // Always mark initial creation notification so realtime subscriber doesn't duplicate it
-            await redisClient.setEx(`wa:created:${entry.id}`, 86400, '1');
-          }
-        } catch (error) {
-          logger.warn('Failed to mark notification dedup keys', {
-            businessId,
-            entryId: entry.id,
-            status: entry.status,
-            error,
-          });
+        if (entry.status === 'CONFIRMED' || entry.status === 'NOTIFIED') {
+          await markNotified(statusNotificationKey(entry.id, entry.status), ECHO_TTL_SECONDS);
         }
+        // Always mark initial creation notification so realtime subscriber doesn't duplicate it
+        await markNotified(createdNotificationKey(entry.id));
 
         logger.debug('Confirmation message sent successfully to customer', {
           conversationId,
@@ -3726,9 +3719,7 @@ export class WhatsAppHandler {
   }
 
   private normalizeWhatsAppNumber(jid: string): string {
-    const withoutDomain = jid.split('@')[0] || jid;
-    const withoutDevice = withoutDomain.split(':')[0] || withoutDomain;
-    return withoutDevice.replace(/[^0-9+]/g, '');
+    return normalizePhone(jid);
   }
 
   private normalizeCourtesyText(text: string): string {
@@ -4404,7 +4395,7 @@ export class WhatsAppHandler {
             summaryLines.push(templates.cancelTargetNotFound(activeReservations.length > 0));
             continue;
           }
-          const ok = await SupabaseService.updateReservationStatus(target.id, 'CANCELLED');
+          const ok = await this.cancelReservationForCustomer(target.id);
           if (ok) {
             summaryLines.push(
               templates.reservationCancelledInline(
@@ -5562,6 +5553,32 @@ export class WhatsAppHandler {
   }
 
   /**
+   * Cancela una reserva a pedido del propio cliente.
+   *
+   * Idéntico a `SupabaseService.updateReservationStatus(id, 'CANCELLED')` salvo
+   * por un detalle que no es opcional: marca el aviso como ya enviado ANTES de
+   * escribir en la DB. El suscriptor de Realtime ve ese UPDATE a los pocos
+   * milisegundos y, sin la marca, le mandaría al cliente un segundo mensaje
+   * diciéndole que la canceló el restaurante — que es justo lo contrario de lo
+   * que acaba de pasar. En este turno la respuesta se la damos nosotros.
+   *
+   * Si el UPDATE falla se levanta la marca: si no, una cancelación posterior
+   * hecha desde el panel quedaría muda por hasta 24 horas.
+   */
+  private async cancelReservationForCustomer(reservationId: string): Promise<boolean> {
+    const dedupKey = statusNotificationKey(reservationId, 'CANCELLED');
+    await markNotified(dedupKey);
+
+    const cancelled = await SupabaseService.updateReservationStatus(reservationId, 'CANCELLED');
+
+    if (!cancelled) {
+      await clearNotified(dedupKey);
+    }
+
+    return cancelled;
+  }
+
+  /**
    * ❌ ACTION: Cancel - Mark reservation as CANCELLED
    */
   private async handleCancel(
@@ -5600,10 +5617,7 @@ export class WhatsAppHandler {
       }
 
       // Update status to CANCELLED
-      await SupabaseService.updateReservationStatus(
-        (reservation as any).id,
-        'CANCELLED'
-      );
+      await this.cancelReservationForCustomer((reservation as any).id);
 
       logEvent('info', 'reservation.cancelled', {
         customerId: customer.id,

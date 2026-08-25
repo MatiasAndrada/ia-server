@@ -14,6 +14,18 @@ import { LANGUAGE_MENU_ORDER, LANGUAGE_NATIVE_NAMES } from '../languages.js';
 const NUMBER_EMOJI = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
 
 /**
+ * "una hora" / "45 minutos". Los recordatorios tienen la antelación
+ * configurable, así que el texto no puede tener el número escrito a mano.
+ */
+function countdownLabel(minutes: number): string {
+  if (minutes < 60) {
+    return `${minutes} minuto${minutes === 1 ? '' : 's'}`;
+  }
+  const hours = Math.round(minutes / 60);
+  return `${hours === 1 ? 'una' : hours} hora${hours === 1 ? '' : 's'}`;
+}
+
+/**
  * Filas del menú de idiomas, compartidas por los tres catálogos (no se
  * traducen: cada idioma se nombra a sí mismo). Sin bandera: el idioma se
  * infiere de una bandera recibida, pero no se muestran banderas en los
@@ -697,6 +709,67 @@ export const esCatalog = {
       `📁 Código de reserva: *${displayCode}*\n\n` +
       `⏰ Te notificaremos cuando confirmen tu reserva.\n\n` +
       `_Si necesitás cancelar, respondé CANCELAR._`
+    );
+  },
+
+  /**
+   * M10a — Recordatorio con antelación (por defecto, una hora antes).
+   *
+   * Es el único mensaje del recorrido que le llega al cliente sin que él haya
+   * hecho nada, así que lleva la salida explícita: si no va a venir, que lo
+   * diga acá y no ocupando una mesa vacía.
+   */
+  reservationUpcomingReminder(
+    name: string,
+    partySize: number,
+    whenLabel: string,
+    displayCode: string,
+    minutesUntil: number
+  ): string {
+    return (
+      `⏰ Te recordamos tu reserva\n\n` +
+      `👤 Nombre: ${name}\n` +
+      `👥 Personas: ${partySize}\n` +
+      `🗓️ ${whenLabel}\n` +
+      `📁 Código de reserva: *${displayCode}*\n\n` +
+      `Falta ${countdownLabel(minutesUntil)}. ¡Te esperamos!\n\n` +
+      `_Si no vas a poder venir, respondé CANCELAR y liberamos la mesa._`
+    );
+  },
+
+  /** M10b — Aviso de proximidad (por defecto, quince minutos antes). */
+  reservationArrivalReminder(
+    whenLabel: string,
+    displayCode: string,
+    minutesUntil: number
+  ): string {
+    return (
+      `🔔 Faltan ${countdownLabel(minutesUntil)} para tu reserva\n\n` +
+      `🗓️ ${whenLabel}\n` +
+      `📁 Código de reserva: *${displayCode}*\n\n` +
+      `Ya deberías estar cerca. ¡Te esperamos!`
+    );
+  },
+
+  /**
+   * Notificación proactiva: el restaurante canceló la reserva (CANCELLED).
+   *
+   * No se confunde con `reservationCancelled()`, que es el acuse de recibo
+   * cuando quien cancela es el cliente desde el chat: acá la decisión no fue
+   * suya, así que el mensaje tiene que explicar qué pasó y ofrecerle rehacerla.
+   */
+  reservationCancelledByBusiness(
+    name: string,
+    displayCode: string,
+    whenLabel: string | null
+  ): string {
+    return (
+      `❌ Tu reserva fue cancelada por el restaurante.\n\n` +
+      `👤 Nombre: ${name}\n` +
+      (whenLabel ? `🗓️ Era para: ${whenLabel}\n` : '') +
+      `📁 Código de reserva: *${displayCode}*\n\n` +
+      `Lamentamos el inconveniente.\n` +
+      `_Si querés reservar para otro momento, escribinos y lo resolvemos._`
     );
   },
 

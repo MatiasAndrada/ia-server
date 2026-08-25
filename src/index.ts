@@ -14,6 +14,7 @@ import { BaileysService } from './services/baileys.service.js';
 import { RealtimeSyncService } from './services/realtime-sync.service.js';
 import { ReservationService } from './services/reservation.service.js';
 import { PostVisitService } from './services/post-visit.service.js';
+import { ReservationReminderService } from './services/reservation-reminder.service.js';
 import { EnvConfig } from './types/index.js';
 import { logger, logEvent } from './utils/logger.js';
 import { withLogContext } from './utils/log-context.js';
@@ -142,6 +143,9 @@ async function initializeApp() {
 
       // Start the post-visit (M12) scanner
       PostVisitService.start();
+
+      // Start the pre-reservation reminder (M10) scanner
+      ReservationReminderService.start();
     } else {
       logEvent('warn', 'dep.degraded', {
         dependency: 'supabase',
@@ -350,8 +354,9 @@ async function initializeApp() {
         logger.debug('HTTP server closed');
 
         try {
-          // Stop the post-visit scanner
+          // Stop the background scanners
           PostVisitService.stop();
+          ReservationReminderService.stop();
 
           // Clean up realtime sync
           await RealtimeSyncService.cleanup();

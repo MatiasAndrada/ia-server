@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { ReservationService } from '../services/reservation.service.js';
 import { SupabaseService } from '../services/supabase.service.js';
 import { logger, logEvent } from '../utils/logger.js';
+import { normalizePhone } from '../utils/phone.js';
 
 /**
  * Get reservation draft status
@@ -63,6 +64,16 @@ export async function createReservationHandler(req: Request, res: Response) {
       return res.status(400).json({
         success: false,
         error: 'Missing required fields: businessId, customerName, customerPhone, partySize',
+      });
+    }
+
+    // El panel manda el teléfono tal como lo tipea el operador. Sin dígitos no
+    // hay WhatsApp posible: mejor rechazar acá que crear una reserva que jamás
+    // va a poder notificarse.
+    if (!normalizePhone(customerPhone)) {
+      return res.status(400).json({
+        success: false,
+        error: 'customerPhone must contain a phone number',
       });
     }
 

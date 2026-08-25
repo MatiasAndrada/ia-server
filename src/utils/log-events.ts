@@ -54,6 +54,7 @@ export type LogEvent =
   | 'realtime.notified'
   | 'realtime.recovered'
   | 'job.postvisit_sent'
+  | 'job.reminder_sent'
 
   // ─── HTTP / seguridad ───
   | 'http.error'
@@ -103,6 +104,7 @@ export const EVENT_LABELS: Record<LogEvent, string> = {
   'realtime.notified': 'Realtime notification sent',
   'realtime.recovered': 'Realtime missed notifications recovered',
   'job.postvisit_sent': 'Post-visit message sent',
+  'job.reminder_sent': 'Reservation reminder sent',
 
   'http.error': 'HTTP request failed',
   'auth.rejected': 'Auth rejected',
@@ -116,6 +118,8 @@ export type Dependency = 'redis' | 'supabase' | 'openrouter' | 'whatsapp';
 export type SendFailureReason =
   | 'no_session'
   | 'not_connected'
+  /** El destinatario no tiene un solo dígito: no hay JID posible. */
+  | 'invalid_recipient'
   | 'timeout'
   | 'send_error';
 

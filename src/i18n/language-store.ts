@@ -1,6 +1,7 @@
 import { RedisConfig } from '../config/redis.js';
 import { SupabaseService } from '../services/supabase.service.js';
 import { logger } from '../utils/logger.js';
+import { normalizePhone } from '../utils/phone.js';
 import { coerceLanguage, DEFAULT_LANGUAGE, SupportedLanguage } from './languages.js';
 
 /**
@@ -42,8 +43,12 @@ interface CachedEntry {
   explicit: boolean;
 }
 
+/**
+ * El teléfono se normaliza para que la entrada sea la misma venga el número de
+ * un JID de WhatsApp o del panel, que lo guarda con `+` y espacios.
+ */
 function buildKey(businessId: string, phone: string): string {
-  return `${KEY_PREFIX}${businessId}:${phone}`;
+  return `${KEY_PREFIX}${businessId}:${normalizePhone(phone) || phone}`;
 }
 
 /**

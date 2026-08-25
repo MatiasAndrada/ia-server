@@ -13,6 +13,15 @@
 import type { MessageCatalog } from './es.js';
 import { buildLanguageMenuLines } from './es.js';
 
+/** "an hour" / "45 minutes" — the reminder lead time is configurable. */
+function countdownLabel(minutes: number): string {
+  if (minutes < 60) {
+    return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+  }
+  const hours = Math.round(minutes / 60);
+  return `${hours === 1 ? 'an' : hours} hour${hours === 1 ? '' : 's'}`;
+}
+
 /**
  * `checkBusinessHours` puede no devolver motivo. Antes se interpolaba directo y
  * el cliente llegaba a ver literalmente "❌ undefined"; estos helpers omiten el
@@ -658,6 +667,52 @@ export const enCatalog: MessageCatalog = {
       `📁 Booking code: *${displayCode}*\n\n` +
       `⏰ We'll notify you as soon as your booking is confirmed.\n\n` +
       `_If you need to cancel, reply CANCEL._`
+    );
+  },
+
+  reservationUpcomingReminder(
+    name: string,
+    partySize: number,
+    whenLabel: string,
+    displayCode: string,
+    minutesUntil: number
+  ): string {
+    return (
+      `⏰ A reminder about your booking\n\n` +
+      `👤 Name: ${name}\n` +
+      `👥 People: ${partySize}\n` +
+      `🗓️ ${whenLabel}\n` +
+      `📁 Booking code: *${displayCode}*\n\n` +
+      `${countdownLabel(minutesUntil)} to go. See you soon!\n\n` +
+      `_If you can't make it, reply CANCEL and we'll free up the table._`
+    );
+  },
+
+  reservationArrivalReminder(
+    whenLabel: string,
+    displayCode: string,
+    minutesUntil: number
+  ): string {
+    return (
+      `🔔 ${countdownLabel(minutesUntil)} until your booking\n\n` +
+      `🗓️ ${whenLabel}\n` +
+      `📁 Booking code: *${displayCode}*\n\n` +
+      `You should be nearby by now. See you soon!`
+    );
+  },
+
+  reservationCancelledByBusiness(
+    name: string,
+    displayCode: string,
+    whenLabel: string | null
+  ): string {
+    return (
+      `❌ Your booking was cancelled by the restaurant.\n\n` +
+      `👤 Name: ${name}\n` +
+      (whenLabel ? `🗓️ It was for: ${whenLabel}\n` : '') +
+      `📁 Booking code: *${displayCode}*\n\n` +
+      `We're sorry for the inconvenience.\n` +
+      `_If you'd like to book for another time, just write to us and we'll sort it out._`
     );
   },
 
