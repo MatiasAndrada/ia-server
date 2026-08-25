@@ -517,13 +517,19 @@ export class ReservationService {
         customerPhone,
         partySize: draft.partySize,
         scheduledAt: draft.scheduledAt ?? null,
+        eventId: draft.eventId ?? null,
       };
 
       // Safety net: re-validate business-configured date blocks right before
       // creating, in case something slipped past the earlier conversational
       // checks (e.g. a date got blocked mid-conversation, or a future code
       // path sets scheduledAt without going through those checks).
-      if (request.scheduledAt) {
+      //
+      // Las reservas de evento quedan fuera a propósito: la fecha la eligió el
+      // comercio al publicar el evento, así que vale aunque ese día esté
+      // bloqueado o el local no abra. Sin esta excepción, un evento en un día
+      // cerrado se rechazaría acá, recién al final del flujo.
+      if (request.scheduledAt && !request.eventId) {
         const { dateKey, hour, minute } = utcIsoToBaParts(request.scheduledAt);
         const [business, blockedDates] = await Promise.all([
           SupabaseService.getBusinessById(request.businessId),

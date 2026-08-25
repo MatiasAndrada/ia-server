@@ -6,7 +6,7 @@ import { SupabaseService } from './supabase.service.js';
 import { SupabaseConfig } from '../config/supabase.js';
 import { RedisConfig } from '../config/redis.js';
 import { agentRegistry } from '../agents/index.js';
-import { BaileysMessage, BlockedDateEntry, Business, Customer, ReservationDraft, WaitlistEntry, WeeklyHours } from '../types/index.js';
+import { BaileysMessage, BlockedDateEntry, Business, BusinessEvent, Customer, ReservationDraft, WaitlistEntry, WeeklyHours } from '../types/index.js';
 import { logger, logEvent } from '../utils/logger.js';
 import { withLogContext } from '../utils/log-context.js';
 import {
@@ -662,6 +662,7 @@ export class WhatsAppHandler {
         businessName: businessStatus.name,
         currentStep: draft?.step,
         awaitingNameCorrection: draft?.awaitingNameCorrection,
+        scheduleChoiceEventTitles: draft?.scheduleChoiceOptions?.events.map((event) => event.title),
       });
       if (scopeEvaluation.decision === 'out_of_window' || scopeEvaluation.reason === 'prompt_injection') {
         // Deterministic, non-negotiable: the 7-day window rule and prompt-injection
@@ -1382,22 +1383,67 @@ export class WhatsAppHandler {
               conversationId,
               messageText,
             });
-            await this.sendWhatsAppMessage(businessId, jid, templates.askScheduleChoice());
+            await this.sendWhatsAppMessage(
+              businessId,
+              jid,
+              await this.buildScheduleChoiceMessage(conversationId, businessId, draft)
+            );
             return true;
           }
 
           // Same "otros días" question as at the `time`/`date` steps — answer
           // with real hours instead of bouncing to the LLM fallback.
           if (isAskingOtherDaysScheduleMessage(normalizeReservationScopeText(messageText))) {
-            if (await this.maybeAnswerOtherDaysScheduleQuestion(messageText, businessId, jid, templates.askScheduleChoice())) {
+            const scheduleFollowUp = await this.buildScheduleChoiceMessage(conversationId, businessId, draft);
+            if (await this.maybeAnswerOtherDaysScheduleQuestion(messageText, businessId, jid, scheduleFollowUp)) {
               return true;
             }
           }
 
           const trimmedChoice = messageText.trim();
           const normalizedChoice = normalizeReservationScopeText(messageText);
-          const wantsInstant = trimmedChoice === '1' || isInstantChoiceMessage(normalizedChoice);
-          const wantsToPickDay = trimmedChoice === '2';
+
+          // Los eventos se resuelven primero: la numeración del menú se corre
+          // según haya o no opción "Hoy", así que un "2" puede ser "otra fecha"
+          // o el primer evento. El snapshot del borrador lo desambigua.
+          const scheduleOptions = draft.scheduleChoiceOptions;
+          if (scheduleOptions && scheduleOptions.events.length > 0) {
+            const activeEvents = await SupabaseService.getActiveEvents(businessId);
+            const chosenEvent = this.matchScheduleChoiceEvent(draft, messageText, activeEvents);
+
+            if (chosenEvent) {
+              await this.applyEventChoice(draft, chosenEvent, conversationId, businessId, jid);
+              return true;
+            }
+
+            // El número caía en un evento que ya no está activo: el comercio lo
+            // pausó o lo borró entre que se mostró el menú y llegó la respuesta.
+            const staleIndex = /^\d+$/.test(trimmedChoice)
+              ? Number(trimmedChoice) - (scheduleOptions.includeToday ? 3 : 2)
+              : -1;
+            const staleEvent = staleIndex >= 0 ? scheduleOptions.events[staleIndex] : undefined;
+
+            if (staleEvent) {
+              await this.sendWhatsAppMessage(
+                businessId,
+                jid,
+                templates.eventNoLongerAvailable(staleEvent.title)
+              );
+              await this.sendWhatsAppMessage(
+                businessId,
+                jid,
+                await this.buildScheduleChoiceMessage(conversationId, businessId, draft)
+              );
+              return true;
+            }
+          }
+
+          // Cuando el menú se mostró sin la opción "Hoy" (porque el día ya no
+          // tenía disponibilidad), el "1" significa "otra fecha", no "ahora".
+          const todayWasOffered = scheduleOptions?.includeToday ?? true;
+          const wantsInstant =
+            todayWasOffered && (trimmedChoice === '1' || isInstantChoiceMessage(normalizedChoice));
+          const wantsToPickDay = todayWasOffered ? trimmedChoice === '2' : trimmedChoice === '1';
 
           if (wantsInstant) {
             if (draft.editMode && draft.existingReservationId) {
@@ -1644,7 +1690,7 @@ export class WhatsAppHandler {
             await this.sendWhatsAppMessage(
               businessId,
               jid,
-              templates.scheduleChoiceInvalid()
+              templates.scheduleChoiceInvalid(this.scheduleChoiceOptionCount(draft))
             );
           }
           return true;
@@ -2226,7 +2272,11 @@ export class WhatsAppHandler {
                 customerName: draft.customerName,
                 partySize: draft.partySize,
               });
-              await this.sendWhatsAppMessage(businessId, jid, templates.askScheduleChoice());
+              await this.sendWhatsAppMessage(
+                businessId,
+                jid,
+                await this.buildScheduleChoiceMessage(conversationId, businessId)
+              );
             }
             return true;
           } else if (choice === 3) {
@@ -2271,7 +2321,11 @@ export class WhatsAppHandler {
             draft.step = 'summary_edit_menu';
             draft.invalidAttempts = 0;
             await ReservationService.saveDraft(draft);
-            await this.sendWhatsAppMessage(businessId, jid, templates.summaryEditMenu());
+            await this.sendWhatsAppMessage(
+              businessId,
+              jid,
+              draft.eventId ? templates.summaryEditMenuEvent() : templates.summaryEditMenu()
+            );
             return true;
           }
 
@@ -2289,6 +2343,26 @@ export class WhatsAppHandler {
         case 'summary_edit_menu': {
           // What to modify before confirming: 1=personas, 2=fecha, 3=horario
           const summaryChoice = this.extractNumber(messageText);
+
+          // Reserva de evento: la fecha y el horario los fija el evento, así
+          // que el menú sólo ofrece 1=personas y 2=salirse del evento para
+          // volver a elegir (ver summaryEditMenuEvent).
+          if (draft.eventId && summaryChoice === 2) {
+            draft.eventId = undefined;
+            draft.eventTitle = undefined;
+            draft.scheduledAt = undefined;
+            draft.scheduledDate = undefined;
+            draft.scheduledTime = undefined;
+            draft.invalidAttempts = 0;
+            await ReservationService.saveDraft(draft);
+            await this.promptScheduleChoice(conversationId, businessId, jid);
+            return true;
+          }
+
+          if (draft.eventId && summaryChoice === 3) {
+            await this.sendWhatsAppMessage(businessId, jid, templates.summaryEditMenuEvent());
+            return true;
+          }
 
           if (summaryChoice === 1) {
             draft.step = 'party_size';
@@ -2330,7 +2404,11 @@ export class WhatsAppHandler {
             return true;
           }
 
-          await this.sendWhatsAppMessage(businessId, jid, templates.editMenuInvalidChoice());
+          await this.sendWhatsAppMessage(
+            businessId,
+            jid,
+            draft.eventId ? templates.summaryEditMenuEvent() : templates.editMenuInvalidChoice()
+          );
           return true;
         }
 
@@ -2444,7 +2522,7 @@ export class WhatsAppHandler {
             await this.sendWhatsAppMessage(
               businessId,
               jid,
-              `${templates.rescheduleIntro()}\n\n${templates.askScheduleChoice()}`
+              `${templates.rescheduleIntro()}\n\n${await this.buildScheduleChoiceMessage(conversationId, businessId)}`
             );
             return true;
           }
@@ -3326,7 +3404,8 @@ export class WhatsAppHandler {
         draft.customerName || 'Cliente',
         draft.partySize || 0,
         whenLabel,
-        this.buildFullName(draft.customerName, draft.customerLastName) || draft.customerName || 'Cliente'
+        this.buildFullName(draft.customerName, draft.customerLastName) || draft.customerName || 'Cliente',
+        draft.eventTitle ?? null
       )
     );
   }
@@ -3372,6 +3451,15 @@ export class WhatsAppHandler {
       }
 
       if (!todayHasAvailability) {
+        // Sin disponibilidad hoy, pero con eventos publicados, saltar el menú
+        // escondería el evento en este turno. Se muestra igual, sin la opción
+        // "Hoy": queda "1) Otra fecha" y los eventos a continuación.
+        const events = await SupabaseService.getActiveEvents(businessId);
+        if (events.length > 0) {
+          await this.sendScheduleChoiceMenu(conversationId, businessId, jid, events, false);
+          return;
+        }
+
         await ReservationService.moveToDateStep(conversationId);
         const dayLines = getUpcomingOpenDaysWithHours(
           weeklyHours,
@@ -3386,8 +3474,158 @@ export class WhatsAppHandler {
       }
     }
 
-    await ReservationService.moveToScheduleChoice(conversationId);
-    await this.sendWhatsAppMessage(businessId, jid, templates.askScheduleChoice());
+    const events = await SupabaseService.getActiveEvents(businessId);
+    await this.sendScheduleChoiceMenu(conversationId, businessId, jid, events, true);
+  }
+
+  /**
+   * Manda el menú de `schedule_choice` y deja anotado en el borrador qué
+   * opciones vio el cliente, para poder mapear el número que responda.
+   *
+   * El menú es dinámico en dos ejes — si hay o no opción "Hoy", y cuántos
+   * eventos hay — así que la numeración no se puede dar por sentada en el
+   * handler: sin este snapshot, un "3" podría significar cosas distintas
+   * según lo que se hubiera mostrado.
+   */
+  private async sendScheduleChoiceMenu(
+    conversationId: string,
+    businessId: string,
+    jid: string,
+    events: BusinessEvent[],
+    includeToday: boolean
+  ): Promise<void> {
+    const draft = await ReservationService.moveToScheduleChoice(conversationId);
+    if (draft) {
+      draft.scheduleChoiceOptions = {
+        includeToday,
+        events: events.map(({ id, title }) => ({ id, title })),
+      };
+      await ReservationService.saveDraft(draft);
+    }
+
+    await this.sendWhatsAppMessage(
+      businessId,
+      jid,
+      templates.askScheduleChoice(events.map((event) => event.title), includeToday)
+    );
+  }
+
+  /**
+   * Reconstruye el menú de `schedule_choice` para volver a mostrarlo (re-ask,
+   * respuesta inválida, vuelta desde el menú de edición). Refresca los eventos
+   * y reescribe el snapshot: entre un turno y otro el comercio pudo publicar o
+   * pausar uno, y el borrador tiene que reflejar lo que el cliente ve ahora.
+   */
+  private async buildScheduleChoiceMessage(
+    conversationId: string,
+    businessId: string,
+    draft?: ReservationDraft | null
+  ): Promise<string> {
+    const events = await SupabaseService.getActiveEvents(businessId);
+    // Se conserva si la opción "Hoy" estaba o no en el menú original: si se
+    // ocultó porque hoy ya no había disponibilidad, sigue sin corresponder.
+    const includeToday = draft?.scheduleChoiceOptions?.includeToday ?? true;
+
+    const target = draft ?? (await ReservationService.getDraft(conversationId));
+    if (target) {
+      target.scheduleChoiceOptions = {
+        includeToday,
+        events: events.map(({ id, title }) => ({ id, title })),
+      };
+      await ReservationService.saveDraft(target);
+    }
+
+    return templates.askScheduleChoice(events.map((event) => event.title), includeToday);
+  }
+
+  /**
+   * Cuántas opciones tiene el menú tal como lo vio el cliente. Se usa para
+   * redactar el mensaje de opción inválida con el rango correcto.
+   */
+  private scheduleChoiceOptionCount(draft: ReservationDraft): number {
+    const options = draft.scheduleChoiceOptions;
+    if (!options) return 2;
+    return (options.includeToday ? 2 : 1) + options.events.length;
+  }
+
+  /**
+   * Traduce la respuesta del cliente en el paso `schedule_choice` al evento que
+   * eligió, si eligió uno. Acepta el número de la opción o el título escrito.
+   */
+  private matchScheduleChoiceEvent(
+    draft: ReservationDraft,
+    messageText: string,
+    events: BusinessEvent[]
+  ): BusinessEvent | null {
+    const options = draft.scheduleChoiceOptions;
+    if (!options || options.events.length === 0) return null;
+
+    // Los eventos empiezan después de "Hoy" (si está) y de "Otra fecha".
+    const firstEventOption = options.includeToday ? 3 : 2;
+    const trimmed = messageText.trim();
+
+    if (/^\d+$/.test(trimmed)) {
+      const eventIndex = Number(trimmed) - firstEventOption;
+      const chosen = options.events[eventIndex];
+      return chosen ? events.find((event) => event.id === chosen.id) ?? null : null;
+    }
+
+    // El cliente puede escribir el título en vez del número.
+    const normalized = normalizeReservationScopeText(messageText);
+    if (normalized.length < 3) return null;
+
+    return (
+      events.find((event) => {
+        const title = normalizeReservationScopeText(event.title);
+        return title.length >= 3 && (title === normalized || normalized.includes(title));
+      }) ?? null
+    );
+  }
+
+  /**
+   * El cliente eligió un evento: manda las fotos, después la presentación, y
+   * salta directo al resumen. La fecha y el horario los fija el evento, así
+   * que no hay nada más que preguntar (la cantidad de personas ya se pidió
+   * antes de este paso).
+   */
+  private async applyEventChoice(
+    draft: ReservationDraft,
+    event: BusinessEvent,
+    conversationId: string,
+    businessId: string,
+    jid: string
+  ): Promise<void> {
+    // Secuencial a propósito: Baileys serializa los envíos y en paralelo las
+    // fotos llegan desordenadas.
+    for (const [index, imageUrl] of event.imageUrls.slice(0, 3).entries()) {
+      await this.sendWhatsAppImage(
+        businessId,
+        jid,
+        imageUrl,
+        index === 0 ? `🎉 ${event.title}` : undefined
+      );
+    }
+
+    const parts = utcIsoToBaParts(event.startsAt);
+    draft.eventId = event.id;
+    draft.eventTitle = event.title;
+    draft.scheduledAt = event.startsAt;
+    draft.scheduledDate = parts.dateKey;
+    draft.scheduledTime = `${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}`;
+    draft.invalidAttempts = 0;
+    await ReservationService.saveDraft(draft);
+
+    await this.sendWhatsAppMessage(
+      businessId,
+      jid,
+      templates.eventSelected(
+        event.title,
+        event.description,
+        describeScheduledAtUtc(event.startsAt, nowInBuenosAires())
+      )
+    );
+
+    await this.showReservationSummary(conversationId, businessId, jid);
   }
 
   /**
@@ -3641,6 +3879,30 @@ export class WhatsAppHandler {
       });
     } catch (error) {
       logger.error('Error sending WhatsApp message', { error, businessId, to });
+    }
+  }
+
+  /**
+   * Envía una imagen por WhatsApp. Hermano de sendWhatsAppMessage, pero sin
+   * pasar por el dedupe de salientes: ese guard compara el texto del mensaje,
+   * y dos fotos distintas del mismo evento tienen el mismo caption (o ninguno),
+   * así que las descartaría por duplicadas.
+   */
+  private async sendWhatsAppImage(
+    businessId: string,
+    to: string,
+    imageUrl: string,
+    caption?: string
+  ): Promise<void> {
+    try {
+      const success = await this.baileysService.sendImageMessage(businessId, to, imageUrl, caption);
+      if (!success) {
+        // BaileysService ya emitió msg.out_failed con la causa tipificada.
+        return;
+      }
+      recordOutbound();
+    } catch (error) {
+      logger.error('Error sending WhatsApp image', { error, businessId, to, imageUrl });
     }
   }
 
@@ -4795,7 +5057,7 @@ export class WhatsAppHandler {
           : templates.askPartySizeShort();
 
       case 'schedule_choice':
-        return templates.askScheduleChoice();
+        return await this.buildScheduleChoiceMessage(draft.conversationId, businessId, draft);
 
       case 'date':
         return await this.buildAskDayMessage(businessId);
@@ -4823,7 +5085,7 @@ export class WhatsAppHandler {
       }
 
       case 'summary_edit_menu':
-        return templates.summaryEditMenu();
+        return draft.eventId ? templates.summaryEditMenuEvent() : templates.summaryEditMenu();
 
       case 'cancel_confirm':
         return templates.cancelConfirmPrompt();
