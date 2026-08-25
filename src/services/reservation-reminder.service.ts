@@ -56,7 +56,7 @@ export class ReservationReminderService {
   private static readonly SCAN_INTERVAL_MS = 60 * 1000;
 
   /** Estados que todavía esperan al cliente. Una CANCELLED o SEATED no se recuerda. */
-  private static readonly PENDING_STATUSES = ['WAITING', 'CONFIRMED'];
+  private static readonly PENDING_STATUSES = ['WAITING', 'CONFIRMED'] as const;
 
   private static timer: ReturnType<typeof setInterval> | null = null;
 
