@@ -345,6 +345,24 @@ export type BlockedDateEntry = {
   reasonMessage: string | null;
 };
 
+/**
+ * Evento publicado por el comercio. El agente los ofrece como opción extra en
+ * el paso `schedule_choice`, además de "hoy" y "otra fecha".
+ *
+ * A diferencia de una reserva normal, un evento puede caer fuera de la ventana
+ * de 7 días y su fecha se considera habilitada aunque el comercio no abra ese
+ * día o lo tenga bloqueado: publicarlo ES la habilitación.
+ */
+export interface BusinessEvent {
+  id: string;
+  title: string;
+  description: string | null;
+  /** ISO UTC del inicio del evento. Se copia tal cual a waitlist_entries.scheduled_at. */
+  startsAt: string;
+  /** URLs públicas, máximo 3. Se envían por WhatsApp al elegir el evento. */
+  imageUrls: string[];
+}
+
 // Reservation Flow Types
 export interface ReservationDraft {
   conversationId: string;
@@ -388,6 +406,27 @@ export interface ReservationDraft {
   scheduledDate?: string; // YYYY-MM-DD, Buenos Aires local day
   scheduledTime?: string; // HH:mm, 24h
   scheduledAt?: string; // ISO UTC instant combining scheduledDate + scheduledTime
+  // Set when the customer picked one of the business's events at the
+  // `schedule_choice` step. `scheduledAt` then mirrors the event's start, and
+  // the reservation is created against that event (always pending approval).
+  eventId?: string;
+  eventTitle?: string;
+  /**
+   * Snapshot of the menu last shown at `schedule_choice`, so the number the
+   * customer replies with can be mapped back to what they actually saw. The
+   * menu is dynamic: "Hoy" disappears when today has no availability left, and
+   * the event entries vary per business, so the numbering can't be hardcoded.
+   */
+  scheduleChoiceOptions?: {
+    includeToday: boolean;
+    /**
+     * Los eventos tal como se listaron, en orden. Se guarda el título junto al
+     * id porque si el comercio desactiva un evento entre turnos hay que poder
+     * nombrarlo al avisar que ya no está disponible, y para entonces la
+     * consulta a la base ya no lo devuelve.
+     */
+    events: { id: string; title: string }[];
+  };
   // confirm_slot step: which step triggered the suggestion (to know where to go back on "no")
   confirmSlotOrigin?: 'schedule_choice' | 'time' | 'date';
   // party_size step: true right after asking "¿Cuál es tu nombre correcto?" — the
@@ -460,6 +499,8 @@ export interface CreateReservationRequest {
   source?: 'AI_CHAT' | 'DASHBOARD';
   /** ISO UTC instant for a future day/time within the next 7 days; omitted/null = instant reservation for the current turn. */
   scheduledAt?: string | null;
+  /** Set when the reservation is for one of the business's events. Forces WAITING. */
+  eventId?: string | null;
 }
 
 export interface CreateReservationResponse {

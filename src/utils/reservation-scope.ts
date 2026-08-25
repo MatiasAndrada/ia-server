@@ -12,6 +12,13 @@ export interface ReservationScopeContext {
   // party_size step — a bare name-like reply must be allowed through even
   // without an explicit correction phrase like "me llamo X".
   awaitingNameCorrection?: boolean;
+  /**
+   * Titles of the events offered in the `schedule_choice` menu the customer is
+   * looking at. A customer may answer with the title instead of the number
+   * ("la noche de jazz"), and an arbitrary event name matches none of the
+   * date/time patterns — without this it would be bounced as off-topic.
+   */
+  scheduleChoiceEventTitles?: string[];
 }
 
 export interface ReservationScopeEvaluation {
@@ -44,6 +51,26 @@ export function buildReservationOffTopicMessage(businessName?: string): string {
 
 export function buildReservationOutOfWindowMessage(businessName?: string): string {
   return catalog().reservationOutOfWindow(resolveBusinessName(businessName));
+}
+
+/**
+ * Whether the message names one of the events currently on offer. Mirrors the
+ * matching `WhatsAppHandler.matchScheduleChoiceEvent` does, so a title this
+ * guard lets through is one the handler will actually resolve.
+ *
+ * Requires at least 3 characters to avoid a one-letter title swallowing every
+ * message that happens to contain that letter.
+ */
+function matchesOfferedEventTitle(normalizedMessage: string, titles?: string[]): boolean {
+  if (!titles || titles.length === 0 || normalizedMessage.length < 3) return false;
+
+  return titles.some((title) => {
+    const normalizedTitle = normalizeReservationScopeText(title);
+    return (
+      normalizedTitle.length >= 3 &&
+      (normalizedTitle === normalizedMessage || normalizedMessage.includes(normalizedTitle))
+    );
+  });
 }
 
 export function evaluateReservationScope(
@@ -160,6 +187,7 @@ export function evaluateReservationScope(
       isInstantChoiceMessage(normalizedMessage) ||
       hasDateOrTimeSignal(trimmedMessage, normalizedMessage) ||
       isAskingOtherDaysScheduleMessage(normalizedMessage) ||
+      matchesOfferedEventTitle(normalizedMessage, context.scheduleChoiceEventTitles) ||
       reservationRelated ||
       isGreetingOrOptIn
     ) {

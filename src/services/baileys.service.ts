@@ -992,6 +992,72 @@ export class BaileysService {
   }
 
   /**
+   * Envía una imagen por URL, con un caption opcional.
+   *
+   * Mismas guardas que sendMessage (sesión presente, sesión conectada, JID
+   * resuelto), pero con un timeout más largo: Baileys tiene que descargar la
+   * imagen y subirla a WhatsApp, y 15s se quedan cortos con conexiones lentas.
+   *
+   * La URL tiene que ser públicamente accesible — Baileys la descarga desde el
+   * servidor, no reenvía un link.
+   */
+  async sendImageMessage(
+    businessId: string,
+    to: string,
+    imageUrl: string,
+    caption?: string
+  ): Promise<boolean> {
+    try {
+      await loadBaileys();
+
+      const sock = this.sessions.get(businessId);
+
+      if (!sock) {
+        this.logSendFailure(businessId, to, 'no_session');
+        return false;
+      }
+
+      if (!this.isSessionConnected(businessId)) {
+        this.logSendFailure(businessId, to, 'not_connected');
+        return false;
+      }
+
+      const jid = await this.resolveJid(businessId, to);
+
+      logger.debug('Sending image via Baileys', { businessId, to: jid, imageUrl });
+
+      const sendPromise = sock.sendMessage(jid, {
+        image: { url: imageUrl },
+        ...(caption ? { caption } : {}),
+      });
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('sendImageMessage timeout after 30s')), 30000)
+      );
+      const result = await Promise.race([sendPromise, timeoutPromise]);
+      this.rememberOutboundMessageId(businessId, result?.key?.id);
+
+      logEvent('info', 'msg.out', {
+        businessId,
+        to: jid,
+        messageLength: caption?.length ?? 0,
+        messageId: result?.key?.id,
+      });
+
+      const state = this.sessionStates.get(businessId);
+      if (state) {
+        state.lastActivity = Date.now();
+        this.sessionStates.set(businessId, state);
+      }
+
+      return true;
+    } catch (error) {
+      const isTimeout = error instanceof Error && error.message.includes('timeout');
+      this.logSendFailure(businessId, to, isTimeout ? 'timeout' : 'send_error', error);
+      return false;
+    }
+  }
+
+  /**
    * Un único punto para reportar un envío fallido, con la causa tipificada y
    * throttle por comercio: cuando una sesión se cae, cada mensaje pendiente
    * dispara este camino y sin throttle el log se vuelve ilegible.

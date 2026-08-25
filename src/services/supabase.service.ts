@@ -11,6 +11,7 @@ import {
   Table,
   WaitlistEntry,
   BlockedDateEntry,
+  BusinessEvent,
 } from '../types/index.js';
 import { logger, logEvent } from '../utils/logger.js';
 import { openRouterService } from './openrouter.service.js';
@@ -566,9 +567,13 @@ export class SupabaseService {
         tableId = request.tableId;
       }
 
-      // Create waitlist entry
-      const initialStatus: WaitlistStatus = autoAccept ? 'CONFIRMED' : 'WAITING';
-      const confirmedAt = autoAccept ? new Date().toISOString() : null;
+      // Create waitlist entry.
+      // Las reservas de evento siempre nacen WAITING: el comercio las aprueba
+      // una por una aunque tenga auto_accept_reservations encendido.
+      const isEventReservation = Boolean(request.eventId);
+      const autoAcceptForThisEntry = autoAccept && !isEventReservation;
+      const initialStatus: WaitlistStatus = autoAcceptForThisEntry ? 'CONFIRMED' : 'WAITING';
+      const confirmedAt = autoAcceptForThisEntry ? new Date().toISOString() : null;
       
       logger.debug('Creating waitlist entry in database...', {
         businessId: request.businessId,
@@ -579,6 +584,7 @@ export class SupabaseService {
         confirmedAt,
         tableId: tableId || null,
         autoAccept,
+        isEventReservation,
       });
 
       const insertData: WaitlistEntriesInsert = {
@@ -590,6 +596,7 @@ export class SupabaseService {
         source: request.source ?? 'AI_CHAT',
         table_id: tableId,
         scheduled_at: request.scheduledAt ?? null,
+        event_id: request.eventId ?? null,
         ...(confirmedAt ? { confirmed_at: confirmedAt } : {}),
       };
 
@@ -901,6 +908,43 @@ export class SupabaseService {
     } catch (error) {
       logger.error('Supabase: getBlockedDates failed', { error, businessId });
       return new Map();
+    }
+  }
+
+  /**
+   * Events the business is currently offering: still enabled and not started
+   * yet. Same rule the dashboard uses to decide which ones to list.
+   *
+   * Ordered by start date so the numbering the customer sees in the WhatsApp
+   * menu is stable between turns as long as the underlying data doesn't change.
+   */
+  static async getActiveEvents(businessId: string): Promise<BusinessEvent[]> {
+    try {
+      const client = this.getClient();
+      const { data, error } = await client
+        .from('business_events')
+        .select('id, title, description, starts_at, image_urls')
+        .eq('business_id', businessId)
+        .eq('is_active', true)
+        .gte('starts_at', new Date().toISOString())
+        .order('starts_at', { ascending: true });
+
+      if (error) {
+        throw error;
+      }
+
+      return (data ?? []).map((row) => ({
+        id: row.id,
+        title: row.title,
+        description: row.description ?? null,
+        startsAt: row.starts_at,
+        imageUrls: row.image_urls ?? [],
+      }));
+    } catch (error) {
+      // Un fallo acá no debe romper el flujo de reserva: sin eventos el menú
+      // simplemente vuelve a ser "hoy / otra fecha", como antes.
+      logger.error('Supabase: getActiveEvents failed', { error, businessId });
+      return [];
     }
   }
 
