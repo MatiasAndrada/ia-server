@@ -58,6 +58,15 @@ const stubBaileysService = {
     console.log(`\n🤖 Bot → ${jid}:\n${message}\n`);
     return true;
   },
+  sendImageMessage: async (
+    _businessId: string,
+    jid: string,
+    imageUrl: string,
+    caption?: string
+  ): Promise<boolean> => {
+    console.log(`\n🖼️  Bot → ${jid}: [imagen] ${imageUrl}${caption ? `\n   caption: ${caption}` : ''}\n`);
+    return true;
+  },
   getSelfJid: (): string => '',
 };
 
