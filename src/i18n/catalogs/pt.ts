@@ -12,6 +12,15 @@
 import type { MessageCatalog } from './es.js';
 import { buildLanguageMenuLines } from './es.js';
 
+/** "uma hora" / "45 minutos" — a antecedência do lembrete é configurável. */
+function countdownLabel(minutes: number): string {
+  if (minutes < 60) {
+    return `${minutes} minuto${minutes === 1 ? '' : 's'}`;
+  }
+  const hours = Math.round(minutes / 60);
+  return `${hours === 1 ? 'uma' : hours} hora${hours === 1 ? '' : 's'}`;
+}
+
 /**
  * `checkBusinessHours` puede no devolver motivo. Antes se interpolaba directo y
  * el cliente llegaba a ver literalmente "❌ undefined"; estos helpers omiten el
@@ -657,6 +666,52 @@ export const ptCatalog: MessageCatalog = {
       `📁 Código da reserva: *${displayCode}*\n\n` +
       `⏰ Avisaremos assim que sua reserva for confirmada.\n\n` +
       `_Se precisar cancelar, responda CANCELAR._`
+    );
+  },
+
+  reservationUpcomingReminder(
+    name: string,
+    partySize: number,
+    whenLabel: string,
+    displayCode: string,
+    minutesUntil: number
+  ): string {
+    return (
+      `⏰ Lembrete da sua reserva\n\n` +
+      `👤 Nome: ${name}\n` +
+      `👥 Pessoas: ${partySize}\n` +
+      `🗓️ ${whenLabel}\n` +
+      `📁 Código da reserva: *${displayCode}*\n\n` +
+      `Falta ${countdownLabel(minutesUntil)}. Esperamos por você!\n\n` +
+      `_Se não puder vir, responda CANCELAR e liberamos a mesa._`
+    );
+  },
+
+  reservationArrivalReminder(
+    whenLabel: string,
+    displayCode: string,
+    minutesUntil: number
+  ): string {
+    return (
+      `🔔 Faltam ${countdownLabel(minutesUntil)} para a sua reserva\n\n` +
+      `🗓️ ${whenLabel}\n` +
+      `📁 Código da reserva: *${displayCode}*\n\n` +
+      `Você já deveria estar por perto. Esperamos por você!`
+    );
+  },
+
+  reservationCancelledByBusiness(
+    name: string,
+    displayCode: string,
+    whenLabel: string | null
+  ): string {
+    return (
+      `❌ Sua reserva foi cancelada pelo restaurante.\n\n` +
+      `👤 Nome: ${name}\n` +
+      (whenLabel ? `🗓️ Era para: ${whenLabel}\n` : '') +
+      `📁 Código da reserva: *${displayCode}*\n\n` +
+      `Lamentamos o inconveniente.\n` +
+      `_Se quiser reservar para outro momento, escreva para nós e resolvemos._`
     );
   },
 
