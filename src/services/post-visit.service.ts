@@ -171,15 +171,6 @@ export class PostVisitService {
       return;
     }
 
-    // Resolver JID (mismo patrón que realtime-sync)
-    let recipientJid = customer.phone;
-    try {
-      const cachedJid = await client.get(`jid:${businessId}:${customer.phone}`);
-      if (cachedJid) recipientJid = cachedJid;
-    } catch (_) {
-      /* usar phone como fallback */
-    }
-
     // Igual que realtime-sync: este scanner corre fuera del turno de
     // conversación, así que el idioma se resuelve desde la preferencia guardada.
     const { language } = await resolveLanguage(businessId, customer.phone);
@@ -187,7 +178,7 @@ export class PostVisitService {
 
     const { BaileysService } = await import('./baileys.service.js');
     const baileys = BaileysService.getInstance();
-    const sent = await baileys.sendMessage(businessId, recipientJid, message);
+    const sent = await baileys.sendMessage(businessId, customer.phone, message);
 
     if (sent) {
       await client.setEx(`${this.SENT_KEY_PREFIX}${entryId}`, this.SENT_TTL_SECONDS, '1');

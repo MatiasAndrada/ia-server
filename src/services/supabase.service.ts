@@ -1,6 +1,7 @@
 import { SupabaseConfig } from '../config/supabase.js';
 import type { Database } from '../types/supabase.js';
 import { formatName } from '../utils/formatters.js';
+import { normalizePhone } from '../utils/phone.js';
 import {
   CreateReservationRequest,
   CreateReservationResponse,
@@ -15,6 +16,16 @@ import { logger, logEvent } from '../utils/logger.js';
 import { openRouterService } from './openrouter.service.js';
 import { describeScheduledAtUtc, nowInBuenosAires } from '../utils/reservation-datetime.js';
 import * as templates from '../utils/message-templates.js';
+
+/**
+ * Los `customers` se buscan por igualdad exacta de `phone`, así que toda
+ * consulta tiene que usar el mismo formato canónico con el que se insertan
+ * (sólo dígitos). Si el valor no tiene un solo dígito se deja como vino: es
+ * preferible una búsqueda que no encuentra nada a una que borra el dato.
+ */
+function phoneKey(phone: string): string {
+  return normalizePhone(phone) || phone;
+}
 
 const RESERVATION_OVERLAP_MINUTES = 120;
 const RESERVATION_OVERLAP_MS = RESERVATION_OVERLAP_MINUTES * 60 * 1000;
@@ -81,7 +92,7 @@ export class SupabaseService {
         .from('customers')
         .select('id')
         .eq('business_id', businessId)
-        .eq('phone', phone)
+        .eq('phone', phoneKey(phone))
         .maybeSingle();
 
       if (customerError) throw customerError;
@@ -182,7 +193,12 @@ export class SupabaseService {
   }
 
   /**
-   * Get or create a customer by phone number
+   * Get or create a customer by phone number.
+   *
+   * La búsqueda es por igualdad exacta de `phone`, así que el número se
+   * normaliza antes: sin esto, el mismo cliente cargado desde el panel
+   * (`+54 376 467 1898`) y llegado por WhatsApp (`5493764671898`) quedaba
+   * duplicado, y el bot no lo reconocía al escribir.
    */
   static async getOrCreateCustomer(
     name: string,
@@ -193,6 +209,8 @@ export class SupabaseService {
     try {
       const client = this.getClient();
 
+      const normalizedPhone = phoneKey(phone);
+
       // Format name with capitalized first letter of each word
       const formattedName = formatName(name);
       const formattedLastName =
@@ -202,7 +220,7 @@ export class SupabaseService {
       const { data: existingCustomerData, error: findError } = await client
         .from('customers')
         .select('*')
-        .eq('phone', phone)
+        .eq('phone', normalizedPhone)
         .eq('business_id', businessId)
         .maybeSingle();
 
@@ -242,7 +260,7 @@ export class SupabaseService {
       const insertData: CustomersInsert = {
         name: formattedName,
         lastName: formattedLastName,
-        phone,
+        phone: normalizedPhone,
         business_id: businessId,
         last_seen_at: new Date().toISOString(),
       };
@@ -277,7 +295,7 @@ export class SupabaseService {
         .from('customers')
         .select('*')
         .eq('business_id', businessId)
-        .eq('phone', phone)
+        .eq('phone', phoneKey(phone))
         .maybeSingle();
       if (error) throw error;
       return (data as Customer | null) ?? null;
@@ -303,7 +321,7 @@ export class SupabaseService {
         .from('customers')
         .select('preferred_language')
         .eq('business_id', businessId)
-        .eq('phone', phone)
+        .eq('phone', phoneKey(phone))
         .maybeSingle();
       if (error) throw error;
       return (data as { preferred_language: string | null } | null)?.preferred_language ?? null;
@@ -334,7 +352,7 @@ export class SupabaseService {
         .from('customers')
         .update(updateData)
         .eq('business_id', businessId)
-        .eq('phone', phone);
+        .eq('phone', phoneKey(phone));
 
       if (error) throw error;
 
@@ -369,7 +387,7 @@ export class SupabaseService {
         .from('customers')
         .select('*')
         .eq('business_id', businessId)
-        .eq('phone', phone)
+        .eq('phone', phoneKey(phone))
         .maybeSingle();
 
       if (findError) throw findError;
@@ -717,7 +735,7 @@ export class SupabaseService {
         .from('customers')
         .select('id')
         .eq('business_id', businessId)
-        .eq('phone', phone)
+        .eq('phone', phoneKey(phone))
         .maybeSingle();
 
       if (customerError) throw customerError;

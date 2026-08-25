@@ -5,6 +5,7 @@ import { logger, logEvent } from '../utils/logger.js';
 import type { SendFailureReason } from '../utils/log-events.js';
 import { withLogContext } from '../utils/log-context.js';
 import { throttle } from '../utils/log-throttle.js';
+import { phoneCandidates } from '../utils/phone.js';
 
 /**
  * El QR se dibuja en la terminal sólo cuando hay alguien mirándola. En
@@ -860,13 +861,29 @@ export class BaileysService {
    * Resolves a phone number to the correct WhatsApp JID using onWhatsApp().
    * Falls back to constructing the JID manually if the lookup fails.
    * Results are cached in Redis for 7 days.
+   *
+   * El número se normaliza a dígitos ANTES de cualquier otra cosa: un teléfono
+   * cargado desde el panel (`+54 376 467 1898`) llegaba hasta acá con espacios,
+   * y el JID que se armaba abajo — `54 376 467 1898@s.whatsapp.net` — hacía que
+   * `sendMessage` colgara los 15s del timeout. Ver `utils/phone.ts`.
+   *
+   * La clave de cache usa el número ya normalizado, así el mismo cliente
+   * comparte entrada venga del panel o de WhatsApp.
    */
   async resolveJid(businessId: string, phone: string): Promise<string> {
     // If already a full JID, return as-is
     if (phone.includes('@')) return phone;
 
-    const normalized = phone.replace(/^\+/, '');
-    const cacheKey = `jid:${businessId}:${phone}`;
+    const candidates = phoneCandidates(phone);
+    if (candidates.length === 0) {
+      // Sin dígitos no hay JID posible. `sendMessage` ya rechaza este caso
+      // antes de llegar acá; devolver algo parseable es sólo una red.
+      logger.debug('Phone has no digits, cannot resolve JID', { phone });
+      return `${phone}@s.whatsapp.net`;
+    }
+
+    const normalized = candidates[0]!;
+    const cacheKey = `jid:${businessId}:${normalized}`;
 
     // Check Redis cache first
     try {
@@ -879,21 +896,24 @@ export class BaileysService {
       }
     } catch (_) { /* ignore cache errors */ }
 
-    // Ask WhatsApp for the real JID
+    // Ask WhatsApp for the real JID. Se prueban las variantes en orden porque
+    // un número argentino cargado sin el 9 de móvil no resuelve tal cual.
     try {
       const sock = this.sessions.get(businessId);
       if (sock && this.isSessionConnected(businessId)) {
-        const [result] = await sock.onWhatsApp(normalized);
-        if (result?.exists && result?.jid) {
-          logger.debug('JID resolved via onWhatsApp', { phone, jid: result.jid });
-          try {
-            if (RedisConfig.isReady()) {
-              await RedisConfig.getClient().setEx(cacheKey, 7 * 24 * 3600, result.jid);
-            }
-          } catch (_) { /* ignore cache errors */ }
-          return result.jid;
+        for (const candidate of candidates) {
+          const [result] = await sock.onWhatsApp(candidate);
+          if (result?.exists && result?.jid) {
+            logger.debug('JID resolved via onWhatsApp', { phone, candidate, jid: result.jid });
+            try {
+              if (RedisConfig.isReady()) {
+                await RedisConfig.getClient().setEx(cacheKey, 7 * 24 * 3600, result.jid);
+              }
+            } catch (_) { /* ignore cache errors */ }
+            return result.jid;
+          }
         }
-        logger.debug('Number not found on WhatsApp', { phone, normalized });
+        logger.debug('Number not found on WhatsApp', { phone, candidates });
       }
     } catch (error) {
       logger.debug('onWhatsApp lookup failed, falling back to manual JID', { phone, error });
@@ -921,6 +941,15 @@ export class BaileysService {
 
       if (!this.isSessionConnected(businessId)) {
         this.logSendFailure(businessId, to, 'not_connected');
+        return false;
+      }
+
+      // Un destinatario sin un solo dígito no puede producir un JID válido.
+      // Sin esta guarda, Baileys acepta el envío y recién falla a los 15s del
+      // timeout, que es exactamente cómo se perdían las notificaciones de los
+      // clientes cargados desde el panel.
+      if (!to.includes('@') && phoneCandidates(to).length === 0) {
+        this.logSendFailure(businessId, to, 'invalid_recipient');
         return false;
       }
 

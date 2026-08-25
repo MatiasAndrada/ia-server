@@ -7,6 +7,13 @@ import { runWithLanguage } from '../i18n/index.js';
 import { resolveLanguage } from '../i18n/language-store.js';
 import type { Database } from '../types/supabase.js';
 import * as templates from '../utils/message-templates.js';
+import { describeScheduledAtUtc, nowInBuenosAires } from '../utils/reservation-datetime.js';
+import {
+  createdNotificationKey,
+  markNotified,
+  statusNotificationKey,
+  wasAlreadyNotified,
+} from '../utils/notification-dedup.js';
 import { PostVisitService } from './post-visit.service.js';
 import { SupabaseService } from './supabase.service.js';
 import { openRouterService } from './openrouter.service.js';
@@ -258,16 +265,13 @@ export class RealtimeSyncService {
       }
 
       // Unified dedup key shared with the WhatsApp handler's createAndNotifyReservation
-      const dedupKey = `wa:created:${entry.id}`;
+      const dedupKey = createdNotificationKey(entry.id);
 
-      if (RedisConfig.isReady()) {
-        const alreadySent = await RedisConfig.getClient().get(dedupKey);
-        if (alreadySent) {
-          logger.debug('Skipping INSERT notification, already sent by handler', {
-            source: entry.source,
-          });
-          return;
-        }
+      if (await wasAlreadyNotified(dedupKey)) {
+        logger.debug('Skipping INSERT notification, already sent by handler', {
+          source: entry.source,
+        });
+        return;
       }
 
       const { BaileysService } = await import('./baileys.service.js');
@@ -325,18 +329,11 @@ export class RealtimeSyncService {
       }
       });
 
-      let recipientJid = customer.phone;
-      try {
-        if (RedisConfig.isReady()) {
-          const cachedJid = await RedisConfig.getClient().get(`jid:${entry.business_id}:${customer.phone}`);
-          if (cachedJid) recipientJid = cachedJid;
-        }
-      } catch (_) {
-        /* usar phone como fallback */
-      }
-
+      // `sendMessage` → `resolveJid` ya normaliza el número y consulta la cache
+      // de JIDs. Duplicar esa búsqueda acá, además, la hacía con el teléfono
+      // crudo: para un cliente cargado del panel la clave nunca coincidía.
       const baileys = BaileysService.getInstance();
-      const sent = await baileys.sendMessage(entry.business_id, recipientJid, notificationMessage);
+      const sent = await baileys.sendMessage(entry.business_id, customer.phone, notificationMessage);
 
       if (sent) {
         logEvent('info', 'realtime.notified', {
@@ -345,9 +342,7 @@ export class RealtimeSyncService {
           status: entry.status,
           phone: customer.phone,
         });
-        if (RedisConfig.isReady()) {
-          await RedisConfig.getClient().setEx(dedupKey, 86400, '1');
-        }
+        await markNotified(dedupKey);
       } else {
         // Cuando la sesión de WhatsApp del comercio está caída esto se repite
         // por cada entrada: 1678 líneas idénticas en el log anterior.
@@ -380,7 +375,7 @@ export class RealtimeSyncService {
       const { data: statusEntries, error: statusError } = await supabaseClient
         .from('waitlist_entries')
         .select('*')
-        .in('status', ['CONFIRMED', 'NOTIFIED', 'SEATED'])
+        .in('status', ['CONFIRMED', 'NOTIFIED', 'SEATED', 'CANCELLED'])
         .gte('updated_at', twoHoursAgo);
 
       if (statusError) {
@@ -388,11 +383,9 @@ export class RealtimeSyncService {
       } else if (statusEntries && statusEntries.length > 0) {
         logger.debug('Recovery: checking recent status entries', { count: statusEntries.length });
         for (const entry of statusEntries) {
-          const dedupKey = `wa:status:sent:${entry.id}:${entry.status}`;
-          let alreadySent = false;
-          if (RedisConfig.isReady()) {
-            alreadySent = !!(await RedisConfig.getClient().get(dedupKey));
-          }
+          const alreadySent = await wasAlreadyNotified(
+            statusNotificationKey(entry.id, entry.status)
+          );
           if (!alreadySent) {
             logger.debug('Recovery: sending missed status notification', {
               entryId: entry.id,
@@ -417,11 +410,7 @@ export class RealtimeSyncService {
           count: newEntries.length,
         });
         for (const entry of newEntries) {
-          const dedupKey = `wa:created:${entry.id}`;
-          let alreadySent = false;
-          if (RedisConfig.isReady()) {
-            alreadySent = !!(await RedisConfig.getClient().get(dedupKey));
-          }
+          const alreadySent = await wasAlreadyNotified(createdNotificationKey(entry.id));
           if (!alreadySent) {
             logger.debug('Recovery: sending missed INSERT notification', {
               entryId: entry.id,
@@ -619,6 +608,9 @@ export class RealtimeSyncService {
       const isNotified = statusChanged && newEntry?.status === 'NOTIFIED';
       // M11 — welcome message when the customer is seated at the restaurant
       const isSeated = statusChanged && newEntry?.status === 'SEATED';
+      // El restaurante dio de baja la reserva desde el panel. El cliente se
+      // enteraba sólo si volvía a escribir: para él la reserva seguía en pie.
+      const isCancelled = statusChanged && newEntry?.status === 'CANCELLED';
 
       logger.debug('Status validation', {
         oldStatus: oldEntry?.status,
@@ -626,8 +618,8 @@ export class RealtimeSyncService {
         statusChanged,
       });
 
-      if (!isConfirmed && !isNotified && !isSeated) {
-        logger.debug('Skipping: status is not CONFIRMED, NOTIFIED or SEATED', {
+      if (!isConfirmed && !isNotified && !isSeated && !isCancelled) {
+        logger.debug('Skipping: status is not CONFIRMED, NOTIFIED, SEATED or CANCELLED', {
           newStatus: newEntry?.status,
           statusChanged,
         });
@@ -636,20 +628,17 @@ export class RealtimeSyncService {
 
       // Skip duplicate notifications only for the same status.
       // CONFIRMED and NOTIFIED must not block each other.
-      try {
-        if (RedisConfig.isReady()) {
-          const redisClient = RedisConfig.getClient();
-          const dedupKey = `wa:status:sent:${newEntry.id}:${newEntry.status}`;
-          const alreadySent = await redisClient.get(dedupKey);
-          if (alreadySent) {
-            logger.debug('Skipping duplicate status notification', {
-              status: newEntry.status,
-            });
-            return;
-          }
-        }
-      } catch (error) {
-        logger.warn('Failed dedup check for confirmation send', { error });
+      //
+      // Para CANCELLED esta clave es además el silenciador del doble aviso:
+      // cuando quien cancela es el cliente desde el chat, el handler ya le
+      // respondió y marcó la clave, así que acá no se le manda un segundo
+      // mensaje diciéndole que lo canceló el restaurante.
+      const statusDedupKey = statusNotificationKey(newEntry.id, newEntry.status);
+      if (await wasAlreadyNotified(statusDedupKey)) {
+        logger.debug('Skipping duplicate status notification', {
+          status: newEntry.status,
+        });
+        return;
       }
 
       logger.debug('Status changed, preparing notification', {
@@ -708,6 +697,15 @@ export class RealtimeSyncService {
       } else if (isNotified) {
         // Paso 6: Mesa disponible (NOTIFIED)
         notificationMessage = templates.tableReadyNotice();
+      } else if (isCancelled) {
+        // El restaurante dio de baja la reserva desde el panel.
+        notificationMessage = templates.reservationCancelledByBusiness(
+          customer.name,
+          newEntry.display_code,
+          newEntry.scheduled_at
+            ? describeScheduledAtUtc(newEntry.scheduled_at, nowInBuenosAires())
+            : null
+        );
       } else {
         // Paso 5: Reserva CONFIRMADA (CONFIRMED o NOTIFIED legacy)
         notificationMessage = templates.reservationConfirmedNotice(
@@ -723,35 +721,16 @@ export class RealtimeSyncService {
         status: newEntry.status,
       });
 
-      // Try to get the correct WhatsApp JID from Redis cache
-      // (cached when user sends messages, ensures correct @lid vs @s.whatsapp.net)
-      let recipientJid = customer.phone;
-      try {
-        const { RedisConfig } = await import('../config/redis.js');
-        const redisClient = RedisConfig.getClient();
-        const jidMappingKey = `jid:${newEntry.business_id}:${customer.phone}`;
-        const cachedJid = await redisClient.get(jidMappingKey);
-        
-        if (cachedJid) {
-          recipientJid = cachedJid;
-          logger.debug('Using cached JID for delivery', { phone: customer.phone, cachedJid });
-        } else {
-          logger.debug('No cached JID found, falling back to phone number', {
-            phone: customer.phone,
-          });
-        }
-      } catch (error) {
-        logger.debug('Failed to read cached JID, falling back to phone number', {
-          error,
-          phone: customer.phone,
-        });
-      }
-
-      // Send WhatsApp notification
+      // Send WhatsApp notification.
+      //
+      // `sendMessage` → `resolveJid` ya normaliza el número, consulta la cache
+      // de JIDs y distingue @lid de @s.whatsapp.net. Duplicar esa búsqueda acá,
+      // además, la hacía con el teléfono crudo: para un cliente cargado del
+      // panel la clave nunca coincidía.
       const baileys = BaileysService.getInstance();
       const sent = await baileys.sendMessage(
         newEntry.business_id,
-        recipientJid,
+        customer.phone,
         notificationMessage
       );
 
@@ -765,21 +744,7 @@ export class RealtimeSyncService {
         });
 
         // Mark this status notification as sent to avoid duplicate sends.
-        try {
-          if (RedisConfig.isReady()) {
-            const redisClient = RedisConfig.getClient();
-            await redisClient.setEx(
-              `wa:status:sent:${newEntry.id}:${newEntry.status}`,
-              86400,
-              '1'
-            );
-          }
-        } catch (error) {
-          logger.warn('Failed to mark status notification dedup key', {
-            status: newEntry.status,
-            error,
-          });
-        }
+        await markNotified(statusDedupKey);
       } else {
         const t = throttle(`realtime.notify_failed:${newEntry.business_id}`, 60_000);
         if (t.allowed) {

@@ -370,6 +370,15 @@ export function reservationRegisteredNotice(
   return catalog().reservationRegisteredNotice(name, partySize, displayCode);
 }
 
+/** El restaurante canceló la reserva (status CANCELLED desde el panel). */
+export function reservationCancelledByBusiness(
+  name: string,
+  displayCode: string,
+  whenLabel: string | null
+): string {
+  return catalog().reservationCancelledByBusiness(name, displayCode, whenLabel);
+}
+
 /** La mesa quedó libre (status NOTIFIED). */
 export function tableReadyNotice(): string {
   return catalog().tableReadyNotice();
