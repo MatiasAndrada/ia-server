@@ -94,11 +94,43 @@ describe('RealtimeSyncService.handleWaitlistStatusChange', () => {
     );
   });
 
-  it('does nothing when the status is unrelated to CONFIRMED/NOTIFIED', async () => {
+  it('notifies the customer when the restaurant cancels the reservation', async () => {
     await (RealtimeSyncService as any).handleWaitlistStatusChange({
       eventType: 'UPDATE',
-      old: { ...baseEntry, status: 'WAITING' },
+      old: { ...baseEntry, status: 'CONFIRMED' },
+      new: { ...baseEntry, status: 'CANCELLED', scheduled_at: '2026-07-08T22:00:00.000Z' },
+    });
+
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      'business-1',
+      expect.any(String),
+      expect.stringContaining('cancelada por el restaurante')
+    );
+  });
+
+  it('stays silent on a cancellation the customer already got an answer for', async () => {
+    // El handler de WhatsApp marca la clave ANTES de escribir en la DB cuando
+    // quien cancela es el cliente. Sin esto recibiría un segundo mensaje
+    // diciéndole que la canceló el restaurante.
+    redisGetMock.mockImplementation((key: string) =>
+      Promise.resolve(key === 'wa:status:sent:entry-1:CANCELLED' ? '1' : null)
+    );
+
+    await (RealtimeSyncService as any).handleWaitlistStatusChange({
+      eventType: 'UPDATE',
+      old: { ...baseEntry, status: 'CONFIRMED' },
       new: { ...baseEntry, status: 'CANCELLED' },
+    });
+
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when the status is unrelated to the notifiable ones', async () => {
+    await (RealtimeSyncService as any).handleWaitlistStatusChange({
+      eventType: 'UPDATE',
+      old: { ...baseEntry, status: 'CONFIRMED' },
+      new: { ...baseEntry, status: 'NO_SHOW' },
     });
 
     expect(sendMessageMock).not.toHaveBeenCalled();
