@@ -802,6 +802,28 @@ export const esCatalog = {
    * cuando quien cancela es el cliente desde el chat: acá la decisión no fue
    * suya, así que el mensaje tiene que explicar qué pasó y ofrecerle rehacerla.
    */
+  /**
+   * El comercio eliminó un evento y con él las reservas que tenía.
+   * Se nombra el evento: para el cliente "tu reserva fue cancelada" a secas
+   * no explica nada, y lo que se dio de baja no fue su reserva sino la noche.
+   */
+  eventCancelledByBusiness(
+    name: string,
+    eventTitle: string,
+    displayCode: string,
+    whenLabel: string | null
+  ): string {
+    return (
+      `❌ El evento *${eventTitle}* fue cancelado por el restaurante.\n\n` +
+      `Tu reserva para ese evento queda sin efecto.\n\n` +
+      `👤 Nombre: ${name}\n` +
+      (whenLabel ? `🗓️ Era para: ${whenLabel}\n` : '') +
+      `📁 Código de reserva: *${displayCode}*\n\n` +
+      `Lamentamos el inconveniente.\n` +
+      `_Si querés reservar para otro momento, escribinos y lo resolvemos._`
+    );
+  },
+
   reservationCancelledByBusiness(
     name: string,
     displayCode: string,

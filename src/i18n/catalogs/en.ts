@@ -743,6 +743,24 @@ export const enCatalog: MessageCatalog = {
     );
   },
 
+  /** The business deleted an event, cancelling its bookings. See es.ts. */
+  eventCancelledByBusiness(
+    name: string,
+    eventTitle: string,
+    displayCode: string,
+    whenLabel: string | null
+  ): string {
+    return (
+      `❌ The event *${eventTitle}* was cancelled by the restaurant.\n\n` +
+      `Your booking for that event is no longer valid.\n\n` +
+      `👤 Name: ${name}\n` +
+      (whenLabel ? `🗓️ It was for: ${whenLabel}\n` : '') +
+      `📁 Booking code: *${displayCode}*\n\n` +
+      `We're sorry for the inconvenience.\n` +
+      `_If you'd like to book for another time, just write to us and we'll sort it out._`
+    );
+  },
+
   reservationCancelledByBusiness(
     name: string,
     displayCode: string,

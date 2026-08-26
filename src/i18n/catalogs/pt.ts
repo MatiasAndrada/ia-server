@@ -742,6 +742,24 @@ export const ptCatalog: MessageCatalog = {
     );
   },
 
+  /** O comércio excluiu um evento, cancelando suas reservas. Ver es.ts. */
+  eventCancelledByBusiness(
+    name: string,
+    eventTitle: string,
+    displayCode: string,
+    whenLabel: string | null
+  ): string {
+    return (
+      `❌ O evento *${eventTitle}* foi cancelado pelo restaurante.\n\n` +
+      `Sua reserva para esse evento fica sem efeito.\n\n` +
+      `👤 Nome: ${name}\n` +
+      (whenLabel ? `🗓️ Era para: ${whenLabel}\n` : '') +
+      `📁 Código da reserva: *${displayCode}*\n\n` +
+      `Lamentamos o inconveniente.\n` +
+      `_Se quiser reservar para outro momento, escreva para nós e resolvemos._`
+    );
+  },
+
   reservationCancelledByBusiness(
     name: string,
     displayCode: string,
