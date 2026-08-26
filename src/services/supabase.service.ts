@@ -926,6 +926,7 @@ export class SupabaseService {
         .select('id, title, description, starts_at, image_urls')
         .eq('business_id', businessId)
         .eq('is_active', true)
+        .is('deleted_at', null)
         .gte('starts_at', new Date().toISOString())
         .order('starts_at', { ascending: true });
 
@@ -945,6 +946,33 @@ export class SupabaseService {
       // simplemente vuelve a ser "hoy / otra fecha", como antes.
       logger.error('Supabase: getActiveEvents failed', { error, businessId });
       return [];
+    }
+  }
+
+  /**
+   * Título de un evento por id, sin filtrar por estado.
+   *
+   * Lo usa el aviso de cancelación: para cuando ese aviso se arma, el evento
+   * ya fue dado de baja (is_active = false, deleted_at seteado), así que
+   * getActiveEvents no lo devolvería. La fila sobrevive justamente para esto.
+   */
+  static async getEventTitle(eventId: string): Promise<string | null> {
+    try {
+      const client = this.getClient();
+      const { data, error } = await client
+        .from('business_events')
+        .select('title')
+        .eq('id', eventId)
+        .single();
+
+      if (error) {
+        throw error;
+      }
+
+      return data?.title ?? null;
+    } catch (error) {
+      logger.error('Supabase: getEventTitle failed', { error, eventId });
+      return null;
     }
   }
 

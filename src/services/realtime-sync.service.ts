@@ -699,13 +699,33 @@ export class RealtimeSyncService {
         notificationMessage = templates.tableReadyNotice();
       } else if (isCancelled) {
         // El restaurante dio de baja la reserva desde el panel.
-        notificationMessage = templates.reservationCancelledByBusiness(
-          customer.name,
-          newEntry.display_code,
-          newEntry.scheduled_at
-            ? describeScheduledAtUtc(newEntry.scheduled_at, nowInBuenosAires())
-            : null
-        );
+        //
+        // Si la reserva era para un evento, lo más probable es que la baja no
+        // sea individual sino que hayan eliminado el evento entero. El payload
+        // de realtime es una foto del momento del UPDATE, así que conserva el
+        // event_id aunque el `onDelete: SetNull` lo borre después; y la fila
+        // del evento sobrevive a la baja lógica, así que el título se puede
+        // leer. Si aun así no aparece, cae en el aviso genérico.
+        const eventTitle = newEntry.event_id
+          ? await SupabaseService.getEventTitle(newEntry.event_id)
+          : null;
+
+        const whenLabel = newEntry.scheduled_at
+          ? describeScheduledAtUtc(newEntry.scheduled_at, nowInBuenosAires())
+          : null;
+
+        notificationMessage = eventTitle
+          ? templates.eventCancelledByBusiness(
+              customer.name,
+              eventTitle,
+              newEntry.display_code,
+              whenLabel
+            )
+          : templates.reservationCancelledByBusiness(
+              customer.name,
+              newEntry.display_code,
+              whenLabel
+            );
       } else {
         // Paso 5: Reserva CONFIRMADA (CONFIRMED o NOTIFIED legacy)
         notificationMessage = templates.reservationConfirmedNotice(
