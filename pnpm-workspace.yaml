@@ -1,3 +1,4 @@
 allowBuilds:
   baileys: false
   protobufjs: false
+  unrs-resolver: false
