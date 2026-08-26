@@ -412,6 +412,17 @@ export interface ReservationDraft {
   eventId?: string;
   eventTitle?: string;
   /**
+   * Evento nombrado directamente en un mensaje donde el nombre del cliente
+   * todavía no se conocía (ej. "Noche de sushi para 3" como primer mensaje).
+   * A diferencia de `eventId`, esto NO significa que la reserva ya quede
+   * asociada al evento — `scheduledAt`/`scheduledDate`/`scheduledTime` siguen
+   * sin fijar. Se resuelve en `resolveEmbeddedScheduleOrPromptChoice` apenas
+   * el nombre (y la cantidad de personas) estén confirmados, momento en el
+   * que recién se aplica vía `applyEventChoice` y se completan esos campos.
+   */
+  pendingEventId?: string;
+  pendingEventTitle?: string;
+  /**
    * Snapshot of the menu last shown at `schedule_choice`, so the number the
    * customer replies with can be mapped back to what they actually saw. The
    * menu is dynamic: "Hoy" disappears when today has no availability left, and

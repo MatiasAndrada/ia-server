@@ -1231,6 +1231,162 @@ describe('WhatsAppHandler reservation overlap policy', () => {
     );
   });
 
+  describe('event named directly in a "name step" message (regression: "Noche de sushi para 3" was saved as customer name)', () => {
+    const activeEvent = {
+      id: 'event-1',
+      title: 'Noche de sushi',
+      description: 'Diente libre de sushi',
+      startsAt: '2026-08-29T22:45:00.000Z',
+      imageUrls: [] as string[],
+    };
+
+    it('does not store the event title as the customer name, and asks for the real name instead', async () => {
+      jest.spyOn(SupabaseService, 'getActiveEvents').mockResolvedValue([activeEvent] as any);
+      const setCustomerNamePartsSpy = jest.spyOn(ReservationService, 'setCustomerNameParts');
+      const setCustomerNameSpy = jest.spyOn(ReservationService, 'setCustomerName');
+      const setPartySizeSpy = jest.spyOn(ReservationService, 'setPartySize').mockResolvedValue({} as any);
+      const saveDraftSpy = jest.spyOn(ReservationService, 'saveDraft').mockResolvedValue(true);
+
+      const draft = {
+        conversationId: 'conv-event-1',
+        businessId: 'business-1',
+        step: 'name' as const,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      const handled = await (handler as any).processDraftStep(
+        draft,
+        'Noche de sushi para 3',
+        'conv-event-1',
+        'business-1',
+        '5491212121212@s.whatsapp.net'
+      );
+
+      expect(handled).toBe(true);
+      // Bug: extractNameCandidate used to accept "Noche de sushi" (after stripping
+      // "para 3") as a plausible person's name — neither setter should fire.
+      expect(setCustomerNamePartsSpy).not.toHaveBeenCalled();
+      expect(setCustomerNameSpy).not.toHaveBeenCalled();
+      expect(setPartySizeSpy).toHaveBeenCalledWith('conv-event-1', 3);
+      expect(saveDraftSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ pendingEventId: 'event-1', pendingEventTitle: 'Noche de sushi' })
+      );
+      expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+        'business-1',
+        '5491212121212@s.whatsapp.net',
+        expect.stringContaining('nombre y apellido')
+      );
+    });
+
+    it('applies the pending event directly once the real name arrives, without re-showing the schedule_choice menu', async () => {
+      jest.spyOn(SupabaseService, 'getActiveEvents').mockResolvedValue([activeEvent] as any);
+
+      const draftWithPendingEvent = {
+        conversationId: 'conv-event-2',
+        businessId: 'business-1',
+        step: 'name' as const,
+        partySize: 3,
+        pendingEventId: 'event-1',
+        pendingEventTitle: 'Noche de sushi',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      jest.spyOn(ReservationService, 'setCustomerNameParts').mockResolvedValue({
+        ...draftWithPendingEvent,
+        customerName: 'Matías',
+        customerLastName: 'Andrada',
+      } as any);
+      jest.spyOn(ReservationService, 'getDraft').mockResolvedValue({
+        ...draftWithPendingEvent,
+        customerName: 'Matías',
+        customerLastName: 'Andrada',
+      } as any);
+      const saveDraftSpy = jest.spyOn(ReservationService, 'saveDraft').mockResolvedValue(true);
+      jest.spyOn(ReservationService, 'moveToConfirmSummary').mockResolvedValue({
+        ...draftWithPendingEvent,
+        customerName: 'Matías',
+        customerLastName: 'Andrada',
+        eventId: 'event-1',
+        eventTitle: 'Noche de sushi',
+        scheduledAt: activeEvent.startsAt,
+      } as any);
+
+      const handled = await (handler as any).processDraftStep(
+        { ...draftWithPendingEvent },
+        'Matías Andrada',
+        'conv-event-2',
+        'business-1',
+        '5491212121213@s.whatsapp.net'
+      );
+
+      expect(handled).toBe(true);
+      expect(ReservationService.setCustomerNameParts).toHaveBeenCalledWith('conv-event-2', 'Matías', 'Andrada');
+
+      const sentMessages = mockBaileysService.sendMessage.mock.calls.map((call) => call[2]);
+      // Bug: this used to fall through to the generic schedule_choice menu
+      // instead of resolving straight to the event the customer already named.
+      expect(sentMessages.some((msg) => msg.includes('¿La reserva es para...?'))).toBe(false);
+      expect(sentMessages.some((msg) => msg.includes('Noche de sushi'))).toBe(true);
+      expect(saveDraftSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ pendingEventId: undefined, pendingEventTitle: undefined })
+      );
+    });
+  });
+
+  describe('event named directly at the party_size step (known customer, name already on file)', () => {
+    it('applies the event directly instead of showing the schedule_choice menu', async () => {
+      const activeEvent = {
+        id: 'event-2',
+        title: 'Noche de sushi',
+        description: 'Diente libre de sushi',
+        startsAt: '2026-08-29T22:45:00.000Z',
+        imageUrls: [] as string[],
+      };
+      jest.spyOn(SupabaseService, 'getActiveEvents').mockResolvedValue([activeEvent] as any);
+
+      const baseDraft = {
+        conversationId: 'conv-event-3',
+        businessId: 'business-1',
+        step: 'party_size' as const,
+        customerName: 'Juan',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      jest.spyOn(ReservationService, 'setPartySize').mockResolvedValue({
+        ...baseDraft,
+        partySize: 3,
+      } as any);
+      jest.spyOn(ReservationService, 'getDraft').mockResolvedValue({
+        ...baseDraft,
+        partySize: 3,
+      } as any);
+      jest.spyOn(ReservationService, 'saveDraft').mockResolvedValue(true);
+      jest.spyOn(ReservationService, 'moveToConfirmSummary').mockResolvedValue({
+        ...baseDraft,
+        partySize: 3,
+        eventId: 'event-2',
+        eventTitle: 'Noche de sushi',
+        scheduledAt: activeEvent.startsAt,
+      } as any);
+
+      const handled = await (handler as any).processDraftStep(
+        { ...baseDraft },
+        'Noche de sushi para 3',
+        'conv-event-3',
+        'business-1',
+        '5491212121214@s.whatsapp.net'
+      );
+
+      expect(handled).toBe(true);
+      const sentMessages = mockBaileysService.sendMessage.mock.calls.map((call) => call[2]);
+      expect(sentMessages.some((msg) => msg.includes('¿La reserva es para...?'))).toBe(false);
+      expect(sentMessages.some((msg) => msg.includes('Noche de sushi'))).toBe(true);
+    });
+  });
+
   describe('party_size step — name correction follow-up (awaitingNameCorrection)', () => {
     const draftAtPartySize = (overrides: Partial<Record<string, unknown>> = {}) => ({
       conversationId: 'conv-name-fix',

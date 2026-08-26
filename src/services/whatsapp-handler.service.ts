@@ -1141,6 +1141,26 @@ export class WhatsAppHandler {
           let partySize = this.extractPartySize(messageText);
           let nameLlmSlots: ReservationSlots | null = null;
 
+          // El mensaje puede nombrar directamente uno de los eventos activos
+          // (ej. "Noche de sushi para 3") en vez de darnos el nombre del
+          // cliente — sin este chequeo, extractNameCandidate acepta el título
+          // del evento como si fuera un nombre de persona (couldBeAName no
+          // tiene forma de distinguirlos). Se guarda como pendiente: se sigue
+          // pidiendo el nombre real, y resolveEmbeddedScheduleOrPromptChoice
+          // lo aplica directo en cuanto el nombre esté confirmado.
+          const activeEventsAtNameStep = await SupabaseService.getActiveEvents(businessId);
+          const eventMentionedAtNameStep = this.matchEventByTitleInText(activeEventsAtNameStep, messageText);
+          if (eventMentionedAtNameStep) {
+            if (partySize && partySize > 0 && partySize <= 50) {
+              await ReservationService.setPartySize(conversationId, partySize);
+            }
+            draft.pendingEventId = eventMentionedAtNameStep.id;
+            draft.pendingEventTitle = eventMentionedAtNameStep.title;
+            await ReservationService.saveDraft(draft);
+            await this.sendWhatsAppMessage(businessId, jid, templates.askName());
+            return true;
+          }
+
           // Regex couldn't find a name at all — give the model one look before
           // bouncing the customer with "no entendí" (see reservation-nlu.service.ts).
           if (!extractedName) {
@@ -3579,13 +3599,25 @@ export class WhatsAppHandler {
     }
 
     // El cliente puede escribir el título en vez del número.
-    const normalized = normalizeReservationScopeText(messageText);
+    return this.matchEventByTitleInText(events, messageText);
+  }
+
+  /**
+   * Busca si el texto nombra directamente el título de alguno de los eventos
+   * activos (sin depender del menú numerado de `schedule_choice`). La usan
+   * tanto `matchScheduleChoiceEvent` (cliente que escribe el título en vez del
+   * número) como los puntos de entrada que reciben un mensaje "evento + datos"
+   * antes de que exista ese menú (ej. "Noche de sushi para 3" como primer
+   * mensaje, sin draft todavía).
+   */
+  private matchEventByTitleInText(events: BusinessEvent[], text: string): BusinessEvent | null {
+    const normalized = normalizeReservationScopeText(text);
     if (normalized.length < 3) return null;
 
     return (
       events.find((event) => {
         const title = normalizeReservationScopeText(event.title);
-        return title.length >= 3 && (title === normalized || normalized.includes(title));
+        return title.length >= 3 && normalized.includes(title);
       }) ?? null
     );
   }
@@ -3610,7 +3642,7 @@ export class WhatsAppHandler {
         businessId,
         jid,
         imageUrl,
-        index === 0 ? `🎉 ${event.title}` : undefined
+        index === 0 ? `🎉 *${event.title}*` : undefined
       );
     }
 
@@ -5306,6 +5338,26 @@ export class WhatsAppHandler {
         return false;
       }
 
+      // Mismo chequeo que en el paso 'name' del draft: si este primer mensaje
+      // ya nombra un evento activo (ej. "Noche de sushi para 3"), no hay que
+      // dejar que extractNameCandidate se lo coma como si fuera el nombre del
+      // cliente — se arranca el draft, se guarda el evento como pendiente, y
+      // se pide el nombre real.
+      const activeEventsForPrefill = await SupabaseService.getActiveEvents(businessId);
+      const mentionedEventForPrefill = this.matchEventByTitleInText(activeEventsForPrefill, messageText);
+      if (mentionedEventForPrefill) {
+        const prefillPartySize = this.extractPartySize(messageText);
+        const prefillDraft = await ReservationService.startReservation(conversationId, businessId);
+        if (prefillPartySize && prefillPartySize > 0 && prefillPartySize <= 50) {
+          await ReservationService.setPartySize(conversationId, prefillPartySize);
+        }
+        prefillDraft.pendingEventId = mentionedEventForPrefill.id;
+        prefillDraft.pendingEventTitle = mentionedEventForPrefill.title;
+        await ReservationService.saveDraft(prefillDraft);
+        await this.sendWhatsAppMessage(businessId, jid, templates.askName());
+        return true;
+      }
+
       const extractedName = this.extractNameCandidate(messageText);
       if (!extractedName) {
         return false;
@@ -5492,6 +5544,47 @@ export class WhatsAppHandler {
     jid: string,
     messageText: string
   ): Promise<void> {
+    const draft = await ReservationService.getDraft(conversationId);
+    const activeEvents = await SupabaseService.getActiveEvents(businessId);
+
+    // Un evento puede haber quedado pendiente de un mensaje anterior (el
+    // cliente lo nombró antes de que supiéramos su nombre, ej. "Noche de
+    // sushi para 3" como primer mensaje) o estar nombrado directamente en
+    // este mismo mensaje (cliente recurrente que ya tiene nombre guardado y
+    // arranca desde el paso `party_size`). En cualquiera de los dos casos
+    // conviene aplicarlo directo en vez de mostrarle de nuevo el menú de
+    // `schedule_choice` para algo que ya eligió explícitamente.
+    let matchedEvent: BusinessEvent | null = null;
+
+    if (draft?.pendingEventId) {
+      matchedEvent = activeEvents.find((event) => event.id === draft.pendingEventId) ?? null;
+      if (!matchedEvent && draft.pendingEventTitle) {
+        // El comercio lo pausó o borró entre que se nombró y que se confirmó
+        // el nombre/cantidad — mismo aviso que usa el paso `schedule_choice`
+        // para el mismo caso.
+        await this.sendWhatsAppMessage(
+          businessId,
+          jid,
+          templates.eventNoLongerAvailable(draft.pendingEventTitle)
+        );
+      }
+      draft.pendingEventId = undefined;
+      draft.pendingEventTitle = undefined;
+      await ReservationService.saveDraft(draft);
+    }
+
+    if (!matchedEvent) {
+      matchedEvent = this.matchEventByTitleInText(activeEvents, messageText);
+    }
+
+    if (matchedEvent) {
+      const eventDraft = draft ?? (await ReservationService.getDraft(conversationId));
+      if (eventDraft) {
+        await this.applyEventChoice(eventDraft, matchedEvent, conversationId, businessId, jid);
+        return;
+      }
+    }
+
     const nowBA = nowInBuenosAires();
     const namedDay = parseRelativeDay(messageText, nowBA);
 
@@ -5501,8 +5594,6 @@ export class WhatsAppHandler {
     // la oferta de eventos, que ahí es donde se muestra. Mismo criterio que ya
     // aplica en promptScheduleChoice para "hoy sin disponibilidad, pero con
     // eventos publicados": mejor un mensaje extra que perder la oferta.
-    const activeEvents = namedDay ? await SupabaseService.getActiveEvents(businessId) : [];
-
     if (namedDay && isWithinNextWeek(namedDay.baDate, nowBA) && activeEvents.length === 0) {
       const business = await SupabaseService.getBusinessById(businessId);
       const weeklyHours = business?.weekly_hours as WeeklyHours | null | undefined;
