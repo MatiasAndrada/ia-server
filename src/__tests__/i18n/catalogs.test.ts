@@ -109,6 +109,7 @@ const ARGS: Record<keyof MessageCatalog, unknown[]> = {
   reservationRegisteredNotice: ['__NAME__', 999, '__CODE__'],
   reservationUpcomingReminder: ['__NAME__', 999, '__WHEN__', '__CODE__', 60],
   reservationArrivalReminder: ['__WHEN__', '__CODE__', 15],
+  eventCancelledByBusiness: ['__NAME__', '__EVENT__', '__CODE__', '__WHEN__'],
   reservationCancelledByBusiness: ['__NAME__', '__CODE__', '__WHEN__'],
   tableReadyNotice: [],
   postReservationCourtesyReply: ['__REF__', true, true],

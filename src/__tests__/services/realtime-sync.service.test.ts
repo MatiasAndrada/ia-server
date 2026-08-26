@@ -2,6 +2,7 @@ import { RealtimeSyncService } from '../../services/realtime-sync.service.js';
 import { RedisConfig } from '../../config/redis.js';
 import { SupabaseConfig } from '../../config/supabase.js';
 import { BaileysService } from '../../services/baileys.service.js';
+import { SupabaseService } from '../../services/supabase.service.js';
 import { PostVisitService } from '../../services/post-visit.service.js';
 
 jest.mock('../../utils/logger');
@@ -106,6 +107,47 @@ describe('RealtimeSyncService.handleWaitlistStatusChange', () => {
       'business-1',
       expect.any(String),
       expect.stringContaining('cancelada por el restaurante')
+    );
+  });
+
+  it('names the event when the cancellation comes from the business deleting it', async () => {
+    // Eliminar un evento cancela sus reservas en masa. Un "tu reserva fue
+    // cancelada" a secas no le dice al cliente que lo que se dio de baja fue
+    // la noche entera, así que el aviso tiene que nombrar el evento.
+    jest.spyOn(SupabaseService, 'getEventTitle').mockResolvedValue('Noche de Jazz');
+
+    await (RealtimeSyncService as any).handleWaitlistStatusChange({
+      eventType: 'UPDATE',
+      old: { ...baseEntry, status: 'WAITING', event_id: 'event-1' },
+      new: {
+        ...baseEntry,
+        status: 'CANCELLED',
+        event_id: 'event-1',
+        scheduled_at: '2026-07-08T22:00:00.000Z',
+      },
+    });
+
+    expect(SupabaseService.getEventTitle).toHaveBeenCalledWith('event-1');
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      'business-1',
+      expect.any(String),
+      expect.stringContaining('El evento *Noche de Jazz* fue cancelado')
+    );
+  });
+
+  it('falls back to the plain cancellation notice when the event title is gone', async () => {
+    jest.spyOn(SupabaseService, 'getEventTitle').mockResolvedValue(null);
+
+    await (RealtimeSyncService as any).handleWaitlistStatusChange({
+      eventType: 'UPDATE',
+      old: { ...baseEntry, status: 'WAITING', event_id: 'event-1' },
+      new: { ...baseEntry, status: 'CANCELLED', event_id: 'event-1' },
+    });
+
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      'business-1',
+      expect.any(String),
+      expect.stringContaining('Tu reserva fue cancelada por el restaurante')
     );
   });
 
