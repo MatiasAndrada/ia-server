@@ -566,7 +566,7 @@ function isPromptInjectionAttempt(normalizedMessage: string): boolean {
  */
 export function hasDateOrTimeSignal(message: string, normalizedMessage: string): boolean {
   const lowerMessage = message.toLowerCase();
-  const hasClockPattern = /\b(?:[01]?\d|2[0-3])[:\.]\d{2}\b/.test(lowerMessage);
+  const hasClockPattern = /\b(?:[01]?\d|2[0-3])[:.]\d{2}\b/.test(lowerMessage);
   const hasMeridiemPattern = /\b(?:1[0-2]|0?\d)\s?(?:am|pm|a\.m\.|p\.m\.)\b/.test(lowerMessage);
   const hasTimePhrasePattern = /\b(?:a\s+las|para\s+las|tipo\s+las|como\s+a\s+las|como\s+las|sobre\s+las|a\s+eso\s+de\s+las|eso\s+de\s+las)\s+\d{1,2}(?::\d{2})?\b/.test(normalizedMessage);
   const hasHourAbbreviation = /\b\d{1,2}\s?(?:hs|horas)\b/.test(normalizedMessage);
