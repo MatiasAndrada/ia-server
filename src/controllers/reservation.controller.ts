@@ -8,7 +8,7 @@ import { normalizePhone } from '../utils/phone.js';
  * Get reservation draft status
  * GET /api/reservations/draft/:conversationId
  */
-export async function getDraftStatusHandler(req: Request, res: Response) {
+export async function getDraftStatusHandler(req: Request<{ conversationId: string }>, res: Response) {
   try {
     const { conversationId } = req.params;
 
@@ -112,7 +112,7 @@ export async function createReservationHandler(req: Request, res: Response) {
  * Update reservation status
  * PATCH /api/reservations/:reservationId/status
  */
-export async function updateReservationStatusHandler(req: Request, res: Response) {
+export async function updateReservationStatusHandler(req: Request<{ reservationId: string }>, res: Response) {
   try {
     const { reservationId } = req.params;
     const { status } = req.body;
@@ -164,7 +164,7 @@ export async function updateReservationStatusHandler(req: Request, res: Response
  * Delete/Cancel a reservation draft
  * DELETE /api/reservations/draft/:conversationId
  */
-export async function deleteDraftHandler(req: Request, res: Response) {
+export async function deleteDraftHandler(req: Request<{ conversationId: string }>, res: Response) {
   try {
     const { conversationId } = req.params;
 

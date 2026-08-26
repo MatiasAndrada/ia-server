@@ -7,7 +7,7 @@ const baileysService = BaileysService.getInstance();
 /**
  * Start a WhatsApp session for a business
  */
-export const startSession = async (req: Request, res: Response): Promise<void> => {
+export const startSession = async (req: Request<{ businessId: string }>, res: Response): Promise<void> => {
   try {
     const businessId = req.params.businessId;
 
@@ -70,7 +70,7 @@ export const startSession = async (req: Request, res: Response): Promise<void> =
 /**
  * Stop a WhatsApp session for a business
  */
-export const stopSession = async (req: Request, res: Response): Promise<void> => {
+export const stopSession = async (req: Request<{ businessId: string }>, res: Response): Promise<void> => {
   try {
     const businessId = req.params.businessId;
 
@@ -117,7 +117,7 @@ export const stopSession = async (req: Request, res: Response): Promise<void> =>
 /**
  * Get session status and QR code if available
  */
-export const getSessionStatus = async (req: Request, res: Response): Promise<void> => {
+export const getSessionStatus = async (req: Request<{ businessId: string }>, res: Response): Promise<void> => {
   try {
     const businessId = req.params.businessId;
 
@@ -157,7 +157,7 @@ export const getSessionStatus = async (req: Request, res: Response): Promise<voi
 /**
  * Get QR code for a business session
  */
-export const getSessionQR = async (req: Request, res: Response): Promise<void> => {
+export const getSessionQR = async (req: Request<{ businessId: string }>, res: Response): Promise<void> => {
   try {
     const businessId = req.params.businessId;
 

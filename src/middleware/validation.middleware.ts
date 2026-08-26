@@ -31,7 +31,7 @@ const businessContextSchema = z.object({
     lastVisit: z.string().optional(),
     preferences: z.array(z.string()).optional(),
   }).optional(),
-  additionalInfo: z.record(z.any()).optional(),
+  additionalInfo: z.record(z.string(), z.any()).optional(),
 }).partial();
 
 /**
@@ -79,15 +79,15 @@ export function validate(schema: z.ZodSchema) {
       if (error instanceof ZodError) {
         logger.debug('Validation error', {
           path: req.path,
-          errors: error.errors,
+          errors: error.issues,
         });
 
         return res.status(400).json({
           error: 'Validation Error',
           message: 'Request validation failed',
-          details: error.errors.map((err) => ({
-            path: err.path.join('.'),
-            message: err.message,
+          details: error.issues.map((issue) => ({
+            path: issue.path.join('.'),
+            message: issue.message,
           })),
         });
       }
@@ -108,7 +108,7 @@ export function validate(schema: z.ZodSchema) {
 /**
  * Validate phone param in URL
  */
-export function validatePhoneParam(req: Request, res: Response, next: NextFunction) {
+export function validatePhoneParam(req: Request<{ phone: string }>, res: Response, next: NextFunction) {
   try {
     const { phone } = req.params;
     phoneSchema.parse(phone);
@@ -118,7 +118,7 @@ export function validatePhoneParam(req: Request, res: Response, next: NextFuncti
       return res.status(400).json({
         error: 'Validation Error',
         message: 'Invalid phone number format',
-        details: error.errors,
+        details: error.issues,
       });
     }
     next(error);
