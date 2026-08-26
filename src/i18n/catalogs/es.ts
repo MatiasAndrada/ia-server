@@ -765,7 +765,7 @@ export const esCatalog = {
       `📁 Código de reserva: *${displayCode}*\n\n` +
       reminderLine +
       `Apreciamos tu puntualidad.\n\n` +
-      `_Si necesitás cancelar, respondé CANCELAR._`
+      `_Si necesitás cancelar, respondé *CANCELAR*._`
     );
   },
 
@@ -779,7 +779,7 @@ export const esCatalog = {
       `${eventLine}` +
       `📁 Código de reserva: *${displayCode}*\n\n` +
       `⏰ Te notificaremos cuando confirmen tu reserva.\n\n` +
-      `_Si necesitás cancelar, respondé CANCELAR._`
+      `_Si necesitás cancelar, respondé *CANCELAR*._`
     );
   },
 
@@ -804,7 +804,7 @@ export const esCatalog = {
       `🗓️ ${whenLabel}\n` +
       `📁 Código de reserva: *${displayCode}*\n\n` +
       `Falta ${countdownLabel(minutesUntil)}. ¡Te esperamos!\n\n` +
-      `_Si no vas a poder venir, respondé CANCELAR y liberamos la mesa._`
+      `_Si no vas a poder venir, respondé *CANCELAR* y liberamos la mesa._`
     );
   },
 

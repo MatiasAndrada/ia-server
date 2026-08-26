@@ -714,7 +714,7 @@ export const ptCatalog: MessageCatalog = {
       `📁 Código da reserva: *${displayCode}*\n\n` +
       reminderLine +
       `Agradecemos sua pontualidade.\n\n` +
-      `_Se precisar cancelar, responda CANCELAR._`
+      `_Se precisar cancelar, responda *CANCELAR*._`
     );
   },
 
@@ -727,7 +727,7 @@ export const ptCatalog: MessageCatalog = {
       `${eventLine}` +
       `📁 Código da reserva: *${displayCode}*\n\n` +
       `⏰ Avisaremos assim que sua reserva for confirmada.\n\n` +
-      `_Se precisar cancelar, responda CANCELAR._`
+      `_Se precisar cancelar, responda *CANCELAR*._`
     );
   },
 
@@ -745,7 +745,7 @@ export const ptCatalog: MessageCatalog = {
       `🗓️ ${whenLabel}\n` +
       `📁 Código da reserva: *${displayCode}*\n\n` +
       `Falta ${countdownLabel(minutesUntil)}. Esperamos por você!\n\n` +
-      `_Se não puder vir, responda CANCELAR e liberamos a mesa._`
+      `_Se não puder vir, responda *CANCELAR* e liberamos a mesa._`
     );
   },
 

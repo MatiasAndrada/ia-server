@@ -715,7 +715,7 @@ export const enCatalog: MessageCatalog = {
       `📁 Booking code: *${displayCode}*\n\n` +
       reminderLine +
       `We appreciate your punctuality.\n\n` +
-      `_If you need to cancel, reply CANCEL._`
+      `_If you need to cancel, reply *CANCEL*._`
     );
   },
 
@@ -728,7 +728,7 @@ export const enCatalog: MessageCatalog = {
       `${eventLine}` +
       `📁 Booking code: *${displayCode}*\n\n` +
       `⏰ We'll notify you as soon as your booking is confirmed.\n\n` +
-      `_If you need to cancel, reply CANCEL._`
+      `_If you need to cancel, reply *CANCEL*._`
     );
   },
 
@@ -746,7 +746,7 @@ export const enCatalog: MessageCatalog = {
       `🗓️ ${whenLabel}\n` +
       `📁 Booking code: *${displayCode}*\n\n` +
       `${countdownLabel(minutesUntil)} to go. See you soon!\n\n` +
-      `_If you can't make it, reply CANCEL and we'll free up the table._`
+      `_If you can't make it, reply *CANCEL* and we'll free up the table._`
     );
   },
 
