@@ -403,6 +403,16 @@ export function reservationRegisteredNotice(
   return catalog().reservationRegisteredNotice(name, partySize, displayCode);
 }
 
+/** El restaurante eliminó el evento y con él esta reserva. */
+export function eventCancelledByBusiness(
+  name: string,
+  eventTitle: string,
+  displayCode: string,
+  whenLabel: string | null
+): string {
+  return catalog().eventCancelledByBusiness(name, eventTitle, displayCode, whenLabel);
+}
+
 /** El restaurante canceló la reserva (status CANCELLED desde el panel). */
 export function reservationCancelledByBusiness(
   name: string,
