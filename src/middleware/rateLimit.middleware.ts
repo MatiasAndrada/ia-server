@@ -1,4 +1,4 @@
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { Request } from 'express';
 import { logEvent } from '../utils/logger.js';
 
@@ -74,7 +74,10 @@ export function resolveRateLimitKey(req: Request): string {
   // 4. Sin negocio identificable. /api/batch cae siempre acá a propósito: cada
   //    mensaje lleva su propio businessId y un request puede abarcar hasta 50
   //    negocios distintos, así que una sola key no lo mediría bien.
-  return `ip:${req.ip ?? 'unknown'}`;
+  // `ipKeyGenerator` agrupa las IPv6 por /56: sin él, un cliente IPv6 rota de
+  // dirección dentro de su propio prefijo y esquiva el límite (express-rate-limit
+  // v8 avisa de esto al arrancar si el keyGenerator toca `req.ip` a mano).
+  return `ip:${ipKeyGenerator(req.ip ?? 'unknown')}`;
 }
 
 /**

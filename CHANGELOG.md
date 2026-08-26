@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced the local Ollama (Llama 3.2) inference engine with OpenRouter — no local model, requests now go to `OPENROUTER_MODEL` via the OpenRouter API, with automatic failover across `OPENROUTER_FALLBACK_MODELS`.
 - Actions (`REGISTER`, `CHECK_STATUS`, `CANCEL`, `INFO_REQUEST`) are now emitted via native tool calling with a JSON schema, replacing the old `[ACTION:tipo:{json}]` text-marker convention and its regex/keyword-based fallback parsing.
 - `/health` response field renamed `ollama` → `llm`.
+- Dependencies brought up to date: Express 5, zod 4, redis 6, express-rate-limit 8, helmet 8, dotenv 17, TypeScript 7, ESLint 10, Jest 30 and the matching `@types`. Notable consequences:
+  - `typescript` is installed as an alias of `@typescript/typescript6` and the native TypeScript 7 compiler as `typescript-native`. `npm run build` runs the native `tsc` (7.x), while ts-jest, ts-node and typescript-eslint keep the JavaScript compiler API (6.x) they still require.
+  - TypeScript 6/7 no longer pulls in every `node_modules/@types` package automatically: `tsconfig.json` declares `types: ["node"]` and the new `tsconfig.test.json` (used by ts-jest) adds `jest`.
+  - ESLint 10 dropped `.eslintrc.json`; the configuration now lives in `eslint.config.mjs` (flat config) and `npm run lint` no longer passes `--ext`.
+  - Route handlers that read `req.params` declare their parameters (`Request<{ businessId: string }>`), because `@types/express` 5 types params as `string | string[]`.
+  - The rate limiter's IP fallback goes through `ipKeyGenerator`, so IPv6 clients can no longer sidestep the limit by rotating within their prefix.
 
 ## [1.0.0] - 2026-02-06
 

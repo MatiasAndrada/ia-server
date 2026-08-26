@@ -133,7 +133,7 @@ export async function analyzeIntentHandler(req: Request, res: Response) {
  * DELETE /api/conversations/:phone
  * Clear conversation history
  */
-export async function clearConversationHandler(req: Request, res: Response) {
+export async function clearConversationHandler(req: Request<{ phone: string }>, res: Response) {
   try {
     const { phone } = req.params;
 

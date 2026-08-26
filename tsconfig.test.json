@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // TypeScript 6/7 ya no incluye automáticamente todo node_modules/@types:
+    // los globals de jest (describe/it/expect) hay que pedirlos explícitamente.
+    "types": ["node", "jest"],
+    // Los tests corren en CommonJS dentro de jest: sin esto el `import()`
+    // dinámico de los servicios queda como import nativo y el VM de jest lo
+    // rechaza (ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG).
+    "module": "CommonJS",
+    "moduleResolution": "node10",
+    "noEmit": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

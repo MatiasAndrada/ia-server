@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2020",
     "module": "NodeNext",
-    "lib": ["ES2020"],
+    "lib": ["ES2022"],
     "outDir": "./dist",
     "rootDir": "./src",
     "strict": true,
@@ -20,6 +20,7 @@
     "noFallthroughCasesInSwitch": true,
     "allowSyntheticDefaultImports": true,
     "allowImportingTsExtensions": true,
+    "types": ["node"],
     "rewriteRelativeImportExtensions": true
   },
   "ts-node": {

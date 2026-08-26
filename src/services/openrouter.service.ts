@@ -222,20 +222,21 @@ export class OpenRouterService {
     } catch (error) {
       if (error instanceof AxiosError) {
         if (error.code === 'ECONNREFUSED') {
-          throw new Error('Cannot connect to OpenRouter.');
+          throw new Error('Cannot connect to OpenRouter.', { cause: error });
         }
         if (error.code === 'ETIMEDOUT' || error.code === 'ECONNABORTED') {
-          throw new Error('OpenRouter request timed out.');
+          throw new Error('OpenRouter request timed out.', { cause: error });
         }
         if (error.response?.status === 401) {
-          throw new Error('OpenRouter authentication failed. Check OPENROUTER_API_KEY.');
+          throw new Error('OpenRouter authentication failed. Check OPENROUTER_API_KEY.', { cause: error });
         }
         if (error.response?.status === 404) {
-          throw new Error(`Model ${model} not found on OpenRouter.`);
+          throw new Error(`Model ${model} not found on OpenRouter.`, { cause: error });
         }
         if (error.response?.data) {
           throw new Error(
-            `OpenRouter error: ${JSON.stringify(error.response.data).slice(0, 300)}`
+            `OpenRouter error: ${JSON.stringify(error.response.data).slice(0, 300)}`,
+            { cause: error }
           );
         }
       }

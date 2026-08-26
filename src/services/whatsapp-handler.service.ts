@@ -1380,7 +1380,6 @@ export class WhatsAppHandler {
             }
             return true;
           }
-          break;
         }
 
         case 'schedule_choice': {

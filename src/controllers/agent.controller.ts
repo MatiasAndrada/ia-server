@@ -33,7 +33,7 @@ export async function listAgentsHandler(_req: Request, res: Response) {
  * GET /api/agents/:agentId
  * Obtiene detalles de un agente específico
  */
-export async function getAgentHandler(req: Request, res: Response) {
+export async function getAgentHandler(req: Request<{ agentId: string }>, res: Response) {
   try {
     const { agentId } = req.params;
     
@@ -80,7 +80,7 @@ export async function getAgentHandler(req: Request, res: Response) {
  * POST /api/agents/:agentId/chat
  * Genera una respuesta usando el agente especificado
  */
-export async function agentChatHandler(req: Request, res: Response) {
+export async function agentChatHandler(req: Request<{ agentId: string }>, res: Response) {
   const startTime = Date.now();
   
   try {
@@ -159,7 +159,10 @@ export async function agentChatHandler(req: Request, res: Response) {
  * DELETE /api/agents/:agentId/conversations/:conversationId
  * Limpia el historial de una conversación
  */
-export async function clearConversationHandler(req: Request, res: Response) {
+export async function clearConversationHandler(
+  req: Request<{ agentId: string; conversationId: string }>,
+  res: Response
+) {
   try {
     const { agentId, conversationId } = req.params;
 

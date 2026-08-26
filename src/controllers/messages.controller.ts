@@ -8,7 +8,7 @@ const baileysService = BaileysService.getInstance();
 /**
  * Get recent messages for a business
  */
-export const getMessages = async (req: Request, res: Response): Promise<void> => {
+export const getMessages = async (req: Request<{ businessId: string }>, res: Response): Promise<void> => {
   try {
     const businessId = req.params.businessId;
     const limit = parseInt(req.query.limit as string) || 50;
@@ -61,7 +61,7 @@ export const getMessages = async (req: Request, res: Response): Promise<void> =>
 /**
  * Send a message via WhatsApp
  */
-export const sendMessage = async (req: Request, res: Response): Promise<void> => {
+export const sendMessage = async (req: Request<{ businessId: string }>, res: Response): Promise<void> => {
   try {
     const businessId = req.params.businessId;
     const { to, message } = req.body;
@@ -136,7 +136,7 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
 /**
  * Clear message cache for a business
  */
-export const clearMessages = async (req: Request, res: Response): Promise<void> => {
+export const clearMessages = async (req: Request<{ businessId: string }>, res: Response): Promise<void> => {
   try {
     const businessId = req.params.businessId;
 
@@ -171,7 +171,7 @@ export const clearMessages = async (req: Request, res: Response): Promise<void> 
 /**
  * Get message statistics for a business
  */
-export const getMessageStats = async (req: Request, res: Response): Promise<void> => {
+export const getMessageStats = async (req: Request<{ businessId: string }>, res: Response): Promise<void> => {
   try {
     const businessId = req.params.businessId;
 
