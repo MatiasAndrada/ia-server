@@ -17,6 +17,7 @@ import {
 import { PostVisitService } from './post-visit.service.js';
 import { SupabaseService } from './supabase.service.js';
 import { openRouterService } from './openrouter.service.js';
+import { ReservationReminderService } from './reservation-reminder.service.js';
 
 // Helper types for strict type safety
 type CustomersRow = Database['public']['Tables']['customers']['Row'];
@@ -308,6 +309,7 @@ export class RealtimeSyncService {
       const { language } = await resolveLanguage(entry.business_id, customer.phone);
 
       let notificationMessage = '';
+      const eventTitle = entry.event_id ? await SupabaseService.getEventTitle(entry.event_id) : null;
       await runWithLanguage(language, async () => {
       if (entry.status === 'SEATED') {
         // M11 — bienvenida al restaurante, y programa M12 (mensaje post-visita)
@@ -317,14 +319,17 @@ export class RealtimeSyncService {
         notificationMessage = templates.reservationConfirmedNotice(
           customer.name,
           entry.party_size,
-          entry.display_code
+          entry.display_code,
+          entry.scheduled_at ? ReservationReminderService.getUpcomingLeadMinutes() : 0,
+          eventTitle
         );
       } else {
         // WAITING — requiere confirmación manual del operador
         notificationMessage = templates.reservationRegisteredNotice(
           customer.name,
           entry.party_size,
-          entry.display_code
+          entry.display_code,
+          eventTitle
         );
       }
       });
@@ -728,10 +733,15 @@ export class RealtimeSyncService {
             );
       } else {
         // Paso 5: Reserva CONFIRMADA (CONFIRMED o NOTIFIED legacy)
+        const eventTitle = newEntry.event_id
+          ? await SupabaseService.getEventTitle(newEntry.event_id)
+          : null;
         notificationMessage = templates.reservationConfirmedNotice(
           customer.name,
           newEntry.party_size,
-          newEntry.display_code
+          newEntry.display_code,
+          newEntry.scheduled_at ? ReservationReminderService.getUpcomingLeadMinutes() : 0,
+          eventTitle
         );
       }
       });

@@ -377,6 +377,7 @@ class AgentService {
       '{businessAddress}': context.businessAddress || 'no tengo esa información cargada',
       '{businessHours}': context.businessHours || 'no tengo el horario cargado en este momento',
       '{businessDescription}': context.businessDescription || 'no hay una descripción cargada para este local',
+      '{businessEvents}': context.businessEvents || 'No hay eventos especiales programados por el momento.',
       '{name}': context.draftData?.customerName || 'Cliente',
       '[NOMBRE]': context.draftData?.customerName || 'Cliente',
       '{qty}': context.draftData?.partySize ? String(context.draftData.partySize) : 'la cantidad indicada',

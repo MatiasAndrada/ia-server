@@ -152,9 +152,10 @@ export function reservationConfirmed(
   partySize: number,
   whenLabel: string,
   displayCode: string,
-  fullName: string = name
+  fullName: string = name,
+  eventTitle?: string | null
 ): string {
-  return catalog().reservationConfirmed(name, partySize, whenLabel, displayCode, fullName);
+  return catalog().reservationConfirmed(name, partySize, whenLabel, displayCode, fullName, eventTitle);
 }
 
 /** Reserva registrada pero pendiente de confirmación del local (fuera del manual). */
@@ -163,9 +164,10 @@ export function reservationReceived(
   partySize: number,
   whenLabel: string,
   displayCode: string,
-  fullName: string = name
+  fullName: string = name,
+  eventTitle?: string | null
 ): string {
-  return catalog().reservationReceived(name, partySize, whenLabel, displayCode, fullName);
+  return catalog().reservationReceived(name, partySize, whenLabel, displayCode, fullName, eventTitle);
 }
 
 // ============================
@@ -389,18 +391,21 @@ export function askPartySizeShort(): string {
 export function reservationConfirmedNotice(
   name: string,
   partySize: number,
-  displayCode: string
+  displayCode: string,
+  leadMinutes: number,
+  eventTitle?: string | null
 ): string {
-  return catalog().reservationConfirmedNotice(name, partySize, displayCode);
+  return catalog().reservationConfirmedNotice(name, partySize, displayCode, leadMinutes, eventTitle);
 }
 
 /** La reserva quedó registrada, pendiente de confirmación del local. */
 export function reservationRegisteredNotice(
   name: string,
   partySize: number,
-  displayCode: string
+  displayCode: string,
+  eventTitle?: string | null
 ): string {
-  return catalog().reservationRegisteredNotice(name, partySize, displayCode);
+  return catalog().reservationRegisteredNotice(name, partySize, displayCode, eventTitle);
 }
 
 /** El restaurante eliminó el evento y con él esta reserva. */

@@ -81,7 +81,7 @@ import {
   type ParsedDay,
 } from '../utils/reservation-datetime.js';
 import * as templates from '../utils/message-templates.js';
-import { formatBusinessAddress, formatWeeklyHoursForPrompt } from '../utils/prompts.js';
+import { formatActiveEventsForPrompt, formatBusinessAddress, formatWeeklyHoursForPrompt } from '../utils/prompts.js';
 
 type ActiveReservationSnapshot = {
   status: 'WAITING' | 'CONFIRMED' | 'NOTIFIED';
@@ -712,6 +712,7 @@ export class WhatsAppHandler {
         // draft is active, so this is sent directly and the draft/step are
         // left untouched — the customer can still answer the pending question
         // afterwards exactly as before.
+        const activeEventsForPrompt = await SupabaseService.getActiveEvents(businessId);
         const naturalResponse = await agentService.generateResponse(
           messageText,
           agent,
@@ -722,6 +723,7 @@ export class WhatsAppHandler {
             businessAddress: formatBusinessAddress(businessStatus.address, businessStatus.city),
             businessHours: formatWeeklyHoursForPrompt(businessStatus.weekly_hours as WeeklyHours | null | undefined),
             businessDescription: businessStatus.description ?? undefined,
+            businessEvents: formatActiveEventsForPrompt(activeEventsForPrompt, nowInBuenosAires()),
             phone,
             hasActiveDraft: !!draft,
             currentStep: draft?.step,
@@ -859,6 +861,7 @@ export class WhatsAppHandler {
       // Get business details for context
       const business = await SupabaseService.getBusinessById(businessId);
       const businessName = business?.name || 'el local';
+      const activeEventsForContext = await SupabaseService.getActiveEvents(businessId);
 
       // Build context
       const context: any = {
@@ -867,6 +870,7 @@ export class WhatsAppHandler {
         businessAddress: formatBusinessAddress(business?.address, business?.city),
         businessHours: formatWeeklyHoursForPrompt(business?.weekly_hours as WeeklyHours | null | undefined),
         businessDescription: business?.description ?? undefined,
+        businessEvents: formatActiveEventsForPrompt(activeEventsForContext, nowInBuenosAires()),
         phone,
         hasActiveDraft: !!draft,
       };
@@ -3713,7 +3717,8 @@ export class WhatsAppHandler {
             partySizeLabel,
             whenLabel,
             entry.display_code,
-            fullNameLabel
+            fullNameLabel,
+            draft.eventTitle ?? null
           );
         } else {
           // WAITING — el operador debe confirmar manualmente
@@ -3722,7 +3727,8 @@ export class WhatsAppHandler {
             partySizeLabel,
             whenLabel,
             entry.display_code,
-            fullNameLabel
+            fullNameLabel,
+            draft.eventTitle ?? null
           );
         }
 
@@ -5488,7 +5494,16 @@ export class WhatsAppHandler {
   ): Promise<void> {
     const nowBA = nowInBuenosAires();
     const namedDay = parseRelativeDay(messageText, nowBA);
-    if (namedDay && isWithinNextWeek(namedDay.baDate, nowBA)) {
+
+    // Con eventos activos, este atajo nunca debe tomarse: si el cliente ya
+    // nombró un día en el mismo mensaje ("4 personas el viernes"), resolverlo
+    // directo salteaba por completo el menú de `schedule_choice` — y con él,
+    // la oferta de eventos, que ahí es donde se muestra. Mismo criterio que ya
+    // aplica en promptScheduleChoice para "hoy sin disponibilidad, pero con
+    // eventos publicados": mejor un mensaje extra que perder la oferta.
+    const activeEvents = namedDay ? await SupabaseService.getActiveEvents(businessId) : [];
+
+    if (namedDay && isWithinNextWeek(namedDay.baDate, nowBA) && activeEvents.length === 0) {
       const business = await SupabaseService.getBusinessById(businessId);
       const weeklyHours = business?.weekly_hours as WeeklyHours | null | undefined;
       const dayOpen = weeklyHours && Object.keys(weeklyHours).length > 0

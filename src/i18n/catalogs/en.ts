@@ -233,13 +233,16 @@ export const enCatalog: MessageCatalog = {
     partySize: number,
     whenLabel: string,
     displayCode: string,
-    fullName: string = name
+    fullName: string = name,
+    eventTitle?: string | null
   ): string {
+    const eventLine = eventTitle ? `🎉 Event: ${eventTitle}\n` : '';
     return (
       `✅ Booking confirmed!\n\n` +
       `Thank you, *${name}*. Your booking has been registered successfully.\n\n` +
       `👤 Name: ${fullName}\n` +
       `👥 People: ${partySize}\n` +
+      `${eventLine}` +
       `📅 Date and time: ${whenLabel}\n` +
       `📁 Booking code: *${displayCode}*\n\n` +
       `✨ We look forward to seeing you! We hope you have a wonderful experience.\n\n` +
@@ -252,12 +255,15 @@ export const enCatalog: MessageCatalog = {
     partySize: number,
     whenLabel: string,
     displayCode: string,
-    fullName: string = name
+    fullName: string = name,
+    eventTitle?: string | null
   ): string {
+    const eventLine = eventTitle ? `🎉 Event: ${eventTitle}\n` : '';
     return (
       `⏳ *Booking RECEIVED*\n\n` +
       `👤 Name: ${fullName}\n` +
       `👥 People: ${partySize}\n` +
+      `${eventLine}` +
       `📅 Date and time: ${whenLabel}\n` +
       `📁 Code: *${displayCode}*\n\n` +
       `⏰ We'll let you know as soon as the restaurant confirms your booking.\n\n` +
@@ -689,23 +695,37 @@ export const enCatalog: MessageCatalog = {
     );
   },
 
-  reservationConfirmedNotice(name: string, partySize: number, displayCode: string): string {
+  reservationConfirmedNotice(
+    name: string,
+    partySize: number,
+    displayCode: string,
+    leadMinutes: number,
+    eventTitle?: string | null
+  ): string {
+    const reminderLine =
+      leadMinutes > 0
+        ? `✨ We'll remind you ${countdownLabel(leadMinutes)} before your booking.\n`
+        : '';
+    const eventLine = eventTitle ? `🎉 Event: ${eventTitle}\n` : '';
     return (
       `✅ Your booking is CONFIRMED!\n\n` +
       `👤 Name: ${name}\n` +
       `👥 People: ${partySize}\n` +
+      `${eventLine}` +
       `📁 Booking code: *${displayCode}*\n\n` +
-      `✨ We'll let you know 20 minutes before your table is ready.\n` +
+      reminderLine +
       `We appreciate your punctuality.\n\n` +
       `_If you need to cancel, reply CANCEL._`
     );
   },
 
-  reservationRegisteredNotice(name: string, partySize: number, displayCode: string): string {
+  reservationRegisteredNotice(name: string, partySize: number, displayCode: string, eventTitle?: string | null): string {
+    const eventLine = eventTitle ? `🎉 Event: ${eventTitle}\n` : '';
     return (
       `✅ Your booking has been registered!\n\n` +
       `👤 Name: ${name}\n` +
       `👥 People: ${partySize}\n` +
+      `${eventLine}` +
       `📁 Booking code: *${displayCode}*\n\n` +
       `⏰ We'll notify you as soon as your booking is confirmed.\n\n` +
       `_If you need to cancel, reply CANCEL._`

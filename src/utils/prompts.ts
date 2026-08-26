@@ -1,6 +1,6 @@
-import { BusinessContext, WeeklyHours, WeeklyHoursDayKey } from '../types/index.js';
+import { BusinessContext, BusinessEvent, WeeklyHours, WeeklyHoursDayKey } from '../types/index.js';
 import { currentLanguage, LANGUAGE_ENGLISH_NAMES } from '../i18n/index.js';
-import { formatDayHours } from './reservation-datetime.js';
+import { describeScheduledAtUtc, formatDayHours } from './reservation-datetime.js';
 
 /**
  * Instrucción de idioma para el LLM. Se expresa en inglés y nombrando el idioma
@@ -60,6 +60,26 @@ export function formatWeeklyHoursForPrompt(weeklyHours?: WeeklyHours | null): st
   if (!weeklyHours || Object.keys(weeklyHours).length === 0) return undefined;
 
   return PROMPT_WEEKDAYS.map(({ key, label }) => `${label}: ${formatDayHours(key, weeklyHours)}`).join('\n');
+}
+
+/**
+ * Builds a human-readable listing of the business's currently active/upcoming
+ * events (`SupabaseService.getActiveEvents`), so the LLM fallback agent can
+ * quote real event names/dates instead of claiming it has no information
+ * about events whenever the deterministic `schedule_choice` menu isn't the
+ * one answering (e.g. a customer asking about an event before that step, or
+ * outside the reservation flow entirely).
+ */
+export function formatActiveEventsForPrompt(events: BusinessEvent[], nowBA: Date): string | undefined {
+  if (!events || events.length === 0) return undefined;
+
+  return events
+    .map((event) => {
+      const whenLabel = describeScheduledAtUtc(event.startsAt, nowBA);
+      const descriptionPart = event.description ? ` — ${event.description}` : '';
+      return `- ${event.title} (${whenLabel})${descriptionPart}`;
+    })
+    .join('\n');
 }
 
 /**

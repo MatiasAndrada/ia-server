@@ -252,13 +252,16 @@ export const esCatalog = {
     partySize: number,
     whenLabel: string,
     displayCode: string,
-    fullName: string = name
+    fullName: string = name,
+    eventTitle?: string | null
   ): string {
+    const eventLine = eventTitle ? `🎉 Evento: ${eventTitle}\n` : '';
     return (
       `✅ ¡Reserva confirmada!\n\n` +
       `Gracias, *${name}*. Tu reserva fue registrada correctamente.\n\n` +
       `👤 Nombre: ${fullName}\n` +
       `👥 Personas: ${partySize}\n` +
+      `${eventLine}` +
       `📅 Fecha y hora: ${whenLabel}\n` +
       `📁 Código de reserva: *${displayCode}*\n\n` +
       `✨ ¡Te esperamos! Esperamos que disfrutes una excelente experiencia.\n\n` +
@@ -271,12 +274,15 @@ export const esCatalog = {
     partySize: number,
     whenLabel: string,
     displayCode: string,
-    fullName: string = name
+    fullName: string = name,
+    eventTitle?: string | null
   ): string {
+    const eventLine = eventTitle ? `🎉 Evento: ${eventTitle}\n` : '';
     return (
       `⏳ *Reserva RECIBIDA*\n\n` +
       `👤 Nombre: ${fullName}\n` +
       `👥 Personas: ${partySize}\n` +
+      `${eventLine}` +
       `📅 Fecha y hora: ${whenLabel}\n` +
       `📁 Código: *${displayCode}*\n\n` +
       `⏰ Te notificaremos cuando confirmen tu reserva.\n\n` +
@@ -731,25 +737,46 @@ export const esCatalog = {
     );
   },
 
-  /** Notificación proactiva: la reserva pasó a CONFIRMED. */
-  reservationConfirmedNotice(name: string, partySize: number, displayCode: string): string {
+  /**
+   * Notificación proactiva: la reserva pasó a CONFIRMED.
+   *
+   * `leadMinutes` es la antelación real del recordatorio que va a mandar
+   * `ReservationReminderService` (0 si la reserva no tiene `scheduled_at` o si
+   * los recordatorios están deshabilitados por config) — así la promesa que
+   * ve el cliente acá coincide con lo que efectivamente pasa después.
+   */
+  reservationConfirmedNotice(
+    name: string,
+    partySize: number,
+    displayCode: string,
+    leadMinutes: number,
+    eventTitle?: string | null
+  ): string {
+    const reminderLine =
+      leadMinutes > 0
+        ? `✨ Te avisaremos cuando falte ${countdownLabel(leadMinutes)} para tu reserva.\n`
+        : '';
+    const eventLine = eventTitle ? `🎉 Evento: ${eventTitle}\n` : '';
     return (
       `✅ ¡Tu reserva está CONFIRMADA!\n\n` +
       `👤 Nombre: ${name}\n` +
       `👥 Personas: ${partySize}\n` +
+      `${eventLine}` +
       `📁 Código de reserva: *${displayCode}*\n\n` +
-      `✨ Te avisaremos cuando falten 20 minutos para que puedas ocupar tu mesa.\n` +
+      reminderLine +
       `Apreciamos tu puntualidad.\n\n` +
       `_Si necesitás cancelar, respondé CANCELAR._`
     );
   },
 
   /** Notificación proactiva: la reserva quedó registrada, pendiente de confirmación. */
-  reservationRegisteredNotice(name: string, partySize: number, displayCode: string): string {
+  reservationRegisteredNotice(name: string, partySize: number, displayCode: string, eventTitle?: string | null): string {
+    const eventLine = eventTitle ? `🎉 Evento: ${eventTitle}\n` : '';
     return (
       `✅ ¡Tu reserva ha sido registrada!\n\n` +
       `👤 Nombre: ${name}\n` +
       `👥 Personas: ${partySize}\n` +
+      `${eventLine}` +
       `📁 Código de reserva: *${displayCode}*\n\n` +
       `⏰ Te notificaremos cuando confirmen tu reserva.\n\n` +
       `_Si necesitás cancelar, respondé CANCELAR._`
