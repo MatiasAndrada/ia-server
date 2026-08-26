@@ -86,6 +86,7 @@ export type Database = {
         Row: {
           business_id: string
           created_at: string
+          deleted_at: string | null
           description: string | null
           id: string
           image_urls: string[] | null
@@ -97,6 +98,7 @@ export type Database = {
         Insert: {
           business_id: string
           created_at?: string
+          deleted_at?: string | null
           description?: string | null
           id?: string
           image_urls?: string[] | null
@@ -108,6 +110,7 @@ export type Database = {
         Update: {
           business_id?: string
           created_at?: string
+          deleted_at?: string | null
           description?: string | null
           id?: string
           image_urls?: string[] | null
