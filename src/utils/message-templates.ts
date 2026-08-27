@@ -179,9 +179,10 @@ export function editMenu(
   whenLabel: string,
   displayCode: string,
   statusLabel: string,
-  customerName?: string | null
+  customerName?: string | null,
+  eventTitle?: string | null
 ): string {
-  return catalog().editMenu(partySize, whenLabel, displayCode, statusLabel, customerName);
+  return catalog().editMenu(partySize, whenLabel, displayCode, statusLabel, customerName, eventTitle);
 }
 
 export function editMenuInvalidChoice(): string {
@@ -233,6 +234,7 @@ export function activeReservationsMenu(
     whenLabel: string;
     displayCode: string | null;
     statusLabel: string;
+    eventTitle?: string | null;
   }[],
   action: 'edit' | 'cancel' | 'view' = 'view'
 ): string {

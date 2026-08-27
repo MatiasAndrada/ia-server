@@ -25,6 +25,7 @@ export type LogEvent =
   | 'session.linked'
   | 'session.closed'
   | 'session.logout'
+  | 'session.unrecoverable'
   | 'session.reconnecting'
   | 'session.recovered'
   | 'session.stopped'
@@ -79,6 +80,7 @@ export const EVENT_LABELS: Record<LogEvent, string> = {
   'session.linked': 'WhatsApp session linked',
   'session.closed': 'WhatsApp session closed',
   'session.logout': 'WhatsApp session logged out',
+  'session.unrecoverable': 'WhatsApp session rejected by server, cleared for re-linking',
   'session.reconnecting': 'WhatsApp session reconnecting',
   'session.recovered': 'WhatsApp session recovered',
   'session.stopped': 'WhatsApp session stopped',
