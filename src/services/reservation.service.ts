@@ -309,10 +309,19 @@ export class ReservationService {
   /**
    * Update only the name in the draft without advancing the step.
    * Used when the user corrects their name while already at party_size step.
+   *
+   * A correction restates the customer's identity from scratch, so `lastName`
+   * always replaces whatever was there — including clearing it when the
+   * correction is a bare first name. Known customers arrive at this step with
+   * `customerLastName` pre-filled from `customers.lastName`; if that value was
+   * wrong (which is exactly why the customer is correcting it now), silently
+   * keeping it around would glue a stale apellido onto the new first name
+   * (e.g. an apellido carried over from a previous mis-parsed name).
    */
   static async setNameOnly(
     conversationId: string,
-    name: string
+    name: string,
+    lastName?: string
   ): Promise<ReservationDraft | null> {
     const draft = await this.getDraft(conversationId);
 
@@ -322,6 +331,7 @@ export class ReservationService {
     }
 
     draft.customerName = formatName(name);
+    draft.customerLastName = lastName ? formatName(lastName) : undefined;
     // step intentionally NOT changed — stays at party_size
     await this.saveDraft(draft);
     return draft;

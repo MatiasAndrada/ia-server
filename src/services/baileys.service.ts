@@ -574,9 +574,19 @@ export class BaileysService {
       const statusCode = (lastDisconnect?.error as any)?.output?.statusCode as
         | number
         | undefined;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+      // `forbidden` (403) y `badSession` (500) no son errores de red transitorios:
+      // Baileys los emite cuando el servidor de WhatsApp rechaza la sesión en sí
+      // (credenciales corruptas, vinculación a medio terminar, sesión invalidada
+      // desde el teléfono). Reintentar esos para siempre nunca la destraba —
+      // sólo bombardea a WhatsApp con la misma sesión rota — así que se tratan
+      // igual que un logout: se limpia todo y hay que pedir un QR nuevo.
+      const isUnrecoverable =
+        statusCode === DisconnectReason.loggedOut ||
+        statusCode === DisconnectReason.forbidden ||
+        statusCode === DisconnectReason.badSession;
+      const shouldReconnect = !isUnrecoverable;
 
-      logEvent(shouldReconnect ? 'warn' : 'info', shouldReconnect ? 'session.closed' : 'session.logout', {
+      logEvent(shouldReconnect ? 'warn' : 'info', shouldReconnect ? 'session.closed' : 'session.unrecoverable', {
         businessId,
         statusCode,
         error: lastDisconnect?.error,
@@ -636,15 +646,23 @@ export class BaileysService {
           });
         }, delay);
       } else {
-        // Logged out, remove session data from memory
+        // Logout o sesión irrecuperable: no tiene sentido seguir reintentando
+        // con las mismas credenciales, así que se limpian del todo. La próxima
+        // vez que se pida un `start` para este negocio, Baileys arranca de cero
+        // y emite un QR real en vez de chocar contra el mismo rechazo.
+        this.reconnectAttempts.delete(businessId);
         this.sessionStates.delete(businessId);
-        await this.updateSessionStatus(businessId, 'error', 'Session logged out');
+        const reason =
+          statusCode === DisconnectReason.loggedOut
+            ? 'Session logged out'
+            : `Session rejected by WhatsApp (statusCode ${statusCode}), cleared for re-linking`;
+        await this.updateSessionStatus(businessId, 'error', reason);
 
         // Delete session files from disk
         const sessionPath = this.getSessionPath(businessId);
         if (fs.existsSync(sessionPath)) {
           fs.rmSync(sessionPath, { recursive: true, force: true });
-          logger.debug('Session files deleted from disk after logout', { businessId });
+          logger.debug('Session files deleted from disk after unrecoverable disconnect', { businessId, statusCode });
         }
       }
     } else if (connection === 'open') {

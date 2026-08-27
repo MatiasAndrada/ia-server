@@ -1263,9 +1263,11 @@ export class WhatsAppHandler {
             const correctedName = this.extractNameCandidate(messageText);
 
             if (correctedName) {
+              const { firstName, lastName } = this.splitFullName(correctedName);
               draft.awaitingNameCorrection = false;
               await ReservationService.saveDraft(draft);
-              await ReservationService.setNameOnly(conversationId, correctedName);
+              await ReservationService.setNameOnly(conversationId, firstName, lastName || undefined);
+              await this.syncCorrectedCustomerName(businessId, jid, firstName, lastName);
               logger.debug('Name corrected at party_size step (follow-up)', {
                 conversationId,
                 correctedName,
@@ -1317,7 +1319,9 @@ export class WhatsAppHandler {
             const correctedName = this.extractNameCandidate(messageText);
 
             if (correctedName) {
-              await ReservationService.setNameOnly(conversationId, correctedName);
+              const { firstName, lastName } = this.splitFullName(correctedName);
+              await ReservationService.setNameOnly(conversationId, firstName, lastName || undefined);
+              await this.syncCorrectedCustomerName(businessId, jid, firstName, lastName);
               logger.debug('Name corrected at party_size step', { conversationId, correctedName });
 
               if (partySize && partySize > 0 && partySize <= 50) {
@@ -4392,12 +4396,14 @@ export class WhatsAppHandler {
         const availableReservationIds = activeReservations.map((reservation) => reservation.id);
         await ReservationService.startReservationSelection(conversationId, businessId, availableReservationIds);
 
+        const eventTitles = await this.resolveEventTitles(activeReservations);
         const quickOptions = activeReservations.map((reservation, index) => ({
           index: index + 1,
           partySize: reservation.party_size ?? 0,
           whenLabel: this.describeReservationWhen(reservation.scheduled_at),
           displayCode: reservation.display_code ?? null,
           statusLabel: this.getReservationStatusLabel(reservation.status),
+          eventTitle: eventTitles[index],
         }));
 
         await this.sendWhatsAppMessage(
@@ -4448,6 +4454,7 @@ export class WhatsAppHandler {
       display_code: string | null;
       scheduled_at?: string | null;
       status: string;
+      event_id?: string | null;
     }
   ): Promise<void> {
     const statusLabel =
@@ -4456,7 +4463,10 @@ export class WhatsAppHandler {
         : '⏳ Pendiente';
 
     const phone = this.normalizeWhatsAppNumber(jid);
-    const customer = await SupabaseService.getCustomerByPhone(phone, businessId);
+    const [customer, eventTitle] = await Promise.all([
+      SupabaseService.getCustomerByPhone(phone, businessId),
+      activeReservation.event_id ? SupabaseService.getEventTitle(activeReservation.event_id) : null,
+    ]);
 
     await this.sendWhatsAppMessage(
       businessId,
@@ -4466,7 +4476,8 @@ export class WhatsAppHandler {
         this.describeReservationWhen(activeReservation.scheduled_at),
         activeReservation.display_code ?? '-',
         statusLabel,
-        customer?.name?.trim() || null
+        customer?.name?.trim() || null,
+        eventTitle
       )
     );
 
@@ -4620,12 +4631,14 @@ export class WhatsAppHandler {
       action
     );
 
+    const eventTitles = await this.resolveEventTitles(activeReservations);
     const quickOptions = activeReservations.map((reservation, index) => ({
       index: index + 1,
       partySize: reservation.party_size ?? 0,
       whenLabel: this.describeReservationWhen(reservation.scheduled_at),
       displayCode: reservation.display_code ?? null,
       statusLabel: this.getReservationStatusLabel(reservation.status),
+      eventTitle: eventTitles[index],
     }));
 
     await this.sendWhatsAppMessage(
@@ -4710,7 +4723,7 @@ export class WhatsAppHandler {
           summaryLines.push(
             activeReservations.length === 0
               ? templates.noActiveReservationsShort()
-              : this.describeActiveReservationsInline(activeReservations)
+              : await this.describeActiveReservationsInline(activeReservations)
           );
         }
       }
@@ -4784,13 +4797,29 @@ export class WhatsAppHandler {
     return null;
   }
 
-  /** One-message summary of a customer's active reservations (for the query action). */
-  private describeActiveReservationsInline(reservations: WaitlistEntry[]): string {
-    const lines = reservations.map(
-      (r, i) =>
-        `${i + 1}. ${r.party_size} personas, ${this.describeReservationWhen(r.scheduled_at)}` +
-        `${r.display_code ? ` (${r.display_code})` : ''} — ${this.getReservationStatusLabel(r.status)}`
+  /**
+   * Resolves each reservation's event title in parallel (null for a plain,
+   * non-event reservation) — used to tell event reservations apart from
+   * regular ones in the various "your active reservations" listings.
+   */
+  private async resolveEventTitles(
+    reservations: { event_id?: string | null }[]
+  ): Promise<(string | null)[]> {
+    return Promise.all(
+      reservations.map((r) => (r.event_id ? SupabaseService.getEventTitle(r.event_id) : Promise.resolve(null)))
     );
+  }
+
+  /** One-message summary of a customer's active reservations (for the query action). */
+  private async describeActiveReservationsInline(reservations: WaitlistEntry[]): Promise<string> {
+    const eventTitles = await this.resolveEventTitles(reservations);
+    const lines = reservations.map((r, i) => {
+      const eventSuffix = eventTitles[i] ? ` — 🎉 ${eventTitles[i]}` : '';
+      return (
+        `${i + 1}. ${r.party_size} personas, ${this.describeReservationWhen(r.scheduled_at)}` +
+        `${r.display_code ? ` (${r.display_code})` : ''} — ${this.getReservationStatusLabel(r.status)}${eventSuffix}`
+      );
+    });
     return ['📋 Tus reservas activas:', ...lines].join('\n');
   }
 
@@ -4913,10 +4942,34 @@ export class WhatsAppHandler {
       return SupabaseService.updateCustomerNameByPhone(phone, businessId, { lastName: value });
     }
     const { firstName, lastName } = this.splitFullName(value);
+    // A "mi nombre es X" correction restates the identity from scratch — pass
+    // lastName through as-is (including '') so a stale apellido from a
+    // previous, possibly wrong, capture gets cleared instead of surviving
+    // untouched (see updateCustomerNameByPhone: '' clears, undefined skips).
     return SupabaseService.updateCustomerNameByPhone(phone, businessId, {
       name: firstName,
-      // Only overwrite the apellido when the customer actually provided one.
-      ...(lastName ? { lastName } : {}),
+      lastName,
+    });
+  }
+
+  /**
+   * Persists a name correction to `customers` immediately, not just the
+   * in-flight draft — otherwise a returning customer whose stored name/apellido
+   * was wrong gets it re-copied onto every future draft (see
+   * startReservationForKnownCustomer) and has to correct it again on every visit.
+   * Best-effort: updateCustomerNameByPhone already no-ops (no throw) when the
+   * phone has no customer row yet.
+   */
+  private async syncCorrectedCustomerName(
+    businessId: string,
+    jid: string,
+    firstName: string,
+    lastName: string
+  ): Promise<void> {
+    const phone = this.normalizeWhatsAppNumber(jid);
+    await SupabaseService.updateCustomerNameByPhone(phone, businessId, {
+      name: firstName,
+      lastName,
     });
   }
 
@@ -5200,12 +5253,14 @@ export class WhatsAppHandler {
         const availableReservationIds = activeReservations.map((reservation) => reservation.id);
         await ReservationService.startReservationSelection(conversationId, businessId, availableReservationIds);
 
+        const eventTitles = await this.resolveEventTitles(activeReservations);
         const quickOptions = activeReservations.map((reservation, index) => ({
           index: index + 1,
           partySize: reservation.party_size ?? 0,
           whenLabel: this.describeReservationWhen(reservation.scheduled_at),
           displayCode: reservation.display_code ?? null,
           statusLabel: this.getReservationStatusLabel(reservation.status),
+          eventTitle: eventTitles[index],
         }));
 
         await this.sendWhatsAppMessage(
