@@ -371,6 +371,49 @@ describe('WhatsAppHandler reservation overlap policy', () => {
     );
   });
 
+  it('regression: tags a reservation tied to an event in the edit menu, instead of showing it as a plain booking', async () => {
+    jest
+      .spyOn(ReservationService, 'startEditMenu')
+      .mockResolvedValue({
+        conversationId: 'conv-8b',
+        businessId: 'business-1',
+        step: 'edit_menu',
+        existingReservationId: 'entry-10b',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      } as any);
+
+    jest
+      .spyOn(SupabaseService, 'getActiveReservationsByPhone')
+      .mockResolvedValue([
+        {
+          id: 'entry-10b',
+          party_size: 3,
+          display_code: 'N540',
+          status: 'CONFIRMED',
+          scheduled_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+          event_id: 'event-1',
+        },
+      ] as any);
+    const getEventTitleSpy = jest
+      .spyOn(SupabaseService, 'getEventTitle')
+      .mockResolvedValue('Noche de sushi');
+
+    const handled = await (handler as any).handleActiveReservationsInquiry(
+      'business-1',
+      '5496666666667@s.whatsapp.net',
+      'conv-8b'
+    );
+
+    expect(handled).toBe(true);
+    expect(getEventTitleSpy).toHaveBeenCalledWith('event-1');
+    expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+      'business-1',
+      '5496666666667@s.whatsapp.net',
+      expect.stringContaining('🎉 Noche de sushi')
+    );
+  });
+
   it('switches to reservation-selection mode when the user asks for their reservations and there are multiple options', async () => {
     jest
       .spyOn(ReservationService, 'startReservationSelection')
@@ -1221,7 +1264,7 @@ describe('WhatsAppHandler reservation overlap policy', () => {
     );
 
     expect(handled).toBe(true);
-    expect(setNameOnlySpy).toHaveBeenCalledWith('conv-11', 'Matías Andrada');
+    expect(setNameOnlySpy).toHaveBeenCalledWith('conv-11', 'Matías', 'Andrada');
     expect(setPartySizeSpy).toHaveBeenCalledWith('conv-11', 4);
     expect(moveToScheduleChoiceSpy).toHaveBeenCalledWith('conv-11');
     expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
@@ -1441,7 +1484,7 @@ describe('WhatsAppHandler reservation overlap policy', () => {
       expect(saveDraftSpy).toHaveBeenCalledWith(
         expect.objectContaining({ awaitingNameCorrection: false })
       );
-      expect(setNameOnlySpy).toHaveBeenCalledWith('conv-name-fix', 'Marta Juarez');
+      expect(setNameOnlySpy).toHaveBeenCalledWith('conv-name-fix', 'Marta', 'Juarez');
       expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
         'business-1',
         '5491234567890@s.whatsapp.net',
@@ -1453,6 +1496,39 @@ describe('WhatsAppHandler reservation overlap policy', () => {
         '5491234567890@s.whatsapp.net',
         expect.stringContaining('Solo puedo ayudarte')
       );
+    });
+
+    it('regression: clears a stale apellido carried over from a known customer instead of gluing it onto the corrected first name', async () => {
+      // A known customer's draft starts with customerName/customerLastName
+      // copied from `customers` (see startReservationForKnownCustomer). If
+      // that stored apellido was wrong — e.g. left over from an unrelated
+      // event title once mistakenly saved as a name — correcting just the
+      // first name must not silently keep it: the customer never restated it,
+      // and the resulting merged name ("Matías De Sushi") makes no sense.
+      const setNameOnlySpy = jest
+        .spyOn(ReservationService, 'setNameOnly')
+        .mockResolvedValue(draftAtPartySize({ customerName: 'Matías', customerLastName: undefined }) as any);
+      const syncSpy = jest
+        .spyOn(SupabaseService, 'updateCustomerNameByPhone')
+        .mockResolvedValue(null);
+
+      const handled = await (handler as any).processDraftStep(
+        draftAtPartySize({ customerName: 'Noche', customerLastName: 'De Sushi' }),
+        'Mi nombre es Matías',
+        'conv-name-fix',
+        'business-1',
+        '5491234567890@s.whatsapp.net'
+      );
+
+      expect(handled).toBe(true);
+      // undefined, not omitted — clears the stale apellido instead of leaving it.
+      expect(setNameOnlySpy).toHaveBeenCalledWith('conv-name-fix', 'Matías', undefined);
+      // The correction is also pushed to `customers` right away (lastName: ''
+      // explicitly clears it there too), so the next visit isn't re-poisoned.
+      expect(syncSpy).toHaveBeenCalledWith('5491234567890', 'business-1', {
+        name: 'Matías',
+        lastName: '',
+      });
     });
 
     it('re-asks (without looping forever) when the follow-up reply still is not a usable name', async () => {

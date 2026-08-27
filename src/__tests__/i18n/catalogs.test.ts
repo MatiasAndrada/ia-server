@@ -14,6 +14,7 @@ const RESERVATION_ROW = {
   whenLabel: '__WHEN__',
   displayCode: '__CODE__',
   statusLabel: '__STATUS__',
+  eventTitle: '__EVENT__',
 };
 
 const ARGS: Record<keyof MessageCatalog, unknown[]> = {
@@ -38,7 +39,7 @@ const ARGS: Record<keyof MessageCatalog, unknown[]> = {
   eventNoLongerAvailable: ['__EVENT__'],
   reservationConfirmed: ['__NAME__', 999, '__WHEN__', '__CODE__', '__FULLNAME__', '__EVENT__'],
   reservationReceived: ['__NAME__', 999, '__WHEN__', '__CODE__', '__FULLNAME__', '__EVENT__'],
-  editMenu: [999, '__WHEN__', '__CODE__', '__STATUS__', '__NAME__'],
+  editMenu: [999, '__WHEN__', '__CODE__', '__STATUS__', '__NAME__', '__EVENT__'],
   editMenuInvalidChoice: [],
   partySizeUpdated: [999],
   partySizeUpdateFailed: [],
