@@ -299,12 +299,14 @@ export const esCatalog = {
     whenLabel: string,
     displayCode: string,
     statusLabel: string,
-    customerName?: string | null
+    customerName?: string | null,
+    eventTitle?: string | null
   ): string {
     const greeting = customerName ? `👋 ¡Hola ${customerName}! ¿Qué necesitás hoy?\n\n` : '';
+    const eventSuffix = eventTitle ? ` — 🎉 ${eventTitle}` : '';
     return (
       `${greeting}📋 Tenés 1 reserva activa:\n` +
-      `• ${partySize} personas, ${whenLabel} (${displayCode}) ${statusLabel}\n\n` +
+      `• ${partySize} personas, ${whenLabel} (${displayCode}) ${statusLabel}${eventSuffix}\n\n` +
       `¿Qué querés hacer?\n\n` +
       `1️⃣ Cantidad de personas\n` +
       `2️⃣ Fecha\n` +
@@ -372,13 +374,15 @@ export const esCatalog = {
       whenLabel: string;
       displayCode: string | null;
       statusLabel: string;
+      eventTitle?: string | null;
     }[],
     action: 'edit' | 'cancel' | 'view' = 'view'
   ): string {
     const reservationsList = reservations
       .map((reservation) => {
         const codeText = reservation.displayCode ? ` (${reservation.displayCode})` : '';
-        return `*${reservation.index}* - ${reservation.partySize} personas, ${reservation.whenLabel}${codeText} — ${reservation.statusLabel}`;
+        const eventSuffix = reservation.eventTitle ? ` — 🎉 ${reservation.eventTitle}` : '';
+        return `*${reservation.index}* - ${reservation.partySize} personas, ${reservation.whenLabel}${codeText} — ${reservation.statusLabel}${eventSuffix}`;
       })
       .join('\n');
 

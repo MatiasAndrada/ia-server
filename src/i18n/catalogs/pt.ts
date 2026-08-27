@@ -279,12 +279,14 @@ export const ptCatalog: MessageCatalog = {
     whenLabel: string,
     displayCode: string,
     statusLabel: string,
-    customerName?: string | null
+    customerName?: string | null,
+    eventTitle?: string | null
   ): string {
     const greeting = customerName ? `👋 Olá ${customerName}! O que você precisa hoje?\n\n` : '';
+    const eventSuffix = eventTitle ? ` — 🎉 ${eventTitle}` : '';
     return (
       `${greeting}📋 Você tem 1 reserva ativa:\n` +
-      `• ${partySize} pessoas, ${whenLabel} (${displayCode}) ${statusLabel}\n\n` +
+      `• ${partySize} pessoas, ${whenLabel} (${displayCode}) ${statusLabel}${eventSuffix}\n\n` +
       `O que você quer fazer?\n\n` +
       `1️⃣ Quantidade de pessoas\n` +
       `2️⃣ Data\n` +
@@ -347,13 +349,15 @@ export const ptCatalog: MessageCatalog = {
       whenLabel: string;
       displayCode: string | null;
       statusLabel: string;
+      eventTitle?: string | null;
     }[],
     action: 'edit' | 'cancel' | 'view' = 'view'
   ): string {
     const reservationsList = reservations
       .map((reservation) => {
         const codeText = reservation.displayCode ? ` (${reservation.displayCode})` : '';
-        return `*${reservation.index}* - ${reservation.partySize} pessoas, ${reservation.whenLabel}${codeText} — ${reservation.statusLabel}`;
+        const eventSuffix = reservation.eventTitle ? ` — 🎉 ${reservation.eventTitle}` : '';
+        return `*${reservation.index}* - ${reservation.partySize} pessoas, ${reservation.whenLabel}${codeText} — ${reservation.statusLabel}${eventSuffix}`;
       })
       .join('\n');
 
