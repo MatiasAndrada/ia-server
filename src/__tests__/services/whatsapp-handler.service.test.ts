@@ -3050,6 +3050,299 @@ describe('WhatsAppHandler reservation overlap policy', () => {
     });
   });
 
+  describe('Menu digressions — a numbered menu step never traps or cancels the flow over an off-topic reply', () => {
+    // Regression coverage for the real-world bug: the bot answers a genuine
+    // question (or a "Sí" confirming something the agent itself just offered)
+    // via the LLM while a numbered menu (edit_menu, schedule_choice,
+    // confirm_summary, summary_edit_menu, cancel_menu) is pending, but the
+    // step's own switch-case only understands its literal options — so the
+    // next reply burned an invalid attempt and eventually cancelled the whole
+    // draft. These steps must instead let the agent answer and leave the
+    // draft/step exactly as it was, with zero invalidAttempts/cancellation.
+    beforeEach(() => {
+      jest.spyOn(SupabaseService, 'getBusinessById').mockResolvedValue({
+        id: 'business-1',
+        name: 'Restaurante Test',
+      } as any);
+      jest.spyOn(SupabaseService, 'getActiveEvents').mockResolvedValue([]);
+    });
+
+    it('edit_menu: a real question is answered by the agent, draft/step untouched, no attempt burned', async () => {
+      const draft = {
+        conversationId: 'conv-digress',
+        businessId: 'business-1',
+        step: 'edit_menu' as const,
+        existingReservationId: 'res-1',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      const generateResponseSpy = jest.spyOn(agentService, 'generateResponse').mockResolvedValue({
+        response: 'Estamos en Independencia Centro, X5000 Córdoba.',
+        action: null,
+        conversationId: 'conv-digress',
+        agent: { id: 'waitlist', name: 'Asistente de Reservas' },
+        processingTime: 5,
+      } as any);
+      const deleteDraftSpy = jest.spyOn(ReservationService, 'deleteDraft');
+      const saveDraftSpy = jest.spyOn(ReservationService, 'saveDraft');
+
+      const handled = await (handler as any).processDraftStep(
+        draft,
+        '¿Dónde queda el local?',
+        'conv-digress',
+        'business-1',
+        '5491234567890@s.whatsapp.net'
+      );
+
+      expect(handled).toBe(true);
+      expect(generateResponseSpy).toHaveBeenCalledTimes(1);
+      expect(deleteDraftSpy).not.toHaveBeenCalled();
+      expect(saveDraftSpy).not.toHaveBeenCalled();
+      expect((draft as any).invalidAttempts ?? 0).toBe(0);
+      expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+        'business-1',
+        '5491234567890@s.whatsapp.net',
+        'Estamos en Independencia Centro, X5000 Córdoba.'
+      );
+    });
+
+    it('edit_menu: a bare "Sí" confirming what the agent just offered is answered by the agent instead of "respondé 1, 2, 3 o 4"', async () => {
+      const draft = {
+        conversationId: 'conv-digress-2',
+        businessId: 'business-1',
+        step: 'edit_menu' as const,
+        existingReservationId: 'res-1',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      const generateResponseSpy = jest.spyOn(agentService, 'generateResponse').mockResolvedValue({
+        response: '¡Perfecto! Ya anoté que querés otra mesa, un mozo te va a confirmar en breve.',
+        action: null,
+        conversationId: 'conv-digress-2',
+        agent: { id: 'waitlist', name: 'Asistente de Reservas' },
+        processingTime: 5,
+      } as any);
+      const deleteDraftSpy = jest.spyOn(ReservationService, 'deleteDraft');
+
+      const handled = await (handler as any).processDraftStep(
+        draft,
+        'Si',
+        'conv-digress-2',
+        'business-1',
+        '5491234567890@s.whatsapp.net'
+      );
+
+      expect(handled).toBe(true);
+      expect(generateResponseSpy).toHaveBeenCalledTimes(1);
+      expect(deleteDraftSpy).not.toHaveBeenCalled();
+      expect(mockBaileysService.sendMessage).not.toHaveBeenCalledWith(
+        'business-1',
+        '5491234567890@s.whatsapp.net',
+        expect.stringContaining('*1*, *2*, *3* o *4*')
+      );
+    });
+
+    it('edit_menu: repeated digressions never accumulate into a cancellation, and the menu still works afterwards', async () => {
+      const draft = {
+        conversationId: 'conv-digress-3',
+        businessId: 'business-1',
+        step: 'edit_menu' as const,
+        existingReservationId: 'res-1',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      jest.spyOn(agentService, 'generateResponse').mockResolvedValue({
+        response: 'Claro, te cuento...',
+        action: null,
+        conversationId: 'conv-digress-3',
+        agent: { id: 'waitlist', name: 'Asistente de Reservas' },
+        processingTime: 5,
+      } as any);
+      const deleteDraftSpy = jest.spyOn(ReservationService, 'deleteDraft');
+
+      await (handler as any).processDraftStep(
+        draft,
+        '¿Hacen delivery?',
+        'conv-digress-3',
+        'business-1',
+        '5491234567890@s.whatsapp.net'
+      );
+      await (handler as any).processDraftStep(
+        draft,
+        '¿Tienen wifi?',
+        'conv-digress-3',
+        'business-1',
+        '5491234567890@s.whatsapp.net'
+      );
+
+      expect(deleteDraftSpy).not.toHaveBeenCalled();
+      expect((draft as any).invalidAttempts ?? 0).toBe(0);
+
+      // The menu is still fully functional after two digressions.
+      const startEditReservationSpy = jest
+        .spyOn(ReservationService, 'startEditReservation')
+        .mockResolvedValue(draft as any);
+
+      const handled = await (handler as any).processDraftStep(
+        draft,
+        '1',
+        'conv-digress-3',
+        'business-1',
+        '5491234567890@s.whatsapp.net'
+      );
+
+      expect(handled).toBe(true);
+      expect(startEditReservationSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('edit_menu: bare noise (no letters) still gets the canned re-ask instead of reaching the agent', async () => {
+      const draft = {
+        conversationId: 'conv-digress-4',
+        businessId: 'business-1',
+        step: 'edit_menu' as const,
+        existingReservationId: 'res-1',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      const generateResponseSpy = jest.spyOn(agentService, 'generateResponse');
+
+      const handled = await (handler as any).processDraftStep(
+        draft,
+        '..',
+        'conv-digress-4',
+        'business-1',
+        '5491234567890@s.whatsapp.net'
+      );
+
+      expect(handled).toBe(true);
+      expect(generateResponseSpy).not.toHaveBeenCalled();
+      expect(mockBaileysService.sendMessage).toHaveBeenCalledWith(
+        'business-1',
+        '5491234567890@s.whatsapp.net',
+        expect.stringContaining('*1*, *2*, *3* o *4*')
+      );
+    });
+
+    it('schedule_choice: a date format the deterministic parser misses is answered by the agent instead of cancelling after 2 tries', async () => {
+      const draft = {
+        conversationId: 'conv-digress-5',
+        businessId: 'business-1',
+        step: 'schedule_choice' as const,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      jest.spyOn(handler as any, 'getLlmSlotsFallback').mockResolvedValue(null);
+      const generateResponseSpy = jest.spyOn(agentService, 'generateResponse').mockResolvedValue({
+        response: '¡Perfecto! ¿A qué hora te gustaría hacer la reserva para el 28 de agosto?',
+        action: null,
+        conversationId: 'conv-digress-5',
+        agent: { id: 'waitlist', name: 'Asistente de Reservas' },
+        processingTime: 5,
+      } as any);
+      const deleteDraftSpy = jest.spyOn(ReservationService, 'deleteDraft');
+
+      // First reply: a date format not recognized by the regex/LLM parsers.
+      const firstHandled = await (handler as any).processDraftStep(
+        draft,
+        '28 de agosto',
+        'conv-digress-5',
+        'business-1',
+        '5491234567890@s.whatsapp.net'
+      );
+      // Second reply: a time, answering the agent's own question above —
+      // this used to be re-validated against the ORIGINAL "1 o 2" menu and
+      // cancel the flow after 2 misses.
+      const secondHandled = await (handler as any).processDraftStep(
+        draft,
+        'A la 20 hs',
+        'conv-digress-5',
+        'business-1',
+        '5491234567890@s.whatsapp.net'
+      );
+
+      expect(firstHandled).toBe(true);
+      expect(secondHandled).toBe(true);
+      expect(generateResponseSpy).toHaveBeenCalledTimes(2);
+      expect(deleteDraftSpy).not.toHaveBeenCalled();
+      expect((draft as any).invalidAttempts ?? 0).toBe(0);
+      expect(mockBaileysService.sendMessage).not.toHaveBeenCalledWith(
+        'business-1',
+        '5491234567890@s.whatsapp.net',
+        expect.stringContaining('intentos inválidos')
+      );
+    });
+
+    it('confirm_summary: an unrelated question is answered by the agent instead of the canned invalid-choice retry', async () => {
+      const draft = {
+        conversationId: 'conv-digress-6',
+        businessId: 'business-1',
+        step: 'confirm_summary' as const,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      const generateResponseSpy = jest.spyOn(agentService, 'generateResponse').mockResolvedValue({
+        response: 'Aceptamos tarjeta y efectivo.',
+        action: null,
+        conversationId: 'conv-digress-6',
+        agent: { id: 'waitlist', name: 'Asistente de Reservas' },
+        processingTime: 5,
+      } as any);
+      const deleteDraftSpy = jest.spyOn(ReservationService, 'deleteDraft');
+
+      const handled = await (handler as any).processDraftStep(
+        draft,
+        '¿Aceptan tarjeta?',
+        'conv-digress-6',
+        'business-1',
+        '5491234567890@s.whatsapp.net'
+      );
+
+      expect(handled).toBe(true);
+      expect(generateResponseSpy).toHaveBeenCalledTimes(1);
+      expect(deleteDraftSpy).not.toHaveBeenCalled();
+      expect((draft as any).invalidAttempts ?? 0).toBe(0);
+    });
+
+    it('cancel_menu: an unrelated question is answered by the agent instead of the canned invalid-choice retry', async () => {
+      const draft = {
+        conversationId: 'conv-digress-7',
+        businessId: 'business-1',
+        step: 'cancel_menu' as const,
+        existingReservationId: 'res-cancel',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      const generateResponseSpy = jest.spyOn(agentService, 'generateResponse').mockResolvedValue({
+        response: 'Sí, tenemos estacionamiento propio.',
+        action: null,
+        conversationId: 'conv-digress-7',
+        agent: { id: 'waitlist', name: 'Asistente de Reservas' },
+        processingTime: 5,
+      } as any);
+      const deleteDraftSpy = jest.spyOn(ReservationService, 'deleteDraft');
+
+      const handled = await (handler as any).processDraftStep(
+        draft,
+        '¿Tienen estacionamiento?',
+        'conv-digress-7',
+        'business-1',
+        '5491234567890@s.whatsapp.net'
+      );
+
+      expect(handled).toBe(true);
+      expect(generateResponseSpy).toHaveBeenCalledTimes(1);
+      expect(deleteDraftSpy).not.toHaveBeenCalled();
+      expect((draft as any).invalidAttempts ?? 0).toBe(0);
+    });
+  });
+
   describe('isCancellationIntent — recognizes cancellation phrasing with filler words', () => {
     it.each([
       'Eliminar esa reserva',
