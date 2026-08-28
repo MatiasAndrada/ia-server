@@ -1711,22 +1711,14 @@ export class WhatsAppHandler {
             return true;
           }
 
-          draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
-          await ReservationService.saveDraft(draft);
-
-          if (draft.invalidAttempts >= 2) {
-            await ReservationService.deleteDraft(conversationId);
-            await this.sendWhatsAppMessage(
-              businessId,
-              jid,
-              templates.tooManyInvalidAttempts()
-            );
-          } else {
+          if (isPureNoiseMessage(trimmedChoice)) {
             await this.sendWhatsAppMessage(
               businessId,
               jid,
               templates.scheduleChoiceInvalid(this.scheduleChoiceOptionCount(draft))
             );
+          } else {
+            await this.answerMenuDigression(businessId, jid, messageText, conversationId, draft);
           }
           return true;
         }
@@ -2329,8 +2321,11 @@ export class WhatsAppHandler {
             const dayLabel = describeBaDateKey(dateKey, nowInBuenosAires());
             await this.sendWhatsAppMessage(businessId, jid, await this.buildAskTimeMessage(businessId, dateKey, dayLabel));
             return true;
-          } else {
+          } else if (isPureNoiseMessage(messageText.trim())) {
             await this.sendWhatsAppMessage(businessId, jid, templates.editMenuInvalidChoice());
+            return true;
+          } else {
+            await this.answerMenuDigression(businessId, jid, messageText, conversationId, draft);
             return true;
           }
         }
@@ -2364,13 +2359,10 @@ export class WhatsAppHandler {
             return true;
           }
 
-          draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
-          if (draft.invalidAttempts >= 2) {
-            await ReservationService.deleteDraft(conversationId);
-            await this.sendWhatsAppMessage(businessId, jid, templates.tooManyInvalidAttempts());
-          } else {
-            await ReservationService.saveDraft(draft);
+          if (isPureNoiseMessage(trimmedSummary)) {
             await this.sendWhatsAppMessage(businessId, jid, templates.confirmSummaryInvalidChoice());
+          } else {
+            await this.answerMenuDigression(businessId, jid, messageText, conversationId, draft);
           }
           return true;
         }
@@ -2439,11 +2431,15 @@ export class WhatsAppHandler {
             return true;
           }
 
-          await this.sendWhatsAppMessage(
-            businessId,
-            jid,
-            draft.eventId ? templates.summaryEditMenuEvent() : templates.editMenuInvalidChoice()
-          );
+          if (isPureNoiseMessage(messageText.trim())) {
+            await this.sendWhatsAppMessage(
+              businessId,
+              jid,
+              draft.eventId ? templates.summaryEditMenuEvent() : templates.editMenuInvalidChoice()
+            );
+          } else {
+            await this.answerMenuDigression(businessId, jid, messageText, conversationId, draft);
+          }
           return true;
         }
 
@@ -2570,13 +2566,10 @@ export class WhatsAppHandler {
             return true;
           }
 
-          draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
-          if (draft.invalidAttempts >= 2) {
-            await ReservationService.deleteDraft(conversationId);
-            await this.sendWhatsAppMessage(businessId, jid, templates.reservationKept());
-          } else {
-            await ReservationService.saveDraft(draft);
+          if (isPureNoiseMessage(messageText.trim())) {
             await this.sendWhatsAppMessage(businessId, jid, templates.cancelMenuInvalidChoice());
+          } else {
+            await this.answerMenuDigression(businessId, jid, messageText, conversationId, draft);
           }
           return true;
         }
@@ -4019,6 +4012,50 @@ export class WhatsAppHandler {
     }
 
     return sanitized;
+  }
+
+  /**
+   * Answers a message that didn't match one of a numbered menu's options
+   * (edit_menu, schedule_choice, confirm_summary, summary_edit_menu,
+   * cancel_menu) without touching the draft or its step. A reply landing here
+   * either asks something unrelated, or answers a question the agent itself
+   * asked earlier — in both cases the menu must stay exactly as it was so the
+   * customer can still pick an option whenever they get to it, instead of
+   * burning an invalid attempt that can cancel the whole flow over a
+   * legitimate digression. Bare noise (no letters at all) is excluded by the
+   * caller and gets the step's own canned re-ask instead, since there the
+   * agent has nothing real to answer and risks hallucinating a fake flow.
+   */
+  private async answerMenuDigression(
+    businessId: string,
+    jid: string,
+    messageText: string,
+    conversationId: string,
+    draft: ReservationDraft
+  ): Promise<void> {
+    const agent = agentRegistry.get('waitlist');
+    if (!agent) {
+      logger.error('Waitlist agent not found for menu digression', { conversationId });
+      return;
+    }
+
+    const business = await SupabaseService.getBusinessById(businessId);
+    const activeEvents = await SupabaseService.getActiveEvents(businessId);
+    const phone = this.normalizeWhatsAppNumber(jid);
+
+    const naturalResponse = await agentService.generateResponse(messageText, agent, conversationId, {
+      businessId,
+      businessName: business?.name,
+      businessAddress: formatBusinessAddress(business?.address, business?.city),
+      businessHours: formatWeeklyHoursForPrompt(business?.weekly_hours as WeeklyHours | null | undefined),
+      businessDescription: business?.description ?? undefined,
+      businessEvents: formatActiveEventsForPrompt(activeEvents, nowInBuenosAires()),
+      phone,
+      hasActiveDraft: true,
+      currentStep: draft.step,
+    });
+
+    await this.sendWhatsAppMessage(businessId, jid, this.sanitizeAgentResponse(naturalResponse.response, draft));
   }
 
   private normalizeWhatsAppNumber(jid: string): string {
