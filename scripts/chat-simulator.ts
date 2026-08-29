@@ -123,6 +123,18 @@ async function main(): Promise<void> {
   // agente se configura acá a mano. Se puede alternar en vivo con /mode.
   configureAgentMode(process.env.AGENT_MODE, process.env.AGENT_V2_BUSINESS_IDS);
 
+  // El handler exige `whatsapp_session_id` para procesar un mensaje (si no,
+  // contesta "el servicio no está disponible"). Acá esa comprobación no aplica:
+  // el simulador YA reemplazó el transporte por la terminal, así que la sesión
+  // real de WhatsApp es irrelevante. Sin este parche no se puede probar contra
+  // un negocio de prueba, que es justamente el que no tiene WhatsApp conectado.
+  const originalGetBusinessById = SupabaseService.getBusinessById.bind(SupabaseService);
+  SupabaseService.getBusinessById = async (id: string) => {
+    const found = await originalGetBusinessById(id);
+    if (!found) return null;
+    return { ...found, whatsapp_session_id: found.whatsapp_session_id ?? 'simulator-session' };
+  };
+
   const business = await SupabaseService.getBusinessById(BUSINESS_ID as string);
   if (!business) {
     console.error(`❌ No encontré el negocio ${BUSINESS_ID} en Supabase. ¿Es un business_id de prueba válido?`);
