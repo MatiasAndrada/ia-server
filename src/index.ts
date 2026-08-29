@@ -8,6 +8,7 @@ import helmet from 'helmet';
 import cors from 'cors';
 import compression from 'compression';
 import { OpenRouterConfig } from './config/openrouter.js';
+import { configureAgentMode } from './agent/feature-flag.js';
 import { RedisConfig } from './config/redis.js';
 import { SupabaseConfig } from './config/supabase.js';
 import { BaileysService } from './services/baileys.service.js';
@@ -80,6 +81,11 @@ function getEnvConfig(): EnvConfig {
     redisUrl: process.env.REDIS_URL || 'redis://localhost:6379',
     logLevel: process.env.LOG_LEVEL || 'info',
     supabaseUrl: process.env.SUPABASE_URL,
+    agentMode: process.env.AGENT_MODE?.trim().toLowerCase() === 'v2' ? 'v2' : 'v1',
+    agentV2BusinessIds: (process.env.AGENT_V2_BUSINESS_IDS || '')
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean),
     supabaseKey: process.env.SUPABASE_KEY,
     useHttps: process.env.USE_HTTPS === 'true',
     sslKeyPath: process.env.SSL_KEY_PATH,
@@ -112,6 +118,7 @@ async function initializeApp() {
 
     // Initialize OpenRouter
     OpenRouterConfig.initialize(config);
+    configureAgentMode(config.agentMode, config.agentV2BusinessIds.join(','));
 
     // Verify OpenRouter connection
     const openRouterHealthy = await OpenRouterConfig.healthCheck();

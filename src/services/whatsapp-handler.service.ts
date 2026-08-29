@@ -36,6 +36,8 @@ import {
   DETECTION_THRESHOLD,
 } from '../i18n/detect.js';
 import { isMultilingualGreeting } from '../i18n/keywords.js';
+import { isAgentV2Enabled } from '../agent/feature-flag.js';
+import { handleTurn } from '../agent/orchestrator.js';
 import { extractReservationUpdate, ReservationSlots } from './reservation-nlu.service.js';
 import { planReservationActions, countActionableIntents, PlannedAction } from './reservation-planner.service.js';
 import {
@@ -331,6 +333,18 @@ export class WhatsAppHandler {
       );
       resolvedLanguage = language;
 
+      // Punto ÚNICO de bifurcación v1/v2. Va acá a propósito: después del
+      // debounce, del lock y de la resolución de idioma (todo eso lo comparten
+      // las dos implementaciones), y antes de la cascada de gates de v1, que es
+      // justamente lo que v2 reemplaza. El resto del handler no se entera de
+      // que existe un modo nuevo.
+      if (isAgentV2Enabled(businessId)) {
+        await runWithLanguage(language, () =>
+          this._processMessageWithAgentV2(message, businessStatus, phone, conversationId, language)
+        );
+        return;
+      }
+
       await runWithLanguage(language, () =>
         this._processMessageLocalized(message, businessStatus, phone, conversationId, isExplicit)
       );
@@ -349,6 +363,61 @@ export class WhatsAppHandler {
       await runWithLanguage(resolvedLanguage, () =>
         this.sendWhatsAppMessage(message.businessId, message.from, templates.genericError())
       );
+    }
+  }
+
+  /**
+   * Camino del agente v2: un solo cerebro con tool-calling.
+   *
+   * No hay pasos ni gates — el orquestador recibe el mensaje y devuelve lo que
+   * haya que enviar. La única responsabilidad que queda acá es entregar esos
+   * mensajes por WhatsApp, respetando el mismo dedupe de salida que v1.
+   */
+  private async _processMessageWithAgentV2(
+    message: BaileysMessage,
+    businessStatus: Business,
+    phone: string,
+    conversationId: string,
+    language: SupportedLanguage
+  ): Promise<void> {
+    const { from, message: messageText, businessId } = message;
+
+    // Mismo criterio que v1: si el comercio desconectó WhatsApp, se avisa una
+    // vez y no se procesa nada.
+    const isActive =
+      businessStatus.whatsapp_session_id !== null && businessStatus.whatsapp_session_id !== undefined;
+    if (!isActive) {
+      if (await this.shouldSendInactiveFallback(businessId, phone)) {
+        await this.sendWhatsAppMessage(businessId, from, templates.inactiveFallback());
+      }
+      return;
+    }
+
+    try {
+      const result = await handleTurn({
+        businessId,
+        conversationId,
+        phone,
+        jid: from,
+        messageText,
+        language,
+        businessName: businessStatus.name,
+      });
+
+      for (const text of result.messages) {
+        await this.sendWhatsAppMessage(businessId, from, text);
+      }
+
+      logger.debug('Agent v2 turn completed', {
+        conversationId,
+        businessId,
+        tools: result.toolsCalled,
+        iterations: result.iterations,
+        outbound: result.messages.length,
+      });
+    } catch (error) {
+      logger.error('Agent v2 turn failed', { error, conversationId, businessId });
+      await this.sendWhatsAppMessage(businessId, from, templates.genericError());
     }
   }
 

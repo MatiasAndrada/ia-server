@@ -183,10 +183,45 @@ export interface ConversationHistory {
 }
 
 // LLM (OpenRouter) Types
-export interface LlmMessage {
+
+/**
+ * Mensaje de texto plano — el caso que ya existía y sigue siendo el 95% de los
+ * call sites (`{ role: 'user', content: '...' }`).
+ */
+export interface LlmTextMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
 }
+
+/**
+ * Respuesta del assistant que pidió ejecutar herramientas. Se empuja al
+ * historial TAL CUAL vino del modelo antes de los `LlmToolResultMessage`
+ * correspondientes: OpenRouter valida que cada `tool_call_id` de un mensaje
+ * `tool` tenga su `tool_calls[].id` en el assistant inmediatamente anterior.
+ *
+ * `content` puede venir null cuando el modelo sólo llamó herramientas sin
+ * texto acompañante — es el caso normal, no un error.
+ */
+export interface LlmAssistantToolCallMessage {
+  role: 'assistant';
+  content: string | null;
+  tool_calls: LlmToolCall[];
+}
+
+/**
+ * Resultado de UNA herramienta, devuelto al modelo. `content` es siempre
+ * string: el JSON del resultado va serializado (OpenRouter no acepta objetos
+ * acá). `tool_call_id` debe coincidir con el id que emitió el modelo.
+ */
+export interface LlmToolResultMessage {
+  role: 'tool';
+  tool_call_id: string;
+  /** Nombre de la función. Opcional en el spec, pero ayuda a los modelos a alinear resultados. */
+  name?: string;
+  content: string;
+}
+
+export type LlmMessage = LlmTextMessage | LlmAssistantToolCallMessage | LlmToolResultMessage;
 
 export interface LlmGenerationOptions {
   temperature?: number;
@@ -200,6 +235,13 @@ export interface LlmGenerationOptions {
    * this bounds that so the visible answer always has room.
    */
   reasoningMaxTokens?: number;
+  /**
+   * Se envía como `session_id` (sticky routing de OpenRouter). Fijarlo al
+   * conversationId mantiene todas las iteraciones de un turno — y los turnos
+   * sucesivos de la misma conversación — en el mismo proveedor, que es la
+   * condición para que el prompt caching acierte.
+   */
+  sessionId?: string;
 }
 
 export interface LlmToolDefinition {
@@ -230,6 +272,20 @@ export interface OpenRouterChatCompletionRequest {
   reasoning?: { max_tokens?: number };
   tools?: LlmToolDefinition[];
   tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
+  /**
+   * false obliga al modelo a pedir una herramienta por vez. Lo dejamos en true
+   * (default de OpenRouter): el orquestador ejecuta el batch en paralelo y
+   * devuelve todos los resultados juntos, que es lo que hace que "cancelá la
+   * del viernes y creá una para mañana" se resuelva en un solo turno.
+   */
+  parallel_tool_calls?: boolean;
+  /**
+   * Sticky routing de OpenRouter: fija el mismo endpoint de proveedor entre
+   * requests de una misma conversación para que el prompt caching acierte.
+   * Sin esto cada iteración del loop puede caer en otro proveedor y perder el
+   * prefijo cacheado.
+   */
+  session_id?: string;
 }
 
 export interface OpenRouterChatCompletionResponse {
@@ -278,6 +334,10 @@ export interface EnvConfig {
   redisUrl: string;
   logLevel: string;
   supabaseUrl?: string;
+  /** 'v1' = flujo determinista; 'v2' = orquestador con tool-calling (ver src/agent/). */
+  agentMode: 'v1' | 'v2';
+  /** Lista blanca de comercios en v2 mientras el modo global sigue en v1. */
+  agentV2BusinessIds: string[];
   supabaseKey?: string; useHttps: boolean;
   sslKeyPath?: string;
   sslCertPath?: string;

@@ -29,6 +29,49 @@ export interface ChatWithActionsResult {
   usage?: OpenRouterChatCompletionResponse['usage'];
 }
 
+/**
+ * Tope de vueltas del loop de herramientas. 5 alcanza para el peor caso real
+ * (multi-acción: consultar reservas → cancelar una → verificar disponibilidad
+ * → crear la nueva → responder) y evita que un modelo en bucle queme tokens
+ * indefinidamente mientras el cliente espera en WhatsApp.
+ */
+const DEFAULT_MAX_TOOL_ITERATIONS = 5;
+
+export interface ExecutedToolCall {
+  name: string;
+  arguments: string;
+  output: unknown;
+}
+
+export interface ToolLoopResult {
+  /** Texto final del modelo (puede ser vacío si sólo hubo mensajes verbatim). */
+  content: string;
+  /** Toda herramienta ejecutada en el turno, en orden — de acá salen los `verbatim`. */
+  executedToolCalls: ExecutedToolCall[];
+  /** Historial resultante (assistant + tool incluidos) para persistir. */
+  messages: LlmMessage[];
+  model: string;
+  iterations: number;
+  /** true si se agotó el tope de iteraciones y hubo que forzar el cierre. */
+  exhausted: boolean;
+}
+
+/**
+ * OpenRouter exige `content` string en los mensajes `tool`. Un resultado con
+ * referencias circulares o un BigInt haría fallar el turno entero, así que el
+ * fallo de serialización se degrada a un error legible para el modelo.
+ */
+function safeSerializeToolOutput(output: unknown): string {
+  try {
+    return JSON.stringify(output ?? null);
+  } catch (error) {
+    logger.warn('Tool output could not be serialized', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+    return JSON.stringify({ ok: false, error: { code: 'unserializable_result' } });
+  }
+}
+
 export class OpenRouterService {
   private maxRetries = 2;
   private retryDelay = 500; // ms — OpenRouter's own `models` fallback already covers model-level failover
@@ -123,6 +166,124 @@ export class OpenRouterService {
   }
 
   /**
+   * Corre el ciclo completo pedido-de-herramientas → ejecución → resultado
+   * hasta que el modelo responde con texto y sin `tool_calls`.
+   *
+   * Es lo que `chatWithActions` NO hace: aquel lee `toolCalls` una sola vez y
+   * nunca le devuelve los resultados al modelo, así que sirve para extracción
+   * one-shot pero no para un agente que encadena decisiones.
+   *
+   * Detalles del contrato de OpenRouter que este método respeta:
+   * - `tools` se reenvía en CADA request, también en la última: si se omite,
+   *   el router no puede validar el schema y rechaza el historial que contiene
+   *   mensajes `tool`.
+   * - El mensaje del assistant se empuja al historial tal cual vino (con sus
+   *   `tool_calls`) ANTES de los resultados; cada `tool_call_id` tiene que
+   *   existir en el assistant inmediatamente anterior.
+   * - Las llamadas de un mismo batch se ejecutan en paralelo y sus resultados
+   *   se agregan todos juntos, en el orden en que el modelo las pidió.
+   *
+   * `executor` nunca debe lanzar: un error de herramienta es información para
+   * el modelo (puede reintentar con otros argumentos o explicarle al cliente),
+   * no una falla del turno. Se serializa como `{ ok: false, ... }`.
+   */
+  async runToolLoop(
+    messages: LlmMessage[],
+    systemPrompt: string,
+    tools: LlmToolDefinition[],
+    executor: (call: LlmToolCall) => Promise<unknown>,
+    options?: LlmGenerationOptions & { maxIterations?: number; sessionId?: string },
+    purpose: AiCallPurpose = 'orchestrator'
+  ): Promise<ToolLoopResult> {
+    const maxIterations = options?.maxIterations ?? DEFAULT_MAX_TOOL_ITERATIONS;
+    const working: LlmMessage[] = [...messages];
+    const executed: ExecutedToolCall[] = [];
+    let lastModel = 'none';
+
+    for (let iteration = 1; iteration <= maxIterations; iteration++) {
+      const result = await this.chatWithActions(
+        working,
+        systemPrompt,
+        tools,
+        options,
+        purpose
+      );
+      lastModel = result.model;
+
+      if (result.toolCalls.length === 0) {
+        return {
+          content: result.content,
+          executedToolCalls: executed,
+          messages: working,
+          model: lastModel,
+          iterations: iteration,
+          exhausted: false,
+        };
+      }
+
+      working.push({
+        role: 'assistant',
+        content: result.content || null,
+        tool_calls: result.toolCalls,
+      });
+
+      const outcomes = await Promise.all(
+        result.toolCalls.map(async (call) => {
+          const startedAt = Date.now();
+          const output = await executor(call);
+          return { call, output, durationMs: Date.now() - startedAt };
+        })
+      );
+
+      for (const { call, output, durationMs } of outcomes) {
+        executed.push({ name: call.function.name, arguments: call.function.arguments, output });
+        logEvent('info', 'ai.tool_call', {
+          purpose,
+          tool: call.function.name,
+          durationMs,
+          iteration,
+        });
+
+        working.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          name: call.function.name,
+          content: safeSerializeToolOutput(output),
+        });
+      }
+    }
+
+    // Tope agotado: el modelo sigue pidiendo herramientas. Se corta y se pide
+    // una respuesta final SIN tools, para que cierre el turno con texto en vez
+    // de dejar al cliente sin respuesta.
+    logEvent('warn', 'ai.tool_loop_exhausted', { purpose, maxIterations });
+
+    const closing = await this.chatWithActions(
+      [
+        ...working,
+        {
+          role: 'user',
+          content:
+            'Respondé ahora al cliente con la información que ya tenés. No pidas más herramientas.',
+        },
+      ],
+      systemPrompt,
+      tools,
+      { ...options, temperature: 0.3 },
+      purpose
+    );
+
+    return {
+      content: closing.content,
+      executedToolCalls: executed,
+      messages: working,
+      model: closing.model || lastModel,
+      iterations: maxIterations,
+      exhausted: true,
+    };
+  }
+
+  /**
    * Turn a short, informal closure reason (e.g. "duelo", "vacaciones") into a
    * professional, client-facing message explaining why the business isn't
    * taking reservations on a blocked date. Falls back to a generic-but-honest
@@ -184,7 +345,10 @@ export class OpenRouterService {
       ...(mergedOptions.reasoningMaxTokens
         ? { reasoning: { max_tokens: mergedOptions.reasoningMaxTokens } }
         : {}),
-      ...(tools && tools.length > 0 ? { tools, tool_choice: 'auto' } : {}),
+      ...(tools && tools.length > 0 ? { tools, tool_choice: 'auto' as const } : {}),
+      // Sticky routing: mantiene el mismo proveedor entre iteraciones y turnos
+      // para no perder el prefijo cacheado (ver LlmGenerationOptions.sessionId).
+      ...(mergedOptions.sessionId ? { session_id: mergedOptions.sessionId } : {}),
     };
 
     try {

@@ -40,6 +40,10 @@ export type LogEvent =
   | 'ai.failed'
   | 'ai.degraded'
   | 'ai.fallback_model'
+  // Agente v2: una herramienta ejecutada dentro del loop de tool-calling.
+  | 'ai.tool_call'
+  // Agente v2: el modelo agotó el tope de iteraciones sin cerrar el turno.
+  | 'ai.tool_loop_exhausted'
 
   // ─── Dominio ───
   | 'reservation.draft_started'
@@ -93,6 +97,8 @@ export const EVENT_LABELS: Record<LogEvent, string> = {
   'ai.failed': 'LLM call failed',
   'ai.degraded': 'LLM unavailable, degraded response',
   'ai.fallback_model': 'LLM served by fallback model',
+  'ai.tool_call': 'Agent tool executed',
+  'ai.tool_loop_exhausted': 'Agent tool loop hit its iteration cap',
 
   'reservation.draft_started': 'Reservation draft started',
   'reservation.created': 'Reservation created',
@@ -131,4 +137,6 @@ export type AiCallPurpose =
   | 'intent'
   | 'reservation_nlu'
   | 'reservation_planner'
-  | 'blocked_date_reason';
+  | 'blocked_date_reason'
+  /** Agente v2: una iteración del loop de tool-calling (ver src/agent/orchestrator.ts). */
+  | 'orchestrator';
