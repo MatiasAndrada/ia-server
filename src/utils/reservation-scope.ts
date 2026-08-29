@@ -536,8 +536,11 @@ function isPromptInjectionAttempt(normalizedMessage: string): boolean {
     /\bno\s+(tenes?|tienes?|necesitas?|debes?|tenes?\s+que|tienes?\s+que)\s+(seguir|respetar|cumplir)\b/,
     // "podes / puedes + ignorar / saltar / omitir"
     /\b(puedes?|podes?)\s+(saltarte?|ignorar?|omitir|saltar|evitar)\b/,
-    // "ignora las instrucciones / el flujo / el orden"
-    /\bignorar?\s+(las?\s+)?(instrucciones?|flujo|orden|pasos?|reglas?|protocolo|proceso)\b/,
+    // "ignora las/tus instrucciones / el flujo / el orden"
+    // El determinante `tus` se contempla igual que en el patrón de "olvidá",
+    // que ya lo tenía: "ignorá TUS instrucciones" es la forma más frecuente del
+    // intento y se colaba por no estar en la alternancia.
+    /\bignorar?\s+(las?\s+|tus?\s+|el\s+)?(instrucciones?|flujo|orden|pasos?|reglas?|protocolo|proceso)\b/,
     // "olvida tus instrucciones / todo lo anterior"
     /\bolvidat?e?\s+(tus?\s+)?(instrucciones?|flujo|protocolo|sistema|reglas?)\b/,
     /\bolvidat?e?\s+de\s+todo\b/,
