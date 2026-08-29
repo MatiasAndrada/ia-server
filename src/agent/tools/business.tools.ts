@@ -129,9 +129,19 @@ export const showEventDetailsTool: AgentTool<ShowEventArgs> = {
         // Reservar un evento siempre queda pendiente de aprobación del local:
         // el modelo tiene que decirlo, no prometer una confirmación inmediata.
         requiresApproval: true,
+        // Instrucción explícita en el resultado, no sólo en el system prompt:
+        // el modelo la tiene delante justo cuando va a decidir el próximo paso.
+        howToReserve:
+          `Para reservar ESTE evento llamá a create_reservation con eventId: "${event.id}". ` +
+          'NO uses resolve_date ni check_availability: la fecha la fija el evento. ' +
+          'NO pases scheduledAt. Si omitís el eventId se crea una reserva común y se pierde el evento.',
       },
-      // Máximo 3, igual que v1: más que eso satura el chat.
-      attachments: event.imageUrls.slice(0, 3).map((imageUrl) => ({ imageUrl })),
+      // Máximo 3, igual que v1: más que eso satura el chat. La primera lleva el
+      // título como caption, también igual que v1 — llega antes que el texto.
+      attachments: event.imageUrls.slice(0, 3).map((imageUrl, index) => ({
+        imageUrl,
+        ...(index === 0 ? { caption: `🎉 *${event.title}*` } : {}),
+      })),
     };
   },
 };

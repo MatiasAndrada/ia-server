@@ -121,7 +121,41 @@ describe('handler — camino agente v2', () => {
   });
 
   describe('entrega de adjuntos', () => {
-    it('envía las imágenes después del texto', async () => {
+    it('envía las imágenes ANTES del texto, como hacía applyEventChoice en v1', async () => {
+      const order: string[] = [];
+      stubBaileys.sendMessage.mockImplementation(async (_b: string, _to: string, text: string) => {
+        order.push(`texto:${text}`);
+        sent.push(text);
+        return true;
+      });
+      stubBaileys.sendImageMessage.mockImplementation(
+        async (_b: string, _to: string, url: string, caption?: string) => {
+          order.push(`imagen:${url}`);
+          images.push({ url, caption });
+          return true;
+        }
+      );
+
+      jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue({
+        id: 'c1',
+        name: 'Matías',
+        preferred_language: 'es',
+      } as any);
+      jest.spyOn(orchestrator, 'handleTurn').mockResolvedValue({
+        messages: ['La noche de sushi es el sábado.'],
+        attachments: [{ imageUrl: 'https://x/1.jpg', caption: '🎉 *Noche de sushi*' }],
+        toolsCalled: ['show_event_details'],
+        iterations: 2,
+      });
+
+      await process('contame del evento de sushi');
+
+      // Las fotos enganchan y el detalle queda como último mensaje visible.
+      expect(order).toEqual(['imagen:https://x/1.jpg', 'texto:La noche de sushi es el sábado.']);
+      expect(images[0].caption).toBe('🎉 *Noche de sushi*');
+    });
+
+    it('envía todas las imágenes en orden', async () => {
       jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue({
         id: 'c1',
         name: 'Matías',

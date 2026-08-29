@@ -59,7 +59,7 @@ export class BaileysService {
   private startSessionInProgress: Set<string> = new Set();
   private outboundEchoGuard: Map<string, number> = new Map();
   private whatsAppHandler: WhatsAppHandler;
-  private readonly AUTH_DIR = path.join(process.cwd(), 'auth_sessions');
+  private readonly AUTH_DIR = path.join(process.cwd(), 'auth_sessions-v2');
   // Backoff exponencial con jitter para reconexión: nunca abandona la sesión
   // ante errores transitorios (428/408/503/515), solo crece el delay entre
   // intentos hasta un techo. Solo se deja de reintentar ante logout real (401)

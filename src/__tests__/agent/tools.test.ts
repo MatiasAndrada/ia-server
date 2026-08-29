@@ -244,9 +244,29 @@ describe('agent tool registry', () => {
 
       expect(result.ok).toBe(true);
       expect(result.attachments).toHaveLength(3);
-      expect(result.attachments?.[0]).toEqual({ imageUrl: 'https://x/1.jpg' });
+      expect(result.attachments?.[0].imageUrl).toBe('https://x/1.jpg');
       // El modelo tiene que avisar que la reserva de evento no queda confirmada sola.
       expect((result.data as any).requiresApproval).toBe(true);
+    });
+
+    it('pone el título como caption SÓLO en la primera foto', async () => {
+      jest.spyOn(SupabaseService, 'getActiveEvents').mockResolvedValue([EVENT] as any);
+
+      const result = await run('show_event_details', { eventId: 'ev-1' });
+
+      expect(result.attachments?.[0].caption).toBe('🎉 *Noche de sushi*');
+      expect(result.attachments?.[1].caption).toBeUndefined();
+    });
+
+    it('le dice al modelo cómo reservar el evento, en el propio resultado', async () => {
+      jest.spyOn(SupabaseService, 'getActiveEvents').mockResolvedValue([EVENT] as any);
+
+      const result = await run('show_event_details', { eventId: 'ev-1' });
+
+      // La instrucción viaja con el resultado y no sólo en el system prompt: el
+      // modelo la tiene delante justo cuando decide el próximo paso.
+      expect((result.data as any).howToReserve).toContain('ev-1');
+      expect((result.data as any).howToReserve).toContain('NO pases scheduledAt');
     });
 
     it('avisa cuando el comercio desactivó el evento entre el listado y la elección', async () => {
@@ -265,6 +285,73 @@ describe('agent tool registry', () => {
       // Listar cinco eventos no debe disparar quince imágenes.
       expect(result.attachments).toBeUndefined();
       expect((result.data as any).events[0].hasPhotos).toBe(true);
+    });
+  });
+
+  describe('create_reservation con evento', () => {
+    const EVENT_START = new Date(Date.now() + 4 * 86400000).toISOString();
+    const EVENT = {
+      id: 'ev-9',
+      title: 'Noche de Jazz',
+      description: null,
+      startsAt: EVENT_START,
+      imageUrls: [],
+    };
+
+    beforeEach(() => {
+      jest.spyOn(SupabaseService, 'getActiveEvents').mockResolvedValue([EVENT] as any);
+      jest.spyOn(SupabaseService, 'createReservation').mockResolvedValue({
+        success: true,
+        waitlistEntry: {
+          id: 'r-9',
+          display_code: 'JZ01',
+          status: 'WAITING',
+          scheduled_at: EVENT_START,
+        },
+      } as any);
+    });
+
+    it('toma la fecha del evento e IGNORA el scheduledAt que mandó el modelo', async () => {
+      const createSpy = jest.spyOn(SupabaseService, 'createReservation');
+
+      await run('create_reservation', {
+        customerName: 'Ana',
+        partySize: 2,
+        eventId: 'ev-9',
+        // El modelo resolvió una fecha por su cuenta: no debe prevalecer.
+        scheduledAt: '2020-01-01T00:00:00.000Z',
+      });
+
+      expect(createSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ eventId: 'ev-9', scheduledAt: EVENT_START })
+      );
+    });
+
+    it('rechaza en vez de crear una reserva común si el evento ya no existe', async () => {
+      jest.spyOn(SupabaseService, 'getActiveEvents').mockResolvedValue([]);
+      const createSpy = jest.spyOn(SupabaseService, 'createReservation');
+
+      const result = await run('create_reservation', {
+        customerName: 'Ana',
+        partySize: 2,
+        eventId: 'ev-borrado',
+      });
+
+      // Crear una reserva común en silencio sería peor que fallar: el cliente
+      // pidió un evento.
+      expect(result).toMatchObject({ ok: false, error: { code: 'event_not_available' } });
+      expect(createSpy).not.toHaveBeenCalled();
+    });
+
+    it('confirma como "recibida" (pendiente de aprobación), no como confirmada', async () => {
+      const result = await run('create_reservation', {
+        customerName: 'Ana',
+        partySize: 2,
+        eventId: 'ev-9',
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.verbatim).toContain('Noche de Jazz');
     });
   });
 

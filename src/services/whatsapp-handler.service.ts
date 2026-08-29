@@ -496,14 +496,17 @@ export class WhatsAppHandler {
         businessName: businessStatus.name,
       });
 
-      for (const text of result.messages) {
-        await this.sendWhatsAppMessage(businessId, from, text);
-      }
-
-      // Las imágenes van después del texto para que el cliente lea primero de
-      // qué se trata — mismo orden que usaba `applyEventChoice` en v1.
+      // Las imágenes van PRIMERO y el texto debajo — es el orden que usaba
+      // `applyEventChoice` en v1: las fotos enganchan y el detalle queda como
+      // el último mensaje visible, que es el que el cliente tiene a mano para
+      // responder. Secuencial a propósito: Baileys serializa los envíos y en
+      // paralelo las fotos llegan desordenadas.
       for (const attachment of result.attachments) {
         await this.sendWhatsAppImage(businessId, from, attachment.imageUrl, attachment.caption);
+      }
+
+      for (const text of result.messages) {
+        await this.sendWhatsAppMessage(businessId, from, text);
       }
 
       logger.debug('Agent v2 turn completed', {

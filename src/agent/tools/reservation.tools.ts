@@ -1,7 +1,7 @@
 import { AgentTool, ToolResult, fail, ok } from './types.js';
 import { loadBusinessRules } from './business-rules.js';
 import { SupabaseService } from '../../services/supabase.service.js';
-import { WaitlistEntry } from '../../types/index.js';
+import { BusinessEvent, WaitlistEntry } from '../../types/index.js';
 import {
   describeScheduledAtUtc,
   nowInBuenosAires,
@@ -41,7 +41,9 @@ export const createReservationTool: AgentTool<CreateArgs> = {
       description:
         'Crea la reserva. Llamala sólo cuando ya tenés nombre, cantidad de personas y — si el cliente eligió ' +
         'día y horario — un scheduledAt que devolvió check_availability. Sin scheduledAt la reserva queda para ' +
-        'el turno actual (el cliente viene ahora). Devuelve el mensaje de confirmación ya redactado: no lo reescribas.',
+        'el turno actual (el cliente viene ahora). Devuelve el mensaje de confirmación ya redactado: no lo reescribas. ' +
+        'RESERVA DE EVENTO: si el cliente eligió un evento, pasá su eventId y NO pases scheduledAt — la fecha la ' +
+        'fija el evento. Omitir el eventId crea una reserva común y pierde el evento.',
       parameters: {
         type: 'object',
         properties: {
@@ -58,7 +60,9 @@ export const createReservationTool: AgentTool<CreateArgs> = {
           },
           eventId: {
             type: 'string',
-            description: 'Id del evento, sólo si el cliente eligió uno de list_events.',
+            description:
+              'Id del evento cuando el cliente eligió uno (de list_events o show_event_details). ' +
+              'Obligatorio para una reserva de evento: sin esto queda como reserva común.',
           },
         },
         required: ['customerName', 'partySize'],
@@ -91,6 +95,31 @@ export const createReservationTool: AgentTool<CreateArgs> = {
       );
     }
 
+    // Reserva de evento: la fecha SIEMPRE sale del evento, nunca del modelo.
+    //
+    // El modelo tiende a tratar un evento como una reserva común — resolver una
+    // fecha con check_availability y mandar ese scheduledAt — y así se perdía la
+    // asociación. Acá se ignora lo que haya mandado y se toma `startsAt` real
+    // del evento, que es lo mismo que hacía `applyEventChoice` en v1. Si el
+    // evento no existe se corta: es preferible a crear una reserva común
+    // silenciosamente cuando el cliente pidió un evento.
+    let effectiveScheduledAt = scheduledAt ?? null;
+    let event: BusinessEvent | undefined;
+
+    if (eventId) {
+      const events = await SupabaseService.getActiveEvents(ctx.businessId);
+      event = events.find((e) => e.id === eventId);
+
+      if (!event) {
+        return fail(
+          'event_not_available',
+          'Ese evento ya no está disponible. Avisale al cliente y ofrecele los que sí están, o una reserva común.'
+        );
+      }
+
+      effectiveScheduledAt = event.startsAt;
+    }
+
     if (ctx.dryRun) {
       // Modo sombra: se simula el alta para que el modelo cierre el turno igual
       // y el resultado sea comparable, pero no se toca la base.
@@ -99,8 +128,9 @@ export const createReservationTool: AgentTool<CreateArgs> = {
         reservationId: 'dry-run',
         displayCode: 'DRYRUN',
         partySize,
-        whenLabel: scheduledAt ?? 'turno actual',
+        whenLabel: effectiveScheduledAt ?? 'turno actual',
         status: 'WAITING',
+        eventId: eventId ?? null,
         dryRun: true,
       });
     }
@@ -111,7 +141,7 @@ export const createReservationTool: AgentTool<CreateArgs> = {
       customerLastName: customerLastName?.trim() || null,
       customerPhone: ctx.phone,
       partySize,
-      scheduledAt: scheduledAt ?? null,
+      scheduledAt: effectiveScheduledAt,
       eventId: eventId ?? null,
       source: 'AI_CHAT',
     });
@@ -142,7 +172,8 @@ export const createReservationTool: AgentTool<CreateArgs> = {
       : templates.instantTurnLabel();
 
     const fullName = [customerName.trim(), customerLastName?.trim()].filter(Boolean).join(' ');
-    const eventTitle = eventId ? await SupabaseService.getEventTitle(eventId) : null;
+    // El evento ya se resolvió arriba, así que no hace falta volver a pedir el título.
+    const eventTitle = event?.title ?? null;
 
     // Un evento siempre queda pendiente de aprobación del comercio, así que el
     // mensaje es distinto: "recibida" en vez de "confirmada".
