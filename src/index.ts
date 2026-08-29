@@ -86,6 +86,10 @@ function getEnvConfig(): EnvConfig {
       .split(',')
       .map((id) => id.trim())
       .filter(Boolean),
+    agentShadowBusinessIds: (process.env.AGENT_SHADOW_BUSINESS_IDS || '')
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean),
     supabaseKey: process.env.SUPABASE_KEY,
     useHttps: process.env.USE_HTTPS === 'true',
     sslKeyPath: process.env.SSL_KEY_PATH,
@@ -118,7 +122,11 @@ async function initializeApp() {
 
     // Initialize OpenRouter
     OpenRouterConfig.initialize(config);
-    configureAgentMode(config.agentMode, config.agentV2BusinessIds.join(','));
+    configureAgentMode(
+      config.agentMode,
+      config.agentV2BusinessIds.join(','),
+      config.agentShadowBusinessIds.join(',')
+    );
 
     // Verify OpenRouter connection
     const openRouterHealthy = await OpenRouterConfig.healthCheck();

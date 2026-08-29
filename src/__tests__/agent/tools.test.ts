@@ -165,6 +165,69 @@ describe('agent tool registry', () => {
     });
   });
 
+  describe('modo sombra (dryRun) — ninguna herramienta escribe', () => {
+    const SHADOW_CTX: ToolContext = { ...CTX, dryRun: true };
+
+    function runShadow(name: string, args: object = {}) {
+      return runWithLanguage('es', () => executeToolCall(call(name, args), SHADOW_CTX));
+    }
+
+    it('create_reservation no toca la base pero simula el alta', async () => {
+      const createSpy = jest.spyOn(SupabaseService, 'createReservation');
+
+      const result = await runShadow('create_reservation', { customerName: 'Ana', partySize: 4 });
+
+      expect(createSpy).not.toHaveBeenCalled();
+      expect(result.ok).toBe(true);
+      // Simula el éxito para que el modelo cierre el turno y sea comparable.
+      expect((result.data as any).dryRun).toBe(true);
+    });
+
+    it('cancel_reservation no cancela la reserva real', async () => {
+      jest
+        .spyOn(SupabaseService, 'getActiveReservationsByPhone')
+        .mockResolvedValue([{ id: 'r1', status: 'WAITING', party_size: 2, scheduled_at: null }] as any);
+      const statusSpy = jest.spyOn(SupabaseService, 'updateReservationStatus');
+
+      const result = await runShadow('cancel_reservation', { reservationId: 'r1' });
+
+      expect(statusSpy).not.toHaveBeenCalled();
+      expect((result.data as any).dryRun).toBe(true);
+    });
+
+    it('modify_reservation no actualiza nada', async () => {
+      jest
+        .spyOn(SupabaseService, 'getActiveReservationsByPhone')
+        .mockResolvedValue([{ id: 'r1', status: 'WAITING', party_size: 2, scheduled_at: null }] as any);
+      const partySpy = jest.spyOn(SupabaseService, 'updateReservationPartySize');
+
+      await runShadow('modify_reservation', { reservationId: 'r1', partySize: 6 });
+
+      expect(partySpy).not.toHaveBeenCalled();
+    });
+
+    it('update_customer_name no pisa el nombre real del cliente', async () => {
+      const nameSpy = jest.spyOn(SupabaseService, 'updateCustomerNameByPhone');
+
+      await runShadow('update_customer_name', { name: 'Nombre Fantasma' });
+
+      expect(nameSpy).not.toHaveBeenCalled();
+    });
+
+    it('set_language no cambia la preferencia real', async () => {
+      const langSpy = jest.spyOn(SupabaseService, 'updateCustomerLanguage');
+
+      await runShadow('set_language', { language: 'en' });
+
+      expect(langSpy).not.toHaveBeenCalled();
+    });
+
+    it('las herramientas de lectura siguen funcionando igual', async () => {
+      const result = await runShadow('resolve_date', { dateText: 'mañana' });
+      expect(result.ok).toBe(true);
+    });
+  });
+
   describe('show_event_details — fotos del evento', () => {
     const EVENT = {
       id: 'ev-1',

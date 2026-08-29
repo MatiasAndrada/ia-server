@@ -338,6 +338,8 @@ export interface EnvConfig {
   agentMode: 'v1' | 'v2';
   /** Lista blanca de comercios en v2 mientras el modo global sigue en v1. */
   agentV2BusinessIds: string[];
+  /** Comercios donde v2 corre en sombra: v1 responde, v2 se computa y se loguea. */
+  agentShadowBusinessIds: string[];
   supabaseKey?: string; useHttps: boolean;
   sslKeyPath?: string;
   sslCertPath?: string;

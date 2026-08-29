@@ -56,6 +56,12 @@ export interface TurnInput {
   messageText: string;
   language: SupportedLanguage;
   businessName: string;
+  /**
+   * Modo sombra: el turno se computa entero para poder compararlo con v1, pero
+   * ninguna herramienta escribe y la respuesta no se envía. Usa su propio
+   * historial (ver state.historyKey).
+   */
+  dryRun?: boolean;
 }
 
 /**
@@ -64,6 +70,7 @@ export interface TurnInput {
  */
 export async function handleTurn(input: TurnInput): Promise<TurnResult> {
   const { businessId, conversationId, phone, jid, messageText, language, businessName } = input;
+  const dryRun = input.dryRun ?? false;
 
   // --- Guards deterministas: nunca llegan al modelo ---
   const scope = evaluateReservationScope(messageText, { businessName });
@@ -84,7 +91,7 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
   const [profile, rules, history] = await Promise.all([
     loadCustomerProfile(phone, businessId),
     loadBusinessRules(businessId),
-    loadHistory(conversationId),
+    loadHistory(conversationId, dryRun),
   ]);
 
   if (!rules) {
@@ -101,7 +108,7 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
 
   const messages: LlmMessage[] = [...history, { role: 'user', content: messageText }];
 
-  const ctx: ToolContext = { businessId, conversationId, phone, jid, language };
+  const ctx: ToolContext = { businessId, conversationId, phone, jid, language, dryRun };
 
   // Los `verbatim` se juntan acá durante la ejecución del loop: son texto ya
   // aprobado que se envía sin pasar por el modelo.
@@ -139,7 +146,7 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
   if (finalText) {
     toPersist.push({ role: 'assistant', content: finalText });
   }
-  await saveHistory(conversationId, toPersist);
+  await saveHistory(conversationId, toPersist, dryRun);
 
   // Un turno es improductivo si el modelo agotó las iteraciones sin cerrar, o
   // si todas las herramientas que pidió fallaron. Dos seguidos y se corta: sin
@@ -149,7 +156,7 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
     result.executedToolCalls.length > 0 &&
     result.executedToolCalls.every((c) => (c.output as ToolResult | undefined)?.ok === false);
 
-  if (result.exhausted || allToolsFailed) {
+  if (!dryRun && (result.exhausted || allToolsFailed)) {
     const streak = await bumpUnproductiveStreak(conversationId);
     if (streak >= 2) {
       logger.warn('Agent v2: unproductive streak reached, handing off', {
@@ -166,7 +173,7 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
         iterations: result.iterations,
       };
     }
-  } else {
+  } else if (!dryRun) {
     await clearUnproductiveStreak(conversationId);
   }
 
@@ -186,7 +193,7 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
   logEvent('info', 'turn.completed', {
     conversationId,
     businessId,
-    via: 'agent_v2',
+    via: dryRun ? 'agent_v2_shadow' : 'agent_v2',
     iterations: result.iterations,
     tools: result.executedToolCalls.map((c) => c.name),
     exhausted: result.exhausted,

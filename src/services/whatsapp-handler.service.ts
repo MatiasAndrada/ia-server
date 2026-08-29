@@ -36,7 +36,7 @@ import {
   DETECTION_THRESHOLD,
 } from '../i18n/detect.js';
 import { isMultilingualGreeting } from '../i18n/keywords.js';
-import { isAgentV2Enabled } from '../agent/feature-flag.js';
+import { isAgentShadowEnabled, isAgentV2Enabled } from '../agent/feature-flag.js';
 import { handleTurn } from '../agent/orchestrator.js';
 import { appendAssistantMessage } from '../agent/state.js';
 import { extractReservationUpdate, ReservationSlots } from './reservation-nlu.service.js';
@@ -346,6 +346,14 @@ export class WhatsAppHandler {
         return;
       }
 
+      // Modo sombra: v2 computa el mismo turno en paralelo, sin escribir en la
+      // base ni enviar nada, y se loguea qué habría contestado. Es la forma de
+      // medirlo contra tráfico real sin exponer a ningún cliente. Deliberadamente
+      // sin await: la respuesta de v1 no debe esperar a la sombra.
+      if (isAgentShadowEnabled(businessId)) {
+        void this._runShadowTurn(message, businessStatus, phone, conversationId, language);
+      }
+
       await runWithLanguage(language, () =>
         this._processMessageLocalized(message, businessStatus, phone, conversationId, isExplicit)
       );
@@ -364,6 +372,57 @@ export class WhatsAppHandler {
       await runWithLanguage(resolvedLanguage, () =>
         this.sendWhatsAppMessage(message.businessId, message.from, templates.genericError())
       );
+    }
+  }
+
+  /**
+   * Corre v2 en sombra sobre un turno real: computa la respuesta completa pero
+   * NO la envía y NO escribe en la base (`dryRun`), y deja un evento con lo que
+   * habría contestado y qué herramientas usó.
+   *
+   * Se llama sin await a propósito. Cualquier error se traga acá mismo: la
+   * sombra es instrumentación, y no puede degradar ni demorar la conversación
+   * real bajo ninguna circunstancia.
+   */
+  private async _runShadowTurn(
+    message: BaileysMessage,
+    businessStatus: Business,
+    phone: string,
+    conversationId: string,
+    language: SupportedLanguage
+  ): Promise<void> {
+    const startedAt = Date.now();
+
+    try {
+      const result = await runWithLanguage(language, () =>
+        handleTurn({
+          businessId: message.businessId,
+          conversationId,
+          phone,
+          jid: message.from,
+          messageText: message.message,
+          language,
+          businessName: businessStatus.name,
+          dryRun: true,
+        })
+      );
+
+      logEvent('info', 'agent.shadow', {
+        conversationId,
+        businessId: message.businessId,
+        durationMs: Date.now() - startedAt,
+        inbound: message.message,
+        wouldReply: result.messages.join(' | '),
+        tools: result.toolsCalled,
+        iterations: result.iterations,
+        attachments: result.attachments.length,
+      });
+    } catch (error) {
+      logger.warn('Shadow turn failed (does not affect the customer)', {
+        conversationId,
+        businessId: message.businessId,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
     }
   }
 

@@ -16,6 +16,7 @@ import { logger } from '../utils/logger.js';
  */
 
 const HISTORY_KEY_PREFIX = 'agent_v2:';
+const SHADOW_KEY_PREFIX = 'agent_v2_shadow:';
 const HISTORY_TTL_SECONDS = 3600;
 
 /**
@@ -126,8 +127,14 @@ export async function loadCustomerProfile(
   }
 }
 
-function historyKey(conversationId: string): string {
-  return `${HISTORY_KEY_PREFIX}${conversationId}`;
+/**
+ * El modo sombra usa su propio namespace: la conversación que "imagina" v2
+ * diverge de la real desde el primer turno (responde distinto, así que el
+ * cliente contesta otra cosa). Compartir la key haría que cada flujo
+ * corrompiera la memoria del otro.
+ */
+function historyKey(conversationId: string, shadow = false): string {
+  return `${shadow ? SHADOW_KEY_PREFIX : HISTORY_KEY_PREFIX}${conversationId}`;
 }
 
 /**
@@ -135,10 +142,10 @@ function historyKey(conversationId: string): string {
  * degrada la conversación pero no la rompe, mientras que lanzar acá dejaría al
  * cliente sin respuesta.
  */
-export async function loadHistory(conversationId: string): Promise<LlmMessage[]> {
+export async function loadHistory(conversationId: string, shadow = false): Promise<LlmMessage[]> {
   try {
     if (!RedisConfig.isReady()) return [];
-    const raw = await RedisConfig.getClient().get(historyKey(conversationId));
+    const raw = await RedisConfig.getClient().get(historyKey(conversationId, shadow));
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? (parsed as LlmMessage[]) : [];
@@ -151,11 +158,15 @@ export async function loadHistory(conversationId: string): Promise<LlmMessage[]>
   }
 }
 
-export async function saveHistory(conversationId: string, messages: LlmMessage[]): Promise<void> {
+export async function saveHistory(
+  conversationId: string,
+  messages: LlmMessage[],
+  shadow = false
+): Promise<void> {
   try {
     if (!RedisConfig.isReady()) return;
     await RedisConfig.getClient().setEx(
-      historyKey(conversationId),
+      historyKey(conversationId, shadow),
       HISTORY_TTL_SECONDS,
       JSON.stringify(trimHistory(messages))
     );
@@ -226,6 +237,7 @@ export async function clearHistory(conversationId: string): Promise<void> {
   try {
     if (!RedisConfig.isReady()) return;
     await RedisConfig.getClient().del(historyKey(conversationId));
+    await RedisConfig.getClient().del(historyKey(conversationId, true));
   } catch (error) {
     logger.warn('Failed to clear agent history', { conversationId, error });
   }

@@ -56,6 +56,17 @@ export interface ToolContext {
   /** JID de WhatsApp, para los envíos que dispara una herramienta (ej. imágenes de evento). */
   jid: string;
   language: SupportedLanguage;
+  /**
+   * Modo sombra: v2 corre en paralelo a v1 sobre tráfico real para poder
+   * compararlos, pero el cliente ve la respuesta de v1. En ese modo NINGUNA
+   * herramienta puede escribir — crearía reservas fantasma, cancelaría las
+   * reales y pisaría el nombre o el idioma del cliente.
+   *
+   * Las herramientas de lectura ignoran esta bandera; las de escritura simulan
+   * el resultado para que el modelo siga razonando como si hubiera funcionado,
+   * que es lo que hace comparable el turno.
+   */
+  dryRun?: boolean;
 }
 
 /** Una herramienta: su schema para el modelo y su implementación. */

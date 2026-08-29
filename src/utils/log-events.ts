@@ -44,6 +44,8 @@ export type LogEvent =
   | 'ai.tool_call'
   // Agente v2: el modelo agotó el tope de iteraciones sin cerrar el turno.
   | 'ai.tool_loop_exhausted'
+  // Agente v2 en sombra: qué habría contestado sobre un turno real de v1.
+  | 'agent.shadow'
 
   // ─── Dominio ───
   | 'reservation.draft_started'
@@ -99,6 +101,7 @@ export const EVENT_LABELS: Record<LogEvent, string> = {
   'ai.fallback_model': 'LLM served by fallback model',
   'ai.tool_call': 'Agent tool executed',
   'ai.tool_loop_exhausted': 'Agent tool loop hit its iteration cap',
+  'agent.shadow': 'Shadow agent v2 turn (not sent to the customer)',
 
   'reservation.draft_started': 'Reservation draft started',
   'reservation.created': 'Reservation created',

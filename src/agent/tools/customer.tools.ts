@@ -53,6 +53,11 @@ export const updateCustomerNameTool: AgentTool<UpdateNameArgs> = {
       return fail('nothing_to_update', 'No se indicó nombre ni apellido.');
     }
 
+    if (ctx.dryRun) {
+      logger.debug('update_customer_name skipped (dry run)', { conversationId: ctx.conversationId });
+      return ok({ saved: true, dryRun: true, ...updates });
+    }
+
     const customer = await SupabaseService.updateCustomerNameByPhone(ctx.phone, ctx.businessId, updates);
 
     // Sin ficha previa no es un error: el cliente es nuevo y su nombre se
@@ -105,6 +110,11 @@ export const setLanguageTool: AgentTool<SetLanguageArgs> = {
         'unsupported_language',
         `Ese idioma no está soportado. Los disponibles son: ${SUPPORTED_LANGUAGES.join(', ')}.`
       );
+    }
+
+    if (ctx.dryRun) {
+      logger.debug('set_language skipped (dry run)', { conversationId: ctx.conversationId });
+      return ok({ language: target, languageName: LANGUAGE_ENGLISH_NAMES[target], dryRun: true });
     }
 
     // persistLanguage escribe el cache de Redis y la preferencia en Supabase.

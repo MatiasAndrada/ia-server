@@ -91,6 +91,20 @@ export const createReservationTool: AgentTool<CreateArgs> = {
       );
     }
 
+    if (ctx.dryRun) {
+      // Modo sombra: se simula el alta para que el modelo cierre el turno igual
+      // y el resultado sea comparable, pero no se toca la base.
+      logger.debug('create_reservation skipped (dry run)', { conversationId: ctx.conversationId });
+      return ok({
+        reservationId: 'dry-run',
+        displayCode: 'DRYRUN',
+        partySize,
+        whenLabel: scheduledAt ?? 'turno actual',
+        status: 'WAITING',
+        dryRun: true,
+      });
+    }
+
     const response = await SupabaseService.createReservation({
       businessId: ctx.businessId,
       customerName: customerName.trim(),
@@ -245,6 +259,11 @@ export const cancelReservationTool: AgentTool<CancelArgs> = {
       );
     }
 
+    if (ctx.dryRun) {
+      logger.debug('cancel_reservation skipped (dry run)', { conversationId: ctx.conversationId });
+      return ok({ reservationId, cancelled: true, dryRun: true });
+    }
+
     const cancelled = await SupabaseService.updateReservationStatus(reservationId, 'CANCELLED');
     if (!cancelled) {
       return fail('cancel_failed', 'No se pudo cancelar. Pedile disculpas y sugerile reintentar.');
@@ -315,6 +334,11 @@ export const modifyReservationTool: AgentTool<ModifyArgs> = {
         'reservation_not_found',
         'Esa reserva no existe o no es de este cliente. Usá list_my_reservations para ver las suyas.'
       );
+    }
+
+    if (ctx.dryRun) {
+      logger.debug('modify_reservation skipped (dry run)', { conversationId: ctx.conversationId });
+      return ok({ reservationId, partySize: partySize ?? target.party_size, dryRun: true });
     }
 
     if (partySize !== undefined) {
