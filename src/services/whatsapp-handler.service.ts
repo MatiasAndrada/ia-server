@@ -38,7 +38,7 @@ import {
 import { isMultilingualGreeting } from '../i18n/keywords.js';
 import { isAgentShadowEnabled, isAgentV2Enabled } from '../agent/feature-flag.js';
 import { handleTurn } from '../agent/orchestrator.js';
-import { appendAssistantMessage } from '../agent/state.js';
+import { appendAssistantMessage, loadHistory } from '../agent/state.js';
 import { extractReservationUpdate, ReservationSlots } from './reservation-nlu.service.js';
 import { planReservationActions, countActionableIntents, PlannedAction } from './reservation-planner.service.js';
 import {
@@ -457,11 +457,17 @@ export class WhatsAppHandler {
       // Elegir idioma es previo al flujo, así que corre antes del orquestador —
       // mismo criterio que v1 (`offerLanguageMenuOnFirstContact`), pero sin
       // crear un draft, que en v2 no existe.
-      const languageAction = await this.resolveFirstContactLanguageAction(
-        businessId,
-        phone,
-        messageText
-      );
+      //
+      // Sólo en primer contacto REAL: en v1 esto estaba guardado por `if (!draft)`,
+      // y el equivalente en v2 es que no haya historial. Sin ese guard, un cliente
+      // nuevo que ya venía conversando recibía el menú de idiomas en medio del
+      // flujo — al dar su nombre, por ejemplo, que no es un saludo y no trae
+      // señal de idioma suficiente.
+      const conversationStarted = (await loadHistory(conversationId)).length > 0;
+
+      const languageAction = conversationStarted
+        ? 'none'
+        : await this.resolveFirstContactLanguageAction(businessId, phone, messageText);
 
       if (languageAction === 'menu') {
         const menu = templates.languageWelcomeMenu(businessStatus.name || 'el local');

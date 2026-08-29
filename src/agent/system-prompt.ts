@@ -1,8 +1,8 @@
-import { Business, WeeklyHours } from '../types/index.js';
+import { Business, BusinessEvent, WeeklyHours } from '../types/index.js';
 import { CustomerProfile } from './state.js';
 import { currentLanguage, LANGUAGE_ENGLISH_NAMES } from '../i18n/index.js';
 import { formatBusinessAddress, formatWeeklyHoursForPrompt } from '../utils/prompts.js';
-import { nowInBuenosAires } from '../utils/reservation-datetime.js';
+import { describeScheduledAtUtc, nowInBuenosAires } from '../utils/reservation-datetime.js';
 
 /**
  * System prompt del agente v2.
@@ -65,6 +65,16 @@ Un evento (una cena temática, un show) NO es una reserva común y no se maneja 
 - Una reserva de evento queda **pendiente de aprobación** del local. Decíselo así — nunca la
   presentes como confirmada.
 
+## Confirmada vs. pendiente — no las confundas
+Crear la reserva NO significa que esté confirmada. Muchos locales aprueban cada reserva a mano.
+
+\`create_reservation\` te devuelve \`confirmed\` y una \`note\` con el estado real:
+- **confirmed: true** → está confirmada; podés hablar en esos términos.
+- **confirmed: false** → quedó **pendiente de aprobación del local**. Decilo así, con naturalidad
+  ("les paso el pedido y te confirman"). **Nunca digas "confirmada", "lista" ni "te esperamos"**
+  como si estuviera asegurada. Cuando el local la apruebe, el sistema le manda la confirmación solo:
+  no la prometas vos ni la anticipes.
+
 ## Mensajes que se envían solos
 Algunas herramientas devuelven un campo \`verbatim\`. Ese texto **ya se le envió al cliente palabra por
 palabra**: contiene datos operativos exactos (código de reserva, motivo de un cierre, confirmación de
@@ -89,7 +99,8 @@ Si el cliente pide explícitamente cambiar de idioma, usá \`set_language\`.`;
 export function buildStateBlock(
   business: Business,
   profile: CustomerProfile,
-  weeklyHours: WeeklyHours
+  weeklyHours: WeeklyHours,
+  activeEvents: BusinessEvent[] = []
 ): string {
   const nowBA = nowInBuenosAires();
   const lines: string[] = ['## Contexto de este turno'];
@@ -127,6 +138,25 @@ export function buildStateBlock(
       'Es la PRIMERA vez que este teléfono escribe a este local: no hay ficha suya.',
       'Presentate brevemente y conseguí su nombre cuando venga al caso — sin interrogarlo de entrada.'
     );
+  }
+
+  // Los eventos van en el estado y no detrás de una tool porque el modelo tiene
+  // que SABER que existen para poder mencionarlos por iniciativa propia. Si
+  // dependieran de `list_events`, sólo aparecerían cuando el cliente preguntara
+  // — y entonces nunca se entera de que los hay.
+  if (activeEvents.length > 0) {
+    const nowBAForEvents = nowInBuenosAires();
+    lines.push('', '### Eventos vigentes del local');
+    lines.push(
+      'El local tiene estos eventos publicados. Mencionáselos al cliente ANTES de cerrar su reserva,',
+      'en una línea y sin presionar — puede que le interesen y no tiene forma de enterarse si no se lo decís.',
+      'Si elige uno, seguí las reglas de la sección "Eventos".'
+    );
+    for (const event of activeEvents) {
+      lines.push(
+        `- ${event.title} · ${describeScheduledAtUtc(event.startsAt, nowBAForEvents)} · id ${event.id}`
+      );
+    }
   }
 
   lines.push('', '### Sus reservas activas');

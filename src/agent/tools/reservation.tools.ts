@@ -10,6 +10,12 @@ import {
 } from '../../utils/reservation-datetime.js';
 import * as templates from '../../utils/message-templates.js';
 import { logEvent, logger } from '../../utils/logger.js';
+import {
+  createdNotificationKey,
+  ECHO_TTL_SECONDS,
+  markNotified,
+  statusNotificationKey,
+} from '../../utils/notification-dedup.js';
 
 /**
  * Herramientas que escriben en la base.
@@ -175,10 +181,19 @@ export const createReservationTool: AgentTool<CreateArgs> = {
     // El evento ya se resolvió arriba, así que no hace falta volver a pedir el título.
     const eventTitle = event?.title ?? null;
 
-    // Un evento siempre queda pendiente de aprobación del comercio, así que el
-    // mensaje es distinto: "recibida" en vez de "confirmada".
-    const confirmation = eventId
-      ? templates.reservationReceived(
+    // El mensaje depende del ESTADO REAL con que nació la reserva, no de si es
+    // un evento.
+    //
+    // `SupabaseService.createReservation` decide ese estado: CONFIRMED sólo si
+    // el comercio tiene auto_accept_reservations encendido y no es un evento;
+    // WAITING en cualquier otro caso. Ramificar por `eventId` (como se hacía
+    // acá) le decía "¡Reserva confirmada!" a un cliente cuyo comercio tiene el
+    // auto-aceptar apagado y todavía no había aprobado nada. La confirmación
+    // real la manda realtime-sync cuando el comercio aprueba.
+    const isConfirmed = entry.status === 'CONFIRMED' || entry.status === 'NOTIFIED';
+
+    const confirmation = isConfirmed
+      ? templates.reservationConfirmed(
           customerName.trim(),
           partySize,
           whenLabel,
@@ -186,7 +201,7 @@ export const createReservationTool: AgentTool<CreateArgs> = {
           fullName,
           eventTitle
         )
-      : templates.reservationConfirmed(
+      : templates.reservationReceived(
           customerName.trim(),
           partySize,
           whenLabel,
@@ -194,6 +209,14 @@ export const createReservationTool: AgentTool<CreateArgs> = {
           fullName,
           eventTitle
         );
+
+    // Deduplicación con el suscriptor de realtime, que también reacciona al
+    // alta y al cambio de estado. Sin estas marcas el cliente recibe el mensaje
+    // dos veces: una de acá y otra de realtime-sync.
+    if (isConfirmed) {
+      await markNotified(statusNotificationKey(entry.id, entry.status), ECHO_TTL_SECONDS);
+    }
+    await markNotified(createdNotificationKey(entry.id));
 
     logEvent('info', 'reservation.created', {
       conversationId: ctx.conversationId,
@@ -211,6 +234,14 @@ export const createReservationTool: AgentTool<CreateArgs> = {
         partySize,
         whenLabel,
         status: entry.status,
+        confirmed: isConfirmed,
+        // El modelo redacta el cierre del turno: sin esto tiende a decir
+        // "¡listo, confirmada!" aunque la reserva esté esperando aprobación.
+        note: isConfirmed
+          ? 'La reserva quedó CONFIRMADA. Ya se le envió el detalle al cliente.'
+          : 'La reserva quedó PENDIENTE de aprobación del local. Ya se le avisó al cliente: ' +
+            'no le digas que está confirmada ni se la des por asegurada. El local la aprueba y ' +
+            'ahí el sistema le manda la confirmación solo.',
       },
       confirmation
     );

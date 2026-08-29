@@ -148,6 +148,42 @@ describe('agent v2 orchestrator', () => {
     });
   });
 
+  describe('eventos vigentes en el contexto', () => {
+    it('los inyecta en el prompt para que el modelo pueda mencionarlos por iniciativa propia', async () => {
+      jest.spyOn(SupabaseService, 'getActiveEvents').mockResolvedValue([
+        {
+          id: 'ev-1',
+          title: 'Noche de sushi',
+          description: null,
+          startsAt: new Date(Date.now() + 2 * 86400000).toISOString(),
+          imageUrls: [],
+        },
+      ] as any);
+
+      const llmSpy = jest
+        .spyOn(openRouterService, 'runToolLoop')
+        .mockResolvedValue({ content: 'ok', executedToolCalls: [], messages: [], model: 'm', iterations: 1, exhausted: false });
+
+      await turn('quiero reservar para mañana');
+
+      const systemPrompt = llmSpy.mock.calls[0][1];
+      // Si dependieran de list_events, sólo aparecerían cuando el cliente
+      // preguntara — y entonces nunca se entera de que hay eventos.
+      expect(systemPrompt).toContain('Noche de sushi');
+      expect(systemPrompt).toContain('ANTES de cerrar su reserva');
+    });
+
+    it('no agrega la sección cuando el local no tiene eventos', async () => {
+      const llmSpy = jest
+        .spyOn(openRouterService, 'runToolLoop')
+        .mockResolvedValue({ content: 'ok', executedToolCalls: [], messages: [], model: 'm', iterations: 1, exhausted: false });
+
+      await turn('quiero reservar');
+
+      expect(llmSpy.mock.calls[0][1]).not.toContain('Eventos vigentes');
+    });
+  });
+
   describe('mensajes verbatim (modo híbrido)', () => {
     it('envía el verbatim primero y el texto del modelo después', async () => {
       // Se bloquea el día de mañana para que resolve_date produzca un verbatim

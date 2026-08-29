@@ -288,6 +288,48 @@ describe('agent tool registry', () => {
     });
   });
 
+  describe('create_reservation — confirmada vs. pendiente', () => {
+    function mockCreated(status: string) {
+      jest.spyOn(SupabaseService, 'createReservation').mockResolvedValue({
+        success: true,
+        waitlistEntry: { id: 'r-1', display_code: 'M540', status, scheduled_at: null },
+      } as any);
+    }
+
+    it('dice "pendiente" cuando la reserva nace WAITING (auto-aceptar apagado)', async () => {
+      mockCreated('WAITING');
+
+      const result = await run('create_reservation', { customerName: 'Matías', partySize: 4 });
+
+      expect(result.ok).toBe(true);
+      expect((result.data as any).confirmed).toBe(false);
+      // El bug reportado: decía "¡Reserva confirmada!" con el auto-aceptar apagado.
+      expect(result.verbatim).not.toContain('confirmada');
+      // Y se le avisa al modelo para que no la dé por asegurada al redactar.
+      expect((result.data as any).note).toContain('PENDIENTE');
+    });
+
+    it('dice "confirmada" sólo cuando nace CONFIRMED (auto-aceptar encendido)', async () => {
+      mockCreated('CONFIRMED');
+
+      const result = await run('create_reservation', { customerName: 'Matías', partySize: 4 });
+
+      expect((result.data as any).confirmed).toBe(true);
+      expect(result.verbatim).toContain('confirmada');
+    });
+
+    it('marca las claves de dedup para que realtime no duplique el aviso', async () => {
+      const dedup = require('../../utils/notification-dedup.js');
+      const markSpy = jest.spyOn(dedup, 'markNotified').mockResolvedValue(undefined);
+      mockCreated('WAITING');
+
+      await run('create_reservation', { customerName: 'Matías', partySize: 4 });
+
+      // Sin esto el cliente recibe el mensaje dos veces: de la tool y de realtime-sync.
+      expect(markSpy).toHaveBeenCalledWith(expect.stringContaining('r-1'));
+    });
+  });
+
   describe('create_reservation con evento', () => {
     const EVENT_START = new Date(Date.now() + 4 * 86400000).toISOString();
     const EVENT = {

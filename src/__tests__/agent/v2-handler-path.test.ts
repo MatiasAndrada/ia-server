@@ -72,6 +72,9 @@ describe('handler — camino agente v2', () => {
     } as any);
     jest.spyOn(SupabaseService, 'getCustomerLanguage').mockResolvedValue('es');
     jest.spyOn(state, 'appendAssistantMessage').mockResolvedValue();
+    // Sin historial por defecto = primer contacto. Los casos que necesitan una
+    // conversación ya empezada lo sobrescriben.
+    jest.spyOn(state, 'loadHistory').mockResolvedValue([]);
   });
 
   afterEach(() => __setAgentModeForTests('v1'));
@@ -97,6 +100,28 @@ describe('handler — camino agente v2', () => {
 
       // Sin esto, el "2" del turno siguiente llegaría sin contexto.
       expect(appendSpy).toHaveBeenCalledWith(`${BUSINESS_ID}-${PHONE}`, expect.stringContaining('spañol'));
+    });
+
+    it('NO interrumpe una conversación ya empezada, aunque el cliente siga sin nombre', async () => {
+      jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue(null);
+      // Ya hay historial: el cliente viene conversando y está dando su nombre.
+      jest.spyOn(state, 'loadHistory').mockResolvedValue([
+        { role: 'user', content: 'hola, 4 personas para hoy' },
+        { role: 'assistant', content: '¿A nombre de quién?' },
+      ]);
+      const turnSpy = jest.spyOn(orchestrator, 'handleTurn').mockResolvedValue({
+        messages: ['Listo Matías.'],
+        attachments: [],
+        toolsCalled: [],
+        iterations: 1,
+      });
+
+      await process('Matías Andrada');
+
+      // El menú a mitad de flujo era el bug: "Matías Andrada" no es saludo y no
+      // trae señal de idioma, así que caía en 'menu' y cortaba la conversación.
+      expect(turnSpy).toHaveBeenCalled();
+      expect(sent).toEqual(['Listo Matías.']);
     });
 
     it('NO interrumpe a un cliente ya conocido del comercio', async () => {

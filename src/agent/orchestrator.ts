@@ -10,6 +10,7 @@ import {
   saveHistory,
 } from './state.js';
 import { loadBusinessRules } from './tools/business-rules.js';
+import { SupabaseService } from '../services/supabase.service.js';
 import { LlmMessage } from '../types/index.js';
 import { evaluateReservationScope } from '../utils/reservation-scope.js';
 import { logEvent, logger } from '../utils/logger.js';
@@ -88,10 +89,11 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
     };
   }
 
-  const [profile, rules, history] = await Promise.all([
+  const [profile, rules, history, activeEvents] = await Promise.all([
     loadCustomerProfile(phone, businessId),
     loadBusinessRules(businessId),
     loadHistory(conversationId, dryRun),
+    SupabaseService.getActiveEvents(businessId),
   ]);
 
   if (!rules) {
@@ -103,7 +105,8 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
   const systemPrompt = `${buildStaticPrompt(businessName)}\n\n${buildStateBlock(
     rules.business,
     profile,
-    rules.weeklyHours
+    rules.weeklyHours,
+    activeEvents
   )}`;
 
   const messages: LlmMessage[] = [...history, { role: 'user', content: messageText }];
