@@ -24,7 +24,8 @@
     "whatsapp:connect": "node whatsapp-client.js",
     "whatsapp:clean": "rm -rf auth_sessions/*",
     "lint": "eslint src",
-    "format": "prettier --write \"src/**/*.ts\""
+    "format": "prettier --write \"src/**/*.ts\"",
+    "eval": "ts-node scripts/agent-eval.ts"
   },
   "keywords": [
     "ia",
