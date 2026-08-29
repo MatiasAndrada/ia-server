@@ -59,7 +59,43 @@ export class BaileysService {
   private startSessionInProgress: Set<string> = new Set();
   private outboundEchoGuard: Map<string, number> = new Map();
   private whatsAppHandler: WhatsAppHandler;
-  private readonly AUTH_DIR = path.join(process.cwd(), 'auth_sessions-v2');
+  /**
+   * Directorio de credenciales de WhatsApp, una carpeta por sesión.
+   *
+   * Configurable para poder correr una instancia de desarrollo en paralelo a la
+   * de producción en el mismo host: comparten el working directory, y con un
+   * único directorio las dos instancias se roban las sesiones mutuamente
+   * (`Stream Errored (conflict)`, 440, en bucle — ninguna queda estable el
+   * tiempo suficiente para enviar un recordatorio).
+   *
+   * El default es `auth_sessions` a propósito: producción no cambia de
+   * directorio por desplegar esto. Dev pone `WHATSAPP_AUTH_DIR=auth_sessions-v2`
+   * en su `.env`.
+   */
+  private readonly AUTH_DIR = path.join(
+    process.cwd(),
+    process.env.WHATSAPP_AUTH_DIR?.trim() || 'auth_sessions'
+  );
+
+  /**
+   * Si está seteada, SOLO estos negocios pueden abrir una sesión de WhatsApp.
+   *
+   * Un directorio de credenciales separado evita el conflicto por la misma
+   * sesión, pero no el problema peor: WhatsApp admite varios dispositivos
+   * vinculados, así que si alguien linkea un negocio real desde dev, dev y
+   * producción reciben los mismos mensajes de clientes reales y AMBOS
+   * responden. Eso no da error, no aparece en los logs como falla, y el
+   * cliente recibe dos respuestas.
+   *
+   * Con esta lista, dev no puede abrir la sesión de un negocio real ni por
+   * accidente. Vacía = sin restricción (el comportamiento de producción).
+   */
+  private readonly SESSION_ALLOWLIST: ReadonlySet<string> = new Set(
+    (process.env.WHATSAPP_BUSINESS_ALLOWLIST ?? '')
+      .split(',')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0)
+  );
   // Backoff exponencial con jitter para reconexión: nunca abandona la sesión
   // ante errores transitorios (428/408/503/515), solo crece el delay entre
   // intentos hasta un techo. Solo se deja de reintentar ante logout real (401)
@@ -346,6 +382,17 @@ export class BaileysService {
    * Start a new WhatsApp session for a business
    */
   async startSession(businessId: string): Promise<void> {
+    // Barrera de aislamiento dev/producción. Va antes que cualquier otra cosa,
+    // incluido el lock: una instancia de dev no debe ni intentar vincularse al
+    // WhatsApp de un negocio real (ver SESSION_ALLOWLIST).
+    if (this.SESSION_ALLOWLIST.size > 0 && !this.SESSION_ALLOWLIST.has(businessId)) {
+      logger.warn('Session start blocked: business not in WHATSAPP_BUSINESS_ALLOWLIST', {
+        businessId,
+        allowlistSize: this.SESSION_ALLOWLIST.size,
+      });
+      return;
+    }
+
     if (this.startSessionInProgress.has(businessId)) {
       logger.debug('Session start already in progress, skipping duplicate', { businessId });
       return;
