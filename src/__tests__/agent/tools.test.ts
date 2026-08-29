@@ -165,6 +165,46 @@ describe('agent tool registry', () => {
     });
   });
 
+  describe('show_event_details — fotos del evento', () => {
+    const EVENT = {
+      id: 'ev-1',
+      title: 'Noche de sushi',
+      description: 'Menú degustación',
+      startsAt: new Date(Date.now() + 3 * 86400000).toISOString(),
+      imageUrls: ['https://x/1.jpg', 'https://x/2.jpg', 'https://x/3.jpg', 'https://x/4.jpg'],
+    };
+
+    it('adjunta las fotos del evento, con tope de 3 como en v1', async () => {
+      jest.spyOn(SupabaseService, 'getActiveEvents').mockResolvedValue([EVENT] as any);
+
+      const result = await run('show_event_details', { eventId: 'ev-1' });
+
+      expect(result.ok).toBe(true);
+      expect(result.attachments).toHaveLength(3);
+      expect(result.attachments?.[0]).toEqual({ imageUrl: 'https://x/1.jpg' });
+      // El modelo tiene que avisar que la reserva de evento no queda confirmada sola.
+      expect((result.data as any).requiresApproval).toBe(true);
+    });
+
+    it('avisa cuando el comercio desactivó el evento entre el listado y la elección', async () => {
+      jest.spyOn(SupabaseService, 'getActiveEvents').mockResolvedValue([]);
+
+      const result = await run('show_event_details', { eventId: 'ev-1' });
+
+      expect(result).toMatchObject({ ok: false, error: { code: 'event_not_available' } });
+    });
+
+    it('list_events no adjunta fotos — sólo señala cuáles tienen', async () => {
+      jest.spyOn(SupabaseService, 'getActiveEvents').mockResolvedValue([EVENT] as any);
+
+      const result = await run('list_events');
+
+      // Listar cinco eventos no debe disparar quince imágenes.
+      expect(result.attachments).toBeUndefined();
+      expect((result.data as any).events[0].hasPhotos).toBe(true);
+    });
+  });
+
   describe('cancel_reservation — propiedad de la reserva', () => {
     it('no cancela una reserva que no es del cliente que escribe', async () => {
       jest.spyOn(SupabaseService, 'getActiveReservationsByPhone').mockResolvedValue([]);

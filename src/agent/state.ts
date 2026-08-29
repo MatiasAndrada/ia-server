@@ -167,6 +167,61 @@ export async function saveHistory(conversationId: string, messages: LlmMessage[]
   }
 }
 
+/**
+ * Agrega un mensaje del assistant al historial sin pasar por el modelo.
+ *
+ * Lo usan los mensajes que se envían FUERA del orquestador (hoy, el menú de
+ * idiomas del primer contacto). Sin esto, el cliente contesta "2" en el turno
+ * siguiente y el modelo no tiene a la vista qué se le ofreció.
+ */
+export async function appendAssistantMessage(
+  conversationId: string,
+  content: string
+): Promise<void> {
+  const history = await loadHistory(conversationId);
+  await saveHistory(conversationId, [...history, { role: 'assistant', content }]);
+}
+
+const STUCK_KEY_PREFIX = 'agent_v2_stuck:';
+
+/**
+ * Turnos consecutivos improductivos.
+ *
+ * Es el equivalente en v2 de los `invalidAttempts` del draft de v1: si el
+ * agente no logra avanzar dos turnos seguidos, hay que sacar al cliente del
+ * loop en vez de dejarlo dando vueltas. La diferencia es qué cuenta como
+ * "improductivo": en v1 era una respuesta que el parser del paso no entendía;
+ * acá es que el modelo agote las iteraciones sin cerrar el turno, o que todas
+ * las herramientas del turno hayan fallado.
+ *
+ * Vive en su propia key con TTL corto: es estado de recuperación, no memoria de
+ * la conversación, y no debe sobrevivir a una pausa larga del cliente.
+ */
+const STUCK_TTL_SECONDS = 600;
+
+export async function bumpUnproductiveStreak(conversationId: string): Promise<number> {
+  try {
+    if (!RedisConfig.isReady()) return 0;
+    const client = RedisConfig.getClient();
+    const key = `${STUCK_KEY_PREFIX}${conversationId}`;
+    const next = await client.incr(key);
+    await client.expire(key, STUCK_TTL_SECONDS);
+    return next;
+  } catch (error) {
+    logger.warn('Failed to bump unproductive streak', { conversationId, error });
+    return 0;
+  }
+}
+
+export async function clearUnproductiveStreak(conversationId: string): Promise<void> {
+  try {
+    if (!RedisConfig.isReady()) return;
+    await RedisConfig.getClient().del(`${STUCK_KEY_PREFIX}${conversationId}`);
+  } catch (error) {
+    logger.warn('Failed to clear unproductive streak', { conversationId, error });
+  }
+}
+
 export async function clearHistory(conversationId: string): Promise<void> {
   try {
     if (!RedisConfig.isReady()) return;

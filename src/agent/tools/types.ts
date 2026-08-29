@@ -26,6 +26,13 @@ export interface ToolResult<T = unknown> {
   };
   /** Texto que se envía TAL CUAL, sin pasar por el modelo. */
   verbatim?: string;
+  /**
+   * Imágenes a enviar en este turno. Mismo principio que `verbatim`: el modelo
+   * no puede producir una imagen, así que la herramienta la adjunta y el
+   * orquestador la entrega. Se usan para las fotos de un evento, que en v1
+   * mandaba `applyEventChoice`.
+   */
+  attachments?: { imageUrl: string; caption?: string }[];
 }
 
 export function ok<T>(data: T, verbatim?: string): ToolResult<T> {

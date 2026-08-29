@@ -38,6 +38,7 @@ import {
 import { isMultilingualGreeting } from '../i18n/keywords.js';
 import { isAgentV2Enabled } from '../agent/feature-flag.js';
 import { handleTurn } from '../agent/orchestrator.js';
+import { appendAssistantMessage } from '../agent/state.js';
 import { extractReservationUpdate, ReservationSlots } from './reservation-nlu.service.js';
 import { planReservationActions, countActionableIntents, PlannedAction } from './reservation-planner.service.js';
 import {
@@ -394,6 +395,38 @@ export class WhatsAppHandler {
     }
 
     try {
+      // Elegir idioma es previo al flujo, así que corre antes del orquestador —
+      // mismo criterio que v1 (`offerLanguageMenuOnFirstContact`), pero sin
+      // crear un draft, que en v2 no existe.
+      const languageAction = await this.resolveFirstContactLanguageAction(
+        businessId,
+        phone,
+        messageText
+      );
+
+      if (languageAction === 'menu') {
+        const menu = templates.languageWelcomeMenu(businessStatus.name || 'el local');
+        await this.sendWhatsAppMessage(businessId, from, menu);
+
+        // El menú se registra en el historial del agente para que, cuando el
+        // cliente conteste "2" o mande una bandera, el modelo tenga a la vista
+        // qué se le ofreció y pueda resolverlo con `set_language`. Sin esto la
+        // respuesta llegaría sin contexto y parecería un mensaje suelto.
+        await appendAssistantMessage(conversationId, menu);
+
+        logger.debug('Agent v2: language menu offered on first contact', {
+          conversationId,
+          businessId,
+        });
+        return;
+      }
+
+      if (languageAction === 'hint') {
+        await this.sendWhatsAppMessage(businessId, from, templates.languageChangeHint());
+        // No hay `return`: el mensaje ya trae contenido real, así que el turno
+        // sigue normalmente en el idioma inferido.
+      }
+
       const result = await handleTurn({
         businessId,
         conversationId,
@@ -408,12 +441,19 @@ export class WhatsAppHandler {
         await this.sendWhatsAppMessage(businessId, from, text);
       }
 
+      // Las imágenes van después del texto para que el cliente lea primero de
+      // qué se trata — mismo orden que usaba `applyEventChoice` en v1.
+      for (const attachment of result.attachments) {
+        await this.sendWhatsAppImage(businessId, from, attachment.imageUrl, attachment.caption);
+      }
+
       logger.debug('Agent v2 turn completed', {
         conversationId,
         businessId,
         tools: result.toolsCalled,
         iterations: result.iterations,
         outbound: result.messages.length,
+        attachments: result.attachments.length,
       });
     } catch (error) {
       logger.error('Agent v2 turn failed', { error, conversationId, businessId });
@@ -503,6 +543,36 @@ export class WhatsAppHandler {
    *
    * Returns true when it sent the menu — caller must stop processing this turn.
    */
+  /**
+   * Decide QUÉ corresponde hacer con el idioma en un primer contacto, sin
+   * ejecutar nada. Extraído para que v1 y v2 compartan el criterio: elegir
+   * idioma es previo al flujo de reserva, no parte de él, y un turista que
+   * escribe por primera vez tiene que ver el menú en cualquiera de los dos.
+   *
+   * - `menu`: mostrar el menú de idiomas y esperar la elección.
+   * - `hint`: el mensaje ya trae idioma inferible con confianza y contenido
+   *   real, así que se sigue en ese idioma y sólo se avisa que puede cambiarlo.
+   * - `none`: cliente ya conocido, no se interrumpe.
+   */
+  private async resolveFirstContactLanguageAction(
+    businessId: string,
+    phone: string,
+    messageText: string
+  ): Promise<'menu' | 'hint' | 'none'> {
+    const knownCustomer = await SupabaseService.getCustomerByPhone(phone, businessId);
+    if (knownCustomer?.name) {
+      return 'none';
+    }
+
+    const detected = detectLanguage(messageText);
+    const hasContentBeyondGreeting = !this.isGreetingMessage(messageText);
+    if (detected && detected.confidence >= DETECTION_THRESHOLD && hasContentBeyondGreeting) {
+      return 'hint';
+    }
+
+    return 'menu';
+  }
+
   private async offerLanguageMenuOnFirstContact(
     businessId: string,
     jid: string,
@@ -510,19 +580,16 @@ export class WhatsAppHandler {
     conversationId: string,
     messageText: string
   ): Promise<boolean> {
-    const knownCustomer = await SupabaseService.getCustomerByPhone(phone, businessId);
-    if (knownCustomer?.name) {
+    const action = await this.resolveFirstContactLanguageAction(businessId, phone, messageText);
+
+    if (action === 'none') {
       return false;
     }
 
-    const detected = detectLanguage(messageText);
-    const hasContentBeyondGreeting = !this.isGreetingMessage(messageText);
-    if (detected && detected.confidence >= DETECTION_THRESHOLD && hasContentBeyondGreeting) {
+    if (action === 'hint') {
       logger.debug('Language menu skipped — inferred with confidence from first message content', {
         conversationId,
         businessId,
-        language: detected.language,
-        confidence: detected.confidence,
       });
       await this.sendWhatsAppMessage(businessId, jid, templates.languageChangeHint());
       return false;

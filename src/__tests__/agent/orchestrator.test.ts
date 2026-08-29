@@ -202,6 +202,84 @@ describe('agent v2 orchestrator', () => {
     });
   });
 
+  describe('válvula de escape (equivalente a invalidAttempts de v1)', () => {
+    it('no corta al primer turno improductivo', async () => {
+      jest.spyOn(state, 'bumpUnproductiveStreak').mockResolvedValue(1);
+      const clearSpy = jest.spyOn(state, 'clearHistory').mockResolvedValue();
+
+      jest.spyOn(openRouterService, 'runToolLoop').mockResolvedValue({
+        content: 'Perdón, no te seguí.',
+        executedToolCalls: [],
+        messages: [],
+        model: 'm',
+        iterations: 5,
+        exhausted: true,
+      });
+
+      const result = await turn('algo confuso');
+
+      expect(result.messages).toEqual(['Perdón, no te seguí.']);
+      expect(clearSpy).not.toHaveBeenCalled();
+    });
+
+    it('corta y reinicia tras dos turnos improductivos seguidos', async () => {
+      jest.spyOn(state, 'bumpUnproductiveStreak').mockResolvedValue(2);
+      const clearSpy = jest.spyOn(state, 'clearHistory').mockResolvedValue();
+      jest.spyOn(state, 'clearUnproductiveStreak').mockResolvedValue();
+
+      jest.spyOn(openRouterService, 'runToolLoop').mockResolvedValue({
+        content: '',
+        executedToolCalls: [],
+        messages: [],
+        model: 'm',
+        iterations: 5,
+        exhausted: true,
+      });
+
+      const result = await turn('algo confuso otra vez');
+
+      expect(clearSpy).toHaveBeenCalled();
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].length).toBeGreaterThan(0);
+    });
+
+    it('cuenta como improductivo un turno donde TODAS las herramientas fallaron', async () => {
+      const bumpSpy = jest.spyOn(state, 'bumpUnproductiveStreak').mockResolvedValue(1);
+
+      jest.spyOn(openRouterService, 'runToolLoop').mockResolvedValue({
+        content: 'Uh, algo falló.',
+        executedToolCalls: [
+          { name: 'resolve_date', arguments: '{}', output: { ok: false, error: { code: 'x', hint: 'y' } } },
+        ],
+        messages: [],
+        model: 'm',
+        iterations: 2,
+        exhausted: false,
+      });
+
+      await turn('para el 40 de marzo');
+
+      expect(bumpSpy).toHaveBeenCalled();
+    });
+
+    it('resetea la racha cuando el turno sí avanza', async () => {
+      const clearStreakSpy = jest.spyOn(state, 'clearUnproductiveStreak').mockResolvedValue();
+
+      jest.spyOn(openRouterService, 'runToolLoop').mockResolvedValue({
+        content: 'Listo.',
+        executedToolCalls: [{ name: 'resolve_date', arguments: '{}', output: { ok: true, data: {} } }],
+        messages: [],
+        model: 'm',
+        iterations: 2,
+        exhausted: false,
+      });
+
+      await turn('para mañana');
+
+      expect(clearStreakSpy).toHaveBeenCalled();
+    });
+  });
+
   describe('resiliencia', () => {
     it('nunca deja al cliente sin respuesta si el modelo devuelve vacío', async () => {
       jest.spyOn(openRouterService, 'runToolLoop').mockResolvedValue({

@@ -1,7 +1,14 @@
 import { openRouterService } from '../services/openrouter.service.js';
-import { executeToolCall, getToolDefinitions, ToolContext } from './tools/index.js';
+import { executeToolCall, getToolDefinitions, ToolContext, ToolResult } from './tools/index.js';
 import { buildStateBlock, buildStaticPrompt } from './system-prompt.js';
-import { clearHistory, loadCustomerProfile, loadHistory, saveHistory } from './state.js';
+import {
+  bumpUnproductiveStreak,
+  clearHistory,
+  clearUnproductiveStreak,
+  loadCustomerProfile,
+  loadHistory,
+  saveHistory,
+} from './state.js';
 import { loadBusinessRules } from './tools/business-rules.js';
 import { LlmMessage } from '../types/index.js';
 import { evaluateReservationScope } from '../utils/reservation-scope.js';
@@ -24,6 +31,8 @@ import type { SupportedLanguage } from '../i18n/index.js';
 export interface TurnResult {
   /** Mensajes a enviar, en orden. Los `verbatim` van primero. */
   messages: string[];
+  /** Imágenes a enviar después de los mensajes (fotos de un evento elegido). */
+  attachments: { imageUrl: string; caption?: string }[];
   /** Herramientas ejecutadas — el harness de tests asierta sobre esto. */
   toolsCalled: string[];
   iterations: number;
@@ -66,6 +75,7 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
     });
     return {
       messages: [scope.message ?? templates.genericError()],
+      attachments: [],
       toolsCalled: [],
       iterations: 0,
     };
@@ -79,7 +89,7 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
 
   if (!rules) {
     logger.error('Agent v2: business not found', { businessId });
-    return { messages: [templates.genericError()], toolsCalled: [], iterations: 0 };
+    return { messages: [templates.genericError()], attachments: [], toolsCalled: [], iterations: 0 };
   }
 
   // Estable primero, volátil después — ver la nota de caching en system-prompt.ts.
@@ -96,6 +106,7 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
   // Los `verbatim` se juntan acá durante la ejecución del loop: son texto ya
   // aprobado que se envía sin pasar por el modelo.
   const verbatimMessages: string[] = [];
+  const attachments: TurnResult['attachments'] = [];
 
   const result = await openRouterService.runToolLoop(
     messages,
@@ -105,6 +116,9 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
       const toolResult = await executeToolCall(call, ctx);
       if (toolResult.verbatim) {
         verbatimMessages.push(toolResult.verbatim);
+      }
+      if (toolResult.attachments?.length) {
+        attachments.push(...toolResult.attachments);
       }
       return toolResult;
     },
@@ -127,11 +141,40 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
   }
   await saveHistory(conversationId, toPersist);
 
+  // Un turno es improductivo si el modelo agotó las iteraciones sin cerrar, o
+  // si todas las herramientas que pidió fallaron. Dos seguidos y se corta: sin
+  // esto el cliente puede quedar en un loop sin salida, que es justo lo que
+  // evitaba `invalidAttempts` en v1.
+  const allToolsFailed =
+    result.executedToolCalls.length > 0 &&
+    result.executedToolCalls.every((c) => (c.output as ToolResult | undefined)?.ok === false);
+
+  if (result.exhausted || allToolsFailed) {
+    const streak = await bumpUnproductiveStreak(conversationId);
+    if (streak >= 2) {
+      logger.warn('Agent v2: unproductive streak reached, handing off', {
+        conversationId,
+        businessId,
+        streak,
+      });
+      await clearHistory(conversationId);
+      await clearUnproductiveStreak(conversationId);
+      return {
+        messages: [templates.tooManyInvalidAttempts()],
+        attachments: [],
+        toolsCalled: result.executedToolCalls.map((c) => c.name),
+        iterations: result.iterations,
+      };
+    }
+  } else {
+    await clearUnproductiveStreak(conversationId);
+  }
+
   const outbound = [...verbatimMessages, finalText].filter((text) => text.length > 0);
 
   // Un turno sin nada que decir deja al cliente esperando. Sólo puede pasar si
   // el modelo devolvió vacío y ninguna herramienta produjo `verbatim`.
-  if (outbound.length === 0) {
+  if (outbound.length === 0 && attachments.length === 0) {
     logger.warn('Agent v2: empty turn, falling back to generic reply', {
       conversationId,
       iterations: result.iterations,
@@ -152,6 +195,7 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
 
   return {
     messages: outbound,
+    attachments,
     toolsCalled: result.executedToolCalls.map((c) => c.name),
     iterations: result.iterations,
   };

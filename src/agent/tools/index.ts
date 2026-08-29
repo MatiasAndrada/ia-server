@@ -11,7 +11,7 @@ import {
   listMyReservationsTool,
   modifyReservationTool,
 } from './reservation.tools.js';
-import { getBusinessInfoTool, listEventsTool } from './business.tools.js';
+import { getBusinessInfoTool, listEventsTool, showEventDetailsTool } from './business.tools.js';
 import { setLanguageTool, updateCustomerNameTool } from './customer.tools.js';
 import { LlmToolCall, LlmToolDefinition } from '../../types/index.js';
 import { logger } from '../../utils/logger.js';
@@ -31,6 +31,7 @@ const TOOLS: readonly AgentTool<any>[] = [
   getBusinessInfoTool,
   listOpenDaysTool,
   listEventsTool,
+  showEventDetailsTool,
   listMyReservationsTool,
   // Resolución — traducen lo que dijo el cliente a datos validados.
   resolveDateTool,
