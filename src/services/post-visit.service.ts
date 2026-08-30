@@ -1,5 +1,6 @@
 import { RedisConfig } from '../config/redis.js';
 import { SupabaseConfig } from '../config/supabase.js';
+import { BaileysService } from './baileys.service.js';
 import { logger, logEvent } from '../utils/logger.js';
 import { withLogContext } from '../utils/log-context.js';
 import { getTemplates } from '../i18n/index.js';
@@ -176,7 +177,6 @@ export class PostVisitService {
     const { language } = await resolveLanguage(businessId, customer.phone);
     const message = getTemplates(language).postVisitMessage();
 
-    const { BaileysService } = await import('./baileys.service.js');
     const baileys = BaileysService.getInstance();
     const sent = await baileys.sendMessage(businessId, customer.phone, message);
 

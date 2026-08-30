@@ -14,6 +14,7 @@ import {
   statusNotificationKey,
   wasAlreadyNotified,
 } from '../utils/notification-dedup.js';
+import { BaileysService } from './baileys.service.js';
 import { PostVisitService } from './post-visit.service.js';
 import { SupabaseService } from './supabase.service.js';
 import { openRouterService } from './openrouter.service.js';
@@ -275,7 +276,6 @@ export class RealtimeSyncService {
         return;
       }
 
-      const { BaileysService } = await import('./baileys.service.js');
       const supabaseClient = SupabaseConfig.getClient();
 
       const { data: customerData, error: customerError } = await supabaseClient
@@ -522,7 +522,6 @@ export class RealtimeSyncService {
     }
 
     try {
-      const { BaileysService } = await import('./baileys.service.js');
       const baileys = BaileysService.getInstance();
 
       if (!baileys.hasSession(businessId)) {
@@ -651,10 +650,6 @@ export class RealtimeSyncService {
         oldStatus: oldEntry.status,
         newStatus: newEntry.status,
       });
-
-      // Import services dynamically to avoid circular dependencies
-      const { BaileysService } = await import('./baileys.service.js');
-      const { SupabaseConfig } = await import('../config/supabase.js');
 
       // Get customer data directly from Supabase
       const supabaseClient = SupabaseConfig.getClient();

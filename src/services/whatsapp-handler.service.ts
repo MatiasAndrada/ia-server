@@ -54,7 +54,7 @@ import {
 import {
   nowInBuenosAires,
   parseRelativeDay,
-  isWithinNextWeek,
+  isWithinBookingWindow,
   parseTimeOfDay,
   combineToUtcISO,
   isInPast,
@@ -297,8 +297,7 @@ export class WhatsAppHandler {
       // Cache the JID mapping in Redis for future outbound messages
       // This ensures we send to the correct JID (@lid vs @s.whatsapp.net)
       try {
-        const redis = await import('../config/redis.js');
-        const client = redis.RedisConfig.getClient();
+        const client = RedisConfig.getClient();
         const jidMappingKey = `jid:${businessId}:${phone}`;
         await client.setEx(jidMappingKey, 30 * 24 * 60 * 60, from); // 30 days TTL
         logger.debug('JID mapping cached', { phone, from, businessId });
@@ -877,7 +876,7 @@ export class WhatsAppHandler {
         scheduleChoiceEventTitles: draft?.scheduleChoiceOptions?.events.map((event) => event.title),
       });
       if (scopeEvaluation.decision === 'out_of_window' || scopeEvaluation.reason === 'prompt_injection') {
-        // Deterministic, non-negotiable: the 7-day window rule and prompt-injection
+        // Deterministic, non-negotiable: the booking-window rule and prompt-injection
         // attempts always get the canned message — never reach the LLM.
         await this.sendWhatsAppMessage(businessId, from, scopeEvaluation.message!);
 
@@ -1791,14 +1790,14 @@ export class WhatsAppHandler {
             const scheduleLlmSlots = await this.getLlmSlotsFallback(draft, messageText, businessId, conversationId);
             if (scheduleLlmSlots?.dateText) {
               const llmParsedDay = parseRelativeDay(scheduleLlmSlots.dateText, nowBA);
-              if (llmParsedDay && isWithinNextWeek(llmParsedDay.baDate, nowBA)) {
+              if (llmParsedDay && isWithinBookingWindow(llmParsedDay.baDate, nowBA)) {
                 parsedDay = llmParsedDay;
               }
             }
           }
 
           if (parsedDay) {
-            if (!isWithinNextWeek(parsedDay.baDate, nowBA)) {
+            if (!isWithinBookingWindow(parsedDay.baDate, nowBA)) {
               await this.sendWhatsAppMessage(
                 businessId,
                 jid,
@@ -1951,13 +1950,13 @@ export class WhatsAppHandler {
           const nowBA = nowInBuenosAires();
           let parsedDay = parseRelativeDay(messageText, nowBA);
 
-          if (!parsedDay || !isWithinNextWeek(parsedDay.baDate, nowBA)) {
+          if (!parsedDay || !isWithinBookingWindow(parsedDay.baDate, nowBA)) {
             // Regex found no valid day — give the model one look before giving
             // up (e.g. "el finde que viene no, mejor el jueves de esta semana").
             const dateLlmSlots = await this.getLlmSlotsFallback(draft, messageText, businessId, conversationId);
             if (dateLlmSlots?.dateText) {
               const llmParsedDay = parseRelativeDay(dateLlmSlots.dateText, nowBA);
-              if (llmParsedDay && isWithinNextWeek(llmParsedDay.baDate, nowBA)) {
+              if (llmParsedDay && isWithinBookingWindow(llmParsedDay.baDate, nowBA)) {
                 parsedDay = llmParsedDay;
               }
             }
@@ -1967,7 +1966,7 @@ export class WhatsAppHandler {
           const businessForDate = await SupabaseService.getBusinessById(businessId);
           const weeklyHoursForDate = businessForDate?.weekly_hours as WeeklyHours | null | undefined;
 
-          if (!parsedDay || !isWithinNextWeek(parsedDay.baDate, nowBA)) {
+          if (!parsedDay || !isWithinBookingWindow(parsedDay.baDate, nowBA)) {
             draft.invalidAttempts = (draft.invalidAttempts ?? 0) + 1;
             await ReservationService.saveDraft(draft);
 
@@ -2157,7 +2156,7 @@ export class WhatsAppHandler {
           let scheduledDate = draft.scheduledDate;
 
           if (dayOverride && formatBaDateKey(dayOverride.baDate) !== scheduledDate) {
-            if (!isWithinNextWeek(dayOverride.baDate, nowBAForTime)) {
+            if (!isWithinBookingWindow(dayOverride.baDate, nowBAForTime)) {
               await this.sendWhatsAppMessage(
                 businessId,
                 jid,
@@ -2303,7 +2302,7 @@ export class WhatsAppHandler {
               const targetHour = parsedTimeOverride ? parsedTimeOverride.hour : proposedHour;
               const targetMinute = parsedTimeOverride ? parsedTimeOverride.minute : proposedMinute;
 
-              if (targetBaDate && targetHour !== null && targetMinute !== null && isWithinNextWeek(targetBaDate, nowBA)) {
+              if (targetBaDate && targetHour !== null && targetMinute !== null && isWithinBookingWindow(targetBaDate, nowBA)) {
                 const newAt = combineToUtcISO(targetBaDate, targetHour, targetMinute);
 
                 if (isInPast(newAt)) {
@@ -3035,10 +3034,10 @@ export class WhatsAppHandler {
 
   /**
    * When the customer names a weekday together with an explicit day-of-month
-   * number that doesn't match the nearest in-window occurrence of that
-   * weekday (e.g. "jueves 17" when the closest bookable Thursday is the 9th),
-   * the requested date is beyond the 7-day booking window. Instead of
-   * silently booking the nearest Thursday (ignoring the "17"), stash the
+   * number that doesn't match ANY occurrence of that weekday within the
+   * booking window (e.g. "jueves 17" when no Thursday in the next 30 days
+   * falls on the 17th — `parseRelativeDay` already tried resolving that exact
+   * combination and fell back to the nearest occurrence instead). Stash the
    * nearest in-window alternative (plus any time already given in the same
    * message) and ask the customer whether to take it instead. Returns true
    * once handled — the caller should stop processing and let the next
@@ -3641,7 +3640,7 @@ export class WhatsAppHandler {
 
   /**
    * Ask the customer whether the reservation is for the current turn or for a
-   * specific day/time within the next 7 days, advancing the draft to `schedule_choice`.
+   * specific day/time within the booking window, advancing the draft to `schedule_choice`.
    *
    * Checks today's real availability FIRST — not just whether today's weekday
    * is marked closed, but whether there is any bookable moment left today
@@ -3996,8 +3995,7 @@ export class WhatsAppHandler {
 
         // Store reservation notification in Redis
         try {
-          const redis = await import('../config/redis.js');
-          const client = redis.RedisConfig.getClient();
+          const client = RedisConfig.getClient();
           const notificationKey = `notifications:${businessId}:reservation`;
 
           const notification = {
@@ -5890,7 +5888,7 @@ export class WhatsAppHandler {
     // la oferta de eventos, que ahí es donde se muestra. Mismo criterio que ya
     // aplica en promptScheduleChoice para "hoy sin disponibilidad, pero con
     // eventos publicados": mejor un mensaje extra que perder la oferta.
-    if (namedDay && isWithinNextWeek(namedDay.baDate, nowBA) && activeEvents.length === 0) {
+    if (namedDay && isWithinBookingWindow(namedDay.baDate, nowBA) && activeEvents.length === 0) {
       const business = await SupabaseService.getBusinessById(businessId);
       const weeklyHours = business?.weekly_hours as WeeklyHours | null | undefined;
       const dayOpen = weeklyHours && Object.keys(weeklyHours).length > 0

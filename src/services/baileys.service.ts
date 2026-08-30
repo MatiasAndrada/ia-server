@@ -6,6 +6,7 @@ import type { SendFailureReason } from '../utils/log-events.js';
 import { withLogContext } from '../utils/log-context.js';
 import { throttle } from '../utils/log-throttle.js';
 import { phoneCandidates } from '../utils/phone.js';
+import { normalizeWhatsAppBold } from '../utils/formatters.js';
 
 /**
  * El QR se dibuja en la terminal sólo cuando hay alguien mirándola. En
@@ -1021,13 +1022,15 @@ export class BaileysService {
       // Resolve to the correct WhatsApp JID (handles Argentine mobile 9-prefix, @lid, etc.)
       const jid = await this.resolveJid(businessId, to);
 
+      const normalizedMessage = normalizeWhatsAppBold(message);
+
       logger.debug('Sending message via Baileys', {
         businessId,
         to: jid,
-        messageLength: message.length,
+        messageLength: normalizedMessage.length,
       });
 
-      const sendPromise = sock.sendMessage(jid, { text: message });
+      const sendPromise = sock.sendMessage(jid, { text: normalizedMessage });
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('sendMessage timeout after 15s')), 15000)
       );
@@ -1088,12 +1091,13 @@ export class BaileysService {
       }
 
       const jid = await this.resolveJid(businessId, to);
+      const normalizedCaption = caption ? normalizeWhatsAppBold(caption) : caption;
 
       logger.debug('Sending image via Baileys', { businessId, to: jid, imageUrl });
 
       const sendPromise = sock.sendMessage(jid, {
         image: { url: imageUrl },
-        ...(caption ? { caption } : {}),
+        ...(normalizedCaption ? { caption: normalizedCaption } : {}),
       });
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('sendImageMessage timeout after 30s')), 30000)

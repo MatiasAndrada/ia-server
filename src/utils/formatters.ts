@@ -3,6 +3,21 @@
  */
 
 /**
+ * WhatsApp bold uses a single asterisk (*texto*), not Markdown's double
+ * asterisk (**texto**). LLM-generated replies sometimes slip into Markdown
+ * style anyway, so any run of 2+ asterisks lands on the client as literal
+ * "**" instead of bold — collapse those runs to one asterisk right before
+ * sending.
+ */
+export function normalizeWhatsAppBold(text: string): string {
+  if (!text) {
+    return text;
+  }
+
+  return text.replace(/\*{2,}/g, '*');
+}
+
+/**
  * Capitalizes the first letter of each word in a name
  * Examples:
  * - "matías andrada" → "Matías Andrada"
