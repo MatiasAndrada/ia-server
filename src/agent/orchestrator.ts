@@ -25,7 +25,7 @@ import type { SupportedLanguage } from '../i18n/index.js';
  *
  * No hay pasos, ni draft, ni gates compitiendo por consumir el mensaje. Lo
  * único que corre ANTES del modelo son los dos guards deterministas que no son
- * negociables (inyección de prompt y ventana de 7 días); todo lo demás es
+ * negociables (inyección de prompt y ventana de 30 días); todo lo demás es
  * decisión del modelo, acotada por lo que las herramientas le dejan hacer.
  */
 

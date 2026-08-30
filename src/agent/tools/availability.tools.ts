@@ -11,7 +11,7 @@ import {
   getBlockedDateReasonMessage,
   getUpcomingOpenDaysWithHours,
   isFutureReservationBlockedToday,
-  isWithinNextWeek,
+  isWithinBookingWindow,
   parseBaDateKey,
   parseRelativeDay,
   parseTimeOfDay,
@@ -23,7 +23,7 @@ import { logger } from '../../utils/logger.js';
  * Herramientas de disponibilidad.
  *
  * Acá vive la parte del dominio que el modelo NO puede decidir: qué día es
- * "el jueves", si esa fecha entra en la ventana de 7 días, si el comercio abre,
+ * "el jueves", si esa fecha entra en la ventana de 30 días, si el comercio abre,
  * si la fecha está bloqueada. El modelo aporta la comprensión (qué quiso decir
  * el cliente) y estas herramientas aportan el veredicto.
  *
@@ -43,10 +43,10 @@ export const resolveDateTool: AgentTool<ResolveDateArgs> = {
     function: {
       name: 'resolve_date',
       description:
-        'Convierte una mención de fecha del cliente ("mañana", "el viernes", "hoy", "pasado mañana") ' +
-        'en una fecha concreta, y valida que sea reservable. ' +
+        'Convierte una mención de fecha del cliente ("mañana", "el viernes", "hoy", "pasado mañana", ' +
+        '"el jueves que viene", "15/09") en una fecha concreta, y valida que sea reservable. ' +
         'Usala SIEMPRE antes de dar por buena una fecha: no calcules vos la fecha ni asumas que el local abre. ' +
-        'Si la fecha es ambigua o está fuera de la ventana de 7 días, te lo indica para que se lo consultes al cliente.',
+        'Si la fecha es ambigua o está fuera de la ventana de 30 días, te lo indica para que se lo consultes al cliente.',
       parameters: {
         type: 'object',
         properties: {
@@ -75,11 +75,11 @@ export const resolveDateTool: AgentTool<ResolveDateArgs> = {
 
     const dateKey = formatBaDateKey(parsed.baDate);
 
-    // Ventana de 7 días: regla dura del producto, no negociable por el modelo.
-    if (!isWithinNextWeek(parsed.baDate, rules.nowBA)) {
+    // Ventana de 30 días: regla dura del producto, no negociable por el modelo.
+    if (!isWithinBookingWindow(parsed.baDate, rules.nowBA)) {
       return fail(
         'out_of_window',
-        'Esa fecha está fuera de la ventana de reservas: sólo se puede reservar dentro de los próximos 7 días.'
+        'Esa fecha está fuera de la ventana de reservas: sólo se puede reservar dentro de los próximos 30 días.'
       );
     }
 
@@ -300,7 +300,7 @@ export const findSoonestSlotTool: AgentTool<Record<string, never>> = {
     if (!slot) {
       return fail(
         'no_slot_available',
-        'No hay ningún horario disponible en los próximos 7 días. Sugerile contactar al local directamente.'
+        'No hay ningún horario disponible en los próximos 30 días. Sugerile contactar al local directamente.'
       );
     }
 
