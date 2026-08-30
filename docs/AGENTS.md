@@ -2,9 +2,11 @@
 
 El servidor soporta múltiples agentes de IA con diferentes propósitos y configuraciones. Cada agente puede tener su propio modelo, prompts personalizados y conjuntos de acciones. Hoy solo hay un agente registrado (`waitlist`), pero el sistema está pensado para sumar más sin tocar el core (ver [Crear un Nuevo Agente](#crear-un-nuevo-agente)).
 
-> **Importante — qué maneja este agente y qué no:** el flujo de reserva paso a paso (personas → día → horario → confirmación → edición → cancelación) para clientes que escriben por WhatsApp es **determinístico** y vive en `WhatsAppHandler`/`ReservationService`, no en este agente. El `waitlist` agent se usa en dos lugares puntuales:
+> ⚠️ **Este documento es sobre el sistema legacy de `src/agents/` (config-based, un solo agente `waitlist`). No es el orquestador v2.** Desde `feat/agent-v2` existe un segundo sistema, `src/agent/` (singular, sin `s`) — un orquestador con tool-calling que, para los negocios listados en `AGENT_V2_BUSINESS_IDS`, lleva **toda** la conversación de WhatsApp: no pasa por `WhatsAppHandler`'s draft/steps ni por el `waitlist` agent descripto acá. Ver la sección "Flujo de Procesamiento" del [README](../README.md#arquitectura) para el detalle de ambos motores y cómo se elige uno u otro por negocio.
+>
+> **Qué maneja el `waitlist` agent de este documento, y qué no (aplica a negocios en v1):** el flujo de reserva paso a paso (personas → día → horario → confirmación → edición → cancelación) para clientes que escriben por WhatsApp es **determinístico** y vive en `WhatsAppHandler`/`ReservationService`, no en este agente. El `waitlist` agent se usa en dos lugares puntuales:
 > 1. Como **fallback conversacional** dentro de ese mismo flujo, para turnos fuera de paso (saludos sueltos, preguntas generales, un borrador en un estado inesperado) — `WhatsAppHandler` le pasa el mensaje y, si el agente infiere una de las tres acciones deterministas (`CREATE_RESERVATION`, `CHECK_STATUS`, `CANCEL`), dispara ese handler; para el resto, contesta en lenguaje natural.
-> 2. Como endpoint standalone (`POST /api/agents/waitlist/chat`, más abajo) para integraciones externas o pruebas, sin pasar por WhatsApp ni por el flujo determinístico.
+> 2. Como endpoint standalone (`POST /api/agents/waitlist/chat`, más abajo) para integraciones externas o pruebas, sin pasar por WhatsApp ni por el flujo determinístico. Este endpoint sigue activo tal cual para **todos** los negocios, estén en v1 o en v2 — es independiente del flag.
 
 ## 📋 Tabla de Contenidos
 

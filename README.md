@@ -18,10 +18,13 @@ API REST en Node.js/Express que funciona como backend de inteligencia artificial
 ## ✨ Características
 
 - 📲 **WhatsApp directo**: conexión multi-sesión por negocio vía Baileys (QR, start/stop), sin depender de un proveedor externo de WhatsApp Business API — ver [docs/ENDPOINTS.md](docs/ENDPOINTS.md)
-- 📅 **Reservas conversacionales**: flujo multi-paso (personas, día, horario, confirmación, edición, cancelación) manejado de forma determinística en `WhatsAppHandler`, con fechas bloqueadas por negocio y una reserva activa por cliente
+- 📅 **Reservas conversacionales — dos motores en paralelo, por negocio (flag `AGENT_MODE`)**:
+  - **v1 (default)**: flujo multi-paso (personas, día, horario, confirmación, edición, cancelación) manejado de forma determinística en `WhatsAppHandler`.
+  - **v2 (`src/agent/`, opt-in por `AGENT_V2_BUSINESS_IDS`)**: orquestador con tool-calling — el LLM lleva la conversación libremente (sin pasos ni menús forzados) y solo las reglas de negocio (disponibilidad, fechas bloqueadas, ventana de reserva, reserva única activa) quedan en tools deterministas que el modelo invoca. Ver [Arquitectura](#arquitectura).
+  - Ambos motores comparten fechas bloqueadas por negocio y la política de una reserva activa por cliente.
 - 🌐 **Multi-idioma (ES/EN/PT)**: detección automática por mensaje y cambio explícito en cualquier momento de la conversación (`src/i18n`)
 - 🤖 **Procesamiento de IA con OpenRouter**: Acceso a modelos de última generación (Claude, GPT, Gemini, etc.) vía una única API, con failover automático entre modelos
-- 🎭 **Sistema Multi-Agente**: agente conversacional de respaldo para conversación libre fuera del flujo de reserva ([Ver docs/AGENTS.md](docs/AGENTS.md))
+- 🎭 **Sistema Multi-Agente (legacy, `src/agents/`)**: agente conversacional de respaldo para conversación libre fuera del flujo de reserva de v1, y endpoint HTTP standalone ([Ver docs/AGENTS.md](docs/AGENTS.md)) — no confundir con el orquestador v2 de arriba, que es un sistema distinto
 - 💬 **Gestión de Conversaciones**: Mantiene historial de últimos 10 mensajes por conversación
 - 🎯 **Análisis de Intenciones**: Clasifica mensajes en acciones específicas automáticamente
 - ⚡ **Procesamiento por Lotes**: Endpoint batch para múltiples mensajes
@@ -56,12 +59,25 @@ El servidor se conecta directamente a WhatsApp (vía Baileys) con una sesión pr
 
 ### Flujo de Procesamiento (WhatsApp directo — camino principal)
 
-1. El cliente escribe por **WhatsApp** a un número conectado vía Baileys (uno por negocio)
-2. `WhatsAppHandler` resuelve el **idioma** de la conversación (auto-detección o elección explícita) y el **paso actual** de la reserva, si hay una en curso
-3. Según el paso y el mensaje, el flujo avanza de forma **determinística** (día, horario, personas, confirmación, edición, cancelación); recurre al LLM (OpenRouter) puntualmente para comprensión de lenguaje natural o para conversación libre fuera de flujo
-4. Guarda el estado en **Redis/Supabase** y responde por WhatsApp
+El cliente escribe por **WhatsApp** a un número conectado vía Baileys (uno por negocio). `WhatsAppHandler._processMessage` resuelve el **idioma** de la conversación y, en un único punto de bifurcación, decide **v1 o v2** según si el `businessId` está en `AGENT_V2_BUSINESS_IDS` (ver `src/agent/feature-flag.ts`). El resto del handler — locks, debounce, envío por Baileys — es compartido por ambos motores.
 
-> `POST /api/chat` y las rutas bajo `/api/agents` se mantienen por compatibilidad para integraciones externas que ya reciben el mensaje por otro canal — ver [docs/ENDPOINTS.md](docs/ENDPOINTS.md) para el detalle de ambos caminos (WhatsApp directo y HTTP).
+**v1 (default, `WhatsAppHandler`/`ReservationService`):**
+
+1. Resuelve el **paso actual** de la reserva (`ReservationDraft`), si hay una en curso.
+2. Según el paso y el mensaje, el flujo avanza de forma **determinística** (día, horario, personas, confirmación, edición, cancelación); recurre al LLM (OpenRouter) puntualmente para comprensión de lenguaje natural o para conversación libre fuera de paso (agente `waitlist`, ver [docs/AGENTS.md](docs/AGENTS.md)).
+3. Las respuestas salen de templates (`src/utils/prompts.ts`, catálogos i18n).
+
+**v2 (opt-in por negocio, `src/agent/`):**
+
+1. Se resuelve el **perfil del cliente para ese negocio** (`agent/state.ts` → `loadCustomerProfile`, `customers` está keyed por `(business_id, phone)`) *antes* del primer token del modelo, para saludar por nombre y en su idioma sin gastar una iteración del loop.
+2. `agent/orchestrator.ts` arma el system prompt (`agent/system-prompt.ts`: parte estable + bloque de estado — horarios, eventos activos, perfil) y corre `openrouter.service.runToolLoop`: el modelo decide libremente qué preguntar y en qué orden, y llama tools (`src/agent/tools/`) para cada acción real (`create_reservation`, `check_availability`, `cancel_reservation`, `list_events`, …).
+3. Las tools son las mismas reglas de negocio de v1 reusadas como funciones puras (`reservation-datetime.ts`) — ventana de reserva, fechas bloqueadas, horarios, reserva única activa — devueltas como `ToolResult`. Un campo `verbatim` permite que un hecho crítico (código de reserva, motivo de fecha bloqueada) salga tal cual, sin que el modelo lo parafrasee.
+4. Historial y estado se persisten en Redis bajo el prefijo `agent_v2:` (namespace separado de v1).
+5. `AGENT_SHADOW_BUSINESS_IDS` corre v2 en **modo sombra**: procesa el mismo mensaje real con `dryRun` (sin escribir en la DB ni responder al cliente) para comparar contra v1 sin arriesgar tráfico — ver evento `agent.shadow` en los logs.
+
+Ninguno de los dos motores necesita reprocesar reglas de negocio en el prompt: viven en el código (`reservation-datetime.ts` y las tools), no en texto que el modelo pueda malinterpretar.
+
+> `POST /api/chat` y las rutas bajo `/api/agents` se mantienen por compatibilidad para integraciones externas que ya reciben el mensaje por otro canal — no pasan por el flag v1/v2, solo por el agente `waitlist` legacy. Ver [docs/ENDPOINTS.md](docs/ENDPOINTS.md) para el detalle de ambos caminos (WhatsApp directo y HTTP).
 
 ## 📦 Requisitos Previos
 
@@ -758,25 +774,26 @@ ia-server/
 │   ├── config/                         # Clientes de OpenRouter, Redis, Supabase
 │   ├── controllers/                    # chat, agent, reservation, blocked-date, session, messages, health
 │   ├── services/
-│   │   ├── whatsapp-handler.service.ts     # Flujo conversacional determinístico (reserva, idioma, cancelación…)
+│   │   ├── whatsapp-handler.service.ts     # Punto de bifurcación v1/v2 + flujo determinístico de v1 (reserva, idioma, cancelación…)
 │   │   ├── baileys.service.ts              # Conexión directa a WhatsApp (multi-sesión por negocio)
-│   │   ├── reservation.service.ts          # Ciclo de vida de la reserva (draft → confirmada)
-│   │   ├── reservation-nlu.service.ts      # Extracción de datos de reserva en lenguaje natural
-│   │   ├── reservation-planner.service.ts  # Descompone mensajes con varias acciones
-│   │   ├── realtime-sync.service.ts        # Sync en tiempo real con Supabase (fechas bloqueadas, etc.)
-│   │   ├── openrouter.service.ts           # OpenRouter API wrapper
-│   │   ├── conversation.service.ts         # Historial de conversación
-│   │   ├── intent.service.ts               # Análisis de intención (ruta legacy /api/chat)
-│   │   ├── post-visit.service.ts           # Seguimiento post-visita
+│   │   ├── reservation.service.ts          # Ciclo de vida de la reserva (draft → confirmada) — usado por v1
+│   │   ├── reservation-nlu.service.ts      # Extracción de datos de reserva en lenguaje natural (v1)
+│   │   ├── reservation-planner.service.ts  # Descompone mensajes con varias acciones (v1)
+│   │   ├── realtime-sync.service.ts        # Sync en tiempo real con Supabase (fechas bloqueadas, etc.) — compartido
+│   │   ├── openrouter.service.ts           # OpenRouter API wrapper + runToolLoop (usado por v2)
+│   │   ├── conversation.service.ts         # Historial de conversación (v1)
+│   │   ├── intent.service.ts               # Análisis de intención (ruta legacy /api/chat y v1)
+│   │   ├── post-visit.service.ts           # Seguimiento post-visita — compartido
 │   │   └── supabase.service.ts             # Acceso a datos (negocios, clientes, reservas, mesas)
-│   ├── agents/                         # Config del agente conversacional de respaldo
+│   ├── agent/                           # Orquestador v2: tool-calling, sin pasos (state.ts, system-prompt.ts, orchestrator.ts, tools/, feature-flag.ts)
+│   ├── agents/                          # Config del agente conversacional de respaldo "waitlist" (legacy, no confundir con agent/ de arriba)
 │   ├── i18n/                           # Detección/selección de idioma + catálogos es/en/pt
 │   ├── middleware/                     # Auth, rate limiting, validación (Zod)
 │   ├── routes/                         # Sessions API y Messages API de WhatsApp
 │   ├── utils/                          # Prompts, plantillas, fechas/horarios, logger + catálogo de eventos
 │   ├── types/                          # Tipos de TypeScript (incl. generados desde Supabase)
 │   └── __tests__/                      # Jest: unit, integration, escenarios de conversación
-├── scripts/                            # Simulador de chat, utilidades de setup/tipos
+├── scripts/                             # chat-simulator.ts (--mode v1|v2), agent-eval.ts (`pnpm eval`, v2 contra el modelo real), utilidades de setup/tipos
 ├── logs/                                # Salida de PM2 (pm2-out.log / pm2-error.log)
 ├── dist/                                # Compiled JS
 ├── docs/                                # AGENTS.md, ENDPOINTS.md, TYPES_GENERATION.md
