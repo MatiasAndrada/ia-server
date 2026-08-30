@@ -4,7 +4,8 @@ import {
   parseBaDateKey,
   describeBaDateKey,
   parseRelativeDay,
-  isWithinNextWeek,
+  isWithinBookingWindow,
+  findWeekdayDayNumberMismatch,
   parseTimeOfDay,
   combineToUtcISO,
   isInPast,
@@ -89,17 +90,93 @@ describe('reservation-datetime', () => {
     it('returns null when no day reference is found', () => {
       expect(parseRelativeDay('quiero una mesa para 4', NOW_BA)).toBeNull();
     });
-  });
 
-  describe('isWithinNextWeek', () => {
-    it('accepts today through today+6', () => {
-      expect(isWithinNextWeek(startOfBaDay(NOW_BA), NOW_BA)).toBe(true);
-      expect(isWithinNextWeek(parseBaDateKey('2026-07-08'), NOW_BA)).toBe(true);
+    describe('explicit "dd/mm" dates', () => {
+      it('parses a valid date within the booking window', () => {
+        const result = parseRelativeDay('20/07', NOW_BA);
+        expect(result?.matchedWeekdayName).toBe(false);
+        expect(result && formatBaDateKey(result.baDate)).toBe('2026-07-20');
+      });
+
+      it('returns a date even when it falls outside the booking window, so the caller can reject it with the specific message', () => {
+        const result = parseRelativeDay('15/08', NOW_BA);
+        expect(result).not.toBeNull();
+        expect(result && formatBaDateKey(result.baDate)).toBe('2026-08-15');
+        expect(result && isWithinBookingWindow(result.baDate, NOW_BA)).toBe(false);
+      });
+
+      it('returns null for a calendar-impossible date (April has 30 days)', () => {
+        expect(parseRelativeDay('31/04', NOW_BA)).toBeNull();
+      });
+
+      it('rolls over to next year when the date already passed this year', () => {
+        const yearEnd = new Date('2026-12-28T12:00:00.000Z'); // Monday 2026-12-28 BA
+        const result = parseRelativeDay('05/01', yearEnd);
+        expect(result && formatBaDateKey(result.baDate)).toBe('2027-01-05');
+      });
     });
 
-    it('rejects days outside the 7-day window', () => {
-      expect(isWithinNextWeek(parseBaDateKey('2026-07-09'), NOW_BA)).toBe(false);
-      expect(isWithinNextWeek(parseBaDateKey('2026-07-01'), NOW_BA)).toBe(false);
+    describe('"que viene" / "próximo" weekday qualifier', () => {
+      it('resolves to the occurrence after the nearest one, not the nearest', () => {
+        // NOW_BA is itself a Thursday — "el jueves" alone resolves to today
+        // (see the nearest-occurrence test above); "que viene" must skip it.
+        const result = parseRelativeDay('el jueves que viene', NOW_BA);
+        expect(result?.isToday).toBe(false);
+        expect(result?.matchedWeekdayName).toBe(true);
+        expect(result && formatBaDateKey(result.baDate)).toBe('2026-07-09');
+      });
+
+      it('accepts "próximo jueves" and "jueves próximo" as the same qualifier', () => {
+        expect(parseRelativeDay('próximo jueves', NOW_BA) && formatBaDateKey(parseRelativeDay('próximo jueves', NOW_BA)!.baDate)).toBe('2026-07-09');
+        expect(parseRelativeDay('jueves próximo', NOW_BA) && formatBaDateKey(parseRelativeDay('jueves próximo', NOW_BA)!.baDate)).toBe('2026-07-09');
+      });
+    });
+
+    describe('weekday + explicit day-of-month', () => {
+      it('resolves directly when the day-of-month is a real occurrence of that weekday in the window', () => {
+        // Thursdays in the 30-day window from 2026-07-02: 2, 9, 16, 23, 30.
+        const result = parseRelativeDay('jueves 16', NOW_BA);
+        expect(result?.matchedWeekdayName).toBe(true);
+        expect(result?.isToday).toBe(false);
+        expect(result && formatBaDateKey(result.baDate)).toBe('2026-07-16');
+      });
+
+      it('falls back to the nearest occurrence when no in-window date matches both the weekday and the day-of-month', () => {
+        // The 15th is a Wednesday, and no Thursday in the window falls on the 15th.
+        const result = parseRelativeDay('jueves 15', NOW_BA);
+        expect(result?.matchedWeekdayName).toBe(true);
+        expect(result && formatBaDateKey(result.baDate)).toBe('2026-07-02'); // nearest Thursday = today
+      });
+    });
+  });
+
+  describe('isWithinBookingWindow', () => {
+    it('accepts today through today+29', () => {
+      expect(isWithinBookingWindow(startOfBaDay(NOW_BA), NOW_BA)).toBe(true);
+      expect(isWithinBookingWindow(parseBaDateKey('2026-07-31'), NOW_BA)).toBe(true);
+    });
+
+    it('rejects days outside the 30-day window', () => {
+      expect(isWithinBookingWindow(parseBaDateKey('2026-08-01'), NOW_BA)).toBe(false);
+      expect(isWithinBookingWindow(parseBaDateKey('2026-07-01'), NOW_BA)).toBe(false);
+    });
+  });
+
+  describe('findWeekdayDayNumberMismatch', () => {
+    it('returns null when parseRelativeDay already resolved the requested day-of-month directly', () => {
+      const parsed = parseRelativeDay('jueves 16', NOW_BA);
+      expect(parsed && findWeekdayDayNumberMismatch('jueves 16', parsed)).toBeNull();
+    });
+
+    it('flags a mismatch when the requested day-of-month matches no in-window occurrence of that weekday', () => {
+      const parsed = parseRelativeDay('jueves 15', NOW_BA); // falls back to nearest Thursday (today, the 2nd)
+      const mismatch = parsed && findWeekdayDayNumberMismatch('jueves 15', parsed);
+      expect(mismatch).toEqual({ requestedDayNumber: 15, weekdayLabel: 'jueves' });
+    });
+
+    it('returns null when there is no adjacent day number', () => {
+      const parsed = parseRelativeDay('el jueves', NOW_BA);
+      expect(parsed && findWeekdayDayNumberMismatch('el jueves', parsed)).toBeNull();
     });
   });
 
