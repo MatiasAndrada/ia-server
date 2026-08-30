@@ -5,7 +5,7 @@
  * DECISIÓN DE DISEÑO — por qué una tabla y no tres parsers:
  *
  * `reservation-datetime.ts` son 837 líneas de lógica de calendario probada
- * (ventana de 7 días, turnos partidos, márgenes de apertura/cierre, fechas
+ * (ventana de 30 días, turnos partidos, márgenes de apertura/cierre, fechas
  * bloqueadas, desambiguación de día de semana) con 404 líneas de tests.
  * Reescribirla por idioma triplicaría la superficie de bugs en la parte más
  * delicada del sistema.
@@ -115,6 +115,19 @@ const PHRASE_REWRITES: readonly (readonly [RegExp, string])[] = [
   [/\bquarter\s+past\s+(\d{1,2})\b/g, '$1 y cuarto'],
   [/\bquarter\s+to\s+(\d{1,2})\b/g, '$1 menos cuarto'],
   // "meia" y "quinze" en portugués sí van después del número, como en español.
+
+  // "next thursday" -> "thursday que viene" (el nombre del día se traduce
+  // recién después, en TEMPORAL_PATTERNS abajo, dando "jueves que viene",
+  // que es lo que espera parseRelativeDay). El modificador en inglés va
+  // ANTES del día, al revés que en español, por eso necesita reordenar.
+  [/\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/g, '$1 que viene'],
+  // "próxima quinta-feira" / "próximo sábado" -> "quinta-feira que viene" /
+  // "sabado que viene" (mismo reordenamiento, portugués también antepone el
+  // modificador).
+  [
+    /\b(?:proxim[oa])\s+(segunda-feira|segunda feira|terca-feira|terca feira|quarta-feira|quarta feira|quinta-feira|quinta feira|sexta-feira|sexta feira|segunda|terca|quarta|quinta|sexta|sabado|domingo)\b/g,
+    '$1 que viene',
+  ],
 ];
 
 /**
