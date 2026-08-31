@@ -15,7 +15,7 @@ import {
 } from '../types/index.js';
 import { logger, logEvent } from '../utils/logger.js';
 import { openRouterService } from './openrouter.service.js';
-import { describeScheduledAtUtc, nowInBuenosAires } from '../utils/reservation-datetime.js';
+import { describeScheduledAtUtc, isInPast, nowInBuenosAires } from '../utils/reservation-datetime.js';
 import * as templates from '../utils/message-templates.js';
 
 /**
@@ -438,6 +438,23 @@ export class SupabaseService {
         partySize: request.partySize,
         tableId: request.tableId,
       });
+
+      // Red de seguridad: una reserva con horario ya pasado nunca debe llegar
+      // a la base, sin importar qué camino la generó (chat, agente v2 o
+      // dashboard). Los eventos quedan afuera porque su fecha la fija el
+      // comercio al publicarlo, no el cliente.
+      if (request.scheduledAt && !request.eventId && isInPast(request.scheduledAt)) {
+        logEvent('warn', 'reservation.rejected', {
+          reason: 'scheduled_at_in_past',
+          businessId: request.businessId,
+          scheduledAt: request.scheduledAt,
+        });
+        return {
+          success: false,
+          error: 'Requested time is in the past',
+          blockedMessage: templates.timeAlreadyPassed(),
+        };
+      }
 
       const client = this.getClient();
 

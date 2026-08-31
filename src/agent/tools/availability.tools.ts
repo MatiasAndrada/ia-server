@@ -11,6 +11,7 @@ import {
   getBlockedDateReasonMessage,
   getUpcomingOpenDaysWithHours,
   isFutureReservationBlockedToday,
+  isInPast,
   isWithinBookingWindow,
   parseBaDateKey,
   parseRelativeDay,
@@ -242,6 +243,36 @@ export const checkAvailabilityTool: AgentTool<CheckAvailabilityArgs> = {
     }
 
     const scheduledAt = combineToUtcISO(baDate, hour, minute);
+
+    // Horario ya pasado: `checkBusinessHours` sólo mira el horario de atención,
+    // no la hora actual, así que "hoy a las 21" cuando ya son las 22 pasa esa
+    // validación igual. Se detecta acá aparte para no confundir el mensaje
+    // ("fuera de horario") con el real ("esa hora ya fue").
+    if (isInPast(scheduledAt)) {
+      const nowMin = rules.nowBA.getUTCHours() * 60 + rules.nowBA.getUTCMinutes();
+      const alternative = findNextSlotOnDay(
+        baDate,
+        nowMin,
+        rules.weeklyHours,
+        rules.openingMargin,
+        rules.closingMargin
+      );
+
+      return {
+        ok: false,
+        error: {
+          code: 'time_already_passed',
+          hint: alternative
+            ? `Esa hora ya pasó hoy. Avisale al cliente y proponele las ${String(alternative.hour).padStart(2, '0')}:${String(alternative.minute).padStart(2, '0')} de hoy, o preguntale si prefiere otro día.`
+            : `Esa hora ya pasó hoy y no queda otro horario disponible hoy. Avisale al cliente y ofrecele otra fecha.`,
+        },
+        data: {
+          suggestedAlternative: alternative
+            ? { hour: alternative.hour, minute: alternative.minute, dateKey }
+            : null,
+        },
+      } as ToolResult;
+    }
 
     // Bloqueo de reservas futuras para hoy: el comercio puede cortar la toma
     // de reservas del día en curso sin bloquear la fecha entera.
