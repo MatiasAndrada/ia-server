@@ -4,7 +4,7 @@ import {
   parseBaDateKey,
   describeBaDateKey,
   parseRelativeDay,
-  isWithinNextWeek,
+  isWithinBookingWindow,
   parseTimeOfDay,
   combineToUtcISO,
   isInPast,
@@ -91,15 +91,15 @@ describe('reservation-datetime', () => {
     });
   });
 
-  describe('isWithinNextWeek', () => {
-    it('accepts today through today+6', () => {
-      expect(isWithinNextWeek(startOfBaDay(NOW_BA), NOW_BA)).toBe(true);
-      expect(isWithinNextWeek(parseBaDateKey('2026-07-08'), NOW_BA)).toBe(true);
+  describe('isWithinBookingWindow', () => {
+    it('accepts today through today+59', () => {
+      expect(isWithinBookingWindow(startOfBaDay(NOW_BA), NOW_BA)).toBe(true);
+      expect(isWithinBookingWindow(parseBaDateKey('2026-08-30'), NOW_BA)).toBe(true);
     });
 
-    it('rejects days outside the 7-day window', () => {
-      expect(isWithinNextWeek(parseBaDateKey('2026-07-09'), NOW_BA)).toBe(false);
-      expect(isWithinNextWeek(parseBaDateKey('2026-07-01'), NOW_BA)).toBe(false);
+    it('rejects days outside the 60-day window', () => {
+      expect(isWithinBookingWindow(parseBaDateKey('2026-08-31'), NOW_BA)).toBe(false);
+      expect(isWithinBookingWindow(parseBaDateKey('2026-07-01'), NOW_BA)).toBe(false);
     });
   });
 

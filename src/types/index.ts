@@ -350,7 +350,7 @@ export type BlockedDateEntry = {
  * el paso `schedule_choice`, además de "hoy" y "otra fecha".
  *
  * A diferencia de una reserva normal, un evento puede caer fuera de la ventana
- * de 7 días y su fecha se considera habilitada aunque el comercio no abra ese
+ * de 60 días y su fecha se considera habilitada aunque el comercio no abra ese
  * día o lo tenga bloqueado: publicarlo ES la habilitación.
  */
 export interface BusinessEvent {
@@ -402,7 +402,7 @@ export interface ReservationDraft {
   // What to do once the customer picks one of several active reservations:
   // open the edit menu (default) or go straight to the cancel menu.
   pendingSelectionAction?: 'edit' | 'cancel';
-  // Scheduling fields (day/time chosen within the next 7 days; absent = instant/turno actual)
+  // Scheduling fields (day/time chosen within the booking window, currently 60 days; absent = instant/turno actual)
   scheduledDate?: string; // YYYY-MM-DD, Buenos Aires local day
   scheduledTime?: string; // HH:mm, 24h
   scheduledAt?: string; // ISO UTC instant combining scheduledDate + scheduledTime
@@ -465,9 +465,10 @@ export interface ReservationDraft {
   // Set when the customer names a weekday together with an explicit
   // day-of-month number that doesn't match the nearest in-window occurrence
   // of that weekday (e.g. "jueves 17" when the closest bookable Thursday is
-  // the 9th) — the requested date is beyond the 7-day booking window. Holds
-  // the nearest in-window alternative (and any time already given in the
-  // same message) until the customer confirms whether to take it instead.
+  // the 9th) — the requested date is almost certainly further out than that
+  // nearest occurrence. Holds the nearest in-window alternative (and any
+  // time already given in the same message) until the customer confirms
+  // whether to take it instead.
   pendingWeekdayDayMismatch?: {
     weekdayLabel: string; // e.g. "jueves"
     requestedDayNumber: number; // e.g. 17
@@ -508,7 +509,7 @@ export interface CreateReservationRequest {
   partySize: number;
   tableId?: string;
   source?: 'AI_CHAT' | 'DASHBOARD';
-  /** ISO UTC instant for a future day/time within the next 7 days; omitted/null = instant reservation for the current turn. */
+  /** ISO UTC instant for a future day/time within the booking window (currently 60 days); omitted/null = instant reservation for the current turn. */
   scheduledAt?: string | null;
   /** Set when the reservation is for one of the business's events. Forces WAITING. */
   eventId?: string | null;

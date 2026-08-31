@@ -570,7 +570,7 @@ export function hasDateOrTimeSignal(message: string, normalizedMessage: string):
   const hasMeridiemPattern = /\b(?:1[0-2]|0?\d)\s?(?:am|pm|a\.m\.|p\.m\.)\b/.test(lowerMessage);
   const hasTimePhrasePattern = /\b(?:a\s+las|para\s+las|tipo\s+las|como\s+a\s+las|como\s+las|sobre\s+las|a\s+eso\s+de\s+las|eso\s+de\s+las)\s+\d{1,2}(?::\d{2})?\b/.test(normalizedMessage);
   const hasHourAbbreviation = /\b\d{1,2}\s?(?:hs|horas)\b/.test(normalizedMessage);
-  // Day names and relative dates within (or near) the supported 7-day window.
+  // Day names and near-term relative dates.
   const hasDateReference = /\b(?:manana|hoy|pasado\s+manana|esta\s+tarde|esta\s+noche|al\s+mediodia|otro\s+dia|otro\s+turno|mas\s+tarde|a\s+la\s+noche|a\s+la\s+tarde|a\s+la\s+manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo|finde|fin\s+de\s+semana)\b/.test(normalizedMessage);
   // "9 y media", "3 y cuarto" — common Argentine half/quarter-hour expressions
   const hasHalfHour = /\b\d{1,2}\s*y\s*(media|cuarto|menos\s+(cuarto|quince))\b/.test(normalizedMessage);
@@ -636,32 +636,53 @@ export function isInstantChoiceMessage(normalizedMessage: string): boolean {
 }
 
 /**
- * Detects references to dates clearly OUTSIDE the supported 7-day rolling window
- * (today + next 6 days), e.g. "la semana que viene", "el mes que viene", "en 15 días".
- * Near-term references (mañana, el viernes, etc.) are NOT flagged here — those are
- * valid and handled by the `schedule_choice`/`date`/`time` step branches instead.
+ * Day-count threshold above which a date reference is clearly outside the
+ * booking window. Mirrors `BOOKING_WINDOW_DAYS` in `reservation-datetime.ts`
+ * (not imported directly — that module already imports FROM this one, so
+ * importing back would create a cycle; keep the two in sync by hand).
+ */
+const OUT_OF_WINDOW_DAY_THRESHOLD = 60;
+
+/**
+ * Detects references to dates clearly OUTSIDE the booking window
+ * (`OUT_OF_WINDOW_DAY_THRESHOLD` days), e.g. "el mes que viene", "en 65 días".
+ * Near-term references (mañana, el viernes, la semana que viene, en 20 días,
+ * etc.) are NOT flagged here — those are valid and handled by the
+ * `schedule_choice`/`date`/`time` step branches instead.
  */
 function isOutOfWindowDateIntent(
   normalizedMessage: string,
   hasActiveDraft: boolean,
   reservationRelated: boolean
 ): boolean {
-  const farFuturePatterns = [
-    /\bsemana\s+que\s+viene\b/,
-    /\bproxima\s+semana\b/,
+  // No precise day count available for these — "next month"/"next year" is,
+  // in practice, essentially always beyond the window regardless of when in
+  // the current month it's said.
+  const alwaysOutOfWindowPatterns = [
     /\bel\s+mes\s+que\s+viene\b/,
     /\bmes\s+que\s+viene\b/,
     /\bproximo\s+mes\b/,
     /\bel\s+ano\s+que\s+viene\b/,
-    /\ben\s+\d+\s+semanas?\b/,
-    /\bdentro\s+de\s+\d+\s+semanas?\b/,
-    /\ben\s+(7|8|9|[1-9]\d+)\s+dias?\b/,
-    /\bdentro\s+de\s+(7|8|9|[1-9]\d+)\s+dias?\b/,
   ];
 
-  const hasFarFutureSignal = farFuturePatterns.some((pattern) => pattern.test(normalizedMessage));
+  const hasAlwaysOutOfWindowSignal = alwaysOutOfWindowPatterns.some((pattern) =>
+    pattern.test(normalizedMessage)
+  );
 
-  if (!hasFarFutureSignal) {
+  // "en N semanas" / "dentro de N semanas" and "en N días" / "dentro de N
+  // días" DO give a precise count — only flag them once that count reaches
+  // or exceeds the actual window, instead of hard-blocking every mention of
+  // a week/day count the way the old 7-day window had to.
+  const weeksMatch = normalizedMessage.match(/\b(?:en|dentro\s+de)\s+(\d+)\s+semanas?\b/);
+  const daysMatch = normalizedMessage.match(/\b(?:en|dentro\s+de)\s+(\d+)\s+dias?\b/);
+  const requestedDayCount = weeksMatch
+    ? parseInt(weeksMatch[1], 10) * 7
+    : daysMatch
+      ? parseInt(daysMatch[1], 10)
+      : null;
+  const hasFarFutureDayCount = requestedDayCount !== null && requestedDayCount >= OUT_OF_WINDOW_DAY_THRESHOLD;
+
+  if (!hasAlwaysOutOfWindowSignal && !hasFarFutureDayCount) {
     return false;
   }
 

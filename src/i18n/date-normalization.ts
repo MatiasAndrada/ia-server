@@ -5,7 +5,7 @@
  * DECISIÓN DE DISEÑO — por qué una tabla y no tres parsers:
  *
  * `reservation-datetime.ts` son 837 líneas de lógica de calendario probada
- * (ventana de 7 días, turnos partidos, márgenes de apertura/cierre, fechas
+ * (ventana de 60 días, turnos partidos, márgenes de apertura/cierre, fechas
  * bloqueadas, desambiguación de día de semana) con 404 líneas de tests.
  * Reescribirla por idioma triplicaría la superficie de bugs en la parte más
  * delicada del sistema.

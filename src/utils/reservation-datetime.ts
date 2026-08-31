@@ -12,7 +12,21 @@ import type { WeeklyHours, WeeklyHoursDayKey, WeeklyHoursShift } from '../types/
 export const BA_OFFSET_MS = 3 * 60 * 60 * 1000;
 
 const WEEKDAY_KEYS = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
-const REQUESTED_DAY_WINDOW = 7; // today + next 6 days
+const REQUESTED_DAY_WINDOW = 60; // today + next 59 days
+/** Same value, exported for callers outside this module (e.g. reservation-scope.ts). */
+export const BOOKING_WINDOW_DAYS = REQUESTED_DAY_WINDOW;
+
+/**
+ * Narrower window used only by the weekday-NAME listing helpers
+ * (`formatBookableDays`, `getUpcomingOpenDaysWithHours`), which offer a
+ * customer a bare weekday to answer with (e.g. "lunes, martes"). A reply of
+ * just a weekday name always resolves to its NEAREST occurrence (see
+ * `parseRelativeDay`), so these listings must stay scoped to that same 7-day
+ * reach — otherwise they could list a weekday whose nearest occurrence is
+ * closed/blocked while a later occurrence (out of reach for a bare-name
+ * reply) is open.
+ */
+const NEAR_TERM_WEEKDAY_WINDOW = 7;
 
 export interface ParsedDay {
   /** A Date whose UTC getters reflect the Buenos Aires wall-clock day, time zeroed out. */
@@ -84,8 +98,9 @@ export function formatDayLabel(baDate: Date, isToday: boolean): string {
 /**
  * Parses a relative/weekday day reference ("hoy", "mañana", "pasado mañana",
  * "el viernes", etc.) relative to `nowBA` (see {@link nowInBuenosAires}).
- * Always resolves to a day within the next 7-day rolling window, since weekday
- * lookups pick the NEAREST occurrence (today included).
+ * A named weekday always resolves to its NEAREST occurrence (today included),
+ * which is always within the next 7 days regardless of the full booking
+ * window's length.
  */
 export function parseRelativeDay(text: string, nowBA: Date): ParsedDay | null {
   const normalized = normalizeReservationScopeText(text);
@@ -128,8 +143,8 @@ export interface WeekdayDayNumberMismatch {
  * Detects when the customer named a weekday together with an explicit
  * day-of-month number that does NOT match the nearest in-window occurrence of
  * that weekday (e.g. "jueves 17" when the closest bookable Thursday is the
- * 9th) — the customer almost certainly means a date further out than the
- * 7-day booking window, and `parseRelativeDay` would otherwise silently
+ * 9th) — the customer almost certainly means a date further out than that
+ * nearest occurrence, and `parseRelativeDay` would otherwise silently
  * resolve to the nearest Thursday instead, ignoring the "17".
  *
  * Only matches a number immediately adjacent to the weekday token (in either
@@ -166,8 +181,8 @@ export function findWeekdayDayNumberMismatch(
   };
 }
 
-/** True when `baDate` falls within [today, today + 6 days] in Buenos Aires time. */
-export function isWithinNextWeek(baDate: Date, nowBA: Date): boolean {
+/** True when `baDate` falls within [today, today + 59 days] in Buenos Aires time. */
+export function isWithinBookingWindow(baDate: Date, nowBA: Date): boolean {
   const start = startOfBaDay(nowBA);
   const end = addBaDays(start, REQUESTED_DAY_WINDOW - 1);
   return baDate.getTime() >= start.getTime() && baDate.getTime() <= end.getTime();
@@ -356,11 +371,17 @@ export function formatOpenDays(weeklyHours: WeeklyHours): string {
 }
 
 /**
- * Like {@link formatOpenDays}, but scoped to the actual next-7-days window and
+ * Like {@link formatOpenDays}, but scoped to a near-term (7-day) window and
  * excluding weekdays whose only occurrence in that window is a blocked date
  * (business_blocked_dates). Used for the day-selection prompt so we never offer
  * a day the customer cannot actually book. Each weekday appears at most once in
  * a 7-day window, so a blocked occurrence removes that weekday from the list.
+ *
+ * Deliberately scoped to `NEAR_TERM_WEEKDAY_WINDOW` rather than the full
+ * `BOOKING_WINDOW_DAYS`: a bare weekday-name reply always resolves to its
+ * NEAREST occurrence (see `parseRelativeDay`), so listing a weekday whose
+ * only open occurrence is further out would offer something the customer's
+ * plain-name reply couldn't actually reach.
  */
 export function formatBookableDays(
   weeklyHours: WeeklyHours,
@@ -370,7 +391,7 @@ export function formatBookableDays(
   const todayStart = startOfBaDay(nowBA);
   const bookableDow = new Set<number>();
 
-  for (let daysAhead = 0; daysAhead < REQUESTED_DAY_WINDOW; daysAhead++) {
+  for (let daysAhead = 0; daysAhead < NEAR_TERM_WEEKDAY_WINDOW; daysAhead++) {
     const date = addBaDays(todayStart, daysAhead);
     if (isDateBlocked && isDateBlocked(formatBaDateKey(date))) continue;
     const entry = weeklyHours[DOW_TO_KEY[date.getUTCDay()]];
@@ -390,6 +411,11 @@ export function formatBookableDays(
  * ranges, e.g. "jueves 23/07 - 09:15–12:00 y 16:30–22:00". Used to list
  * concrete alternatives when today is closed, instead of just weekday names
  * (see {@link formatBookableDays}).
+ *
+ * Also scoped to `NEAR_TERM_WEEKDAY_WINDOW`, not the full booking window: the
+ * customer is expected to answer by naming the weekday (e.g. "jueves"), which
+ * only resolves to its nearest occurrence — see the comment on
+ * {@link formatBookableDays}.
  */
 export function getUpcomingOpenDaysWithHours(
   weeklyHours: WeeklyHours,
@@ -402,7 +428,7 @@ export function getUpcomingOpenDaysWithHours(
   const todayStart = startOfBaDay(nowBA);
   const lines: string[] = [];
 
-  for (let daysAhead = 1; daysAhead < REQUESTED_DAY_WINDOW && lines.length < limit; daysAhead++) {
+  for (let daysAhead = 1; daysAhead < NEAR_TERM_WEEKDAY_WINDOW && lines.length < limit; daysAhead++) {
     const date = addBaDays(todayStart, daysAhead);
     const dateKey = formatBaDateKey(date);
     if (isDateBlockedFn(dateKey)) continue;
@@ -463,7 +489,7 @@ export function formatDayHoursForDate(
 /**
  * Finds the next business opening slot starting from `nowBA`, adding `marginMinutes`
  * to the raw opening time (e.g. open=08:00 + margin=15 → slot=08:15).
- * Looks up to 7 days ahead. Returns null if no slot found within that window.
+ * Looks up to REQUESTED_DAY_WINDOW days ahead. Returns null if no slot found within that window.
  */
 export function findNextOpenSlot(
   nowBA: Date,
@@ -474,7 +500,7 @@ export function findNextOpenSlot(
   const nowMin = nowBA.getUTCHours() * 60 + nowBA.getUTCMinutes();
   const todayStart = startOfBaDay(nowBA);
 
-  for (let daysAhead = 0; daysAhead < 7; daysAhead++) {
+  for (let daysAhead = 0; daysAhead < REQUESTED_DAY_WINDOW; daysAhead++) {
     const checkDate = addBaDays(todayStart, daysAhead);
     const dayKey = DOW_TO_KEY[checkDate.getUTCDay()];
     const entry = weeklyHours[dayKey];
@@ -654,7 +680,7 @@ export function findNextSlotOnDay(
 }
 
 /**
- * Finds the soonest bookable slot within the 7-day window, honoring business
+ * Finds the soonest bookable slot within the booking window, honoring business
  * hours, an optional per-date "blocked" predicate, an optional preferred start
  * day, and an optional "never today" constraint. Powers the proactive
  * suggestion offered when the customer enters an unavailable day or time so
@@ -665,7 +691,7 @@ export function findNextSlotOnDay(
  *   that intent ("no del día actual si es que se seleccionó otro día").
  * - `preferDate`: start scanning on this day before rolling forward (e.g. the
  *   day the customer already chose). Earlier days — and, with `skipToday`,
- *   today — are skipped. Still bounded by the same 7-day window.
+ *   today — are skipped. Still bounded by the same booking window.
  * - `isDateBlocked`: returns true for business-blocked date keys, which are
  *   skipped like closed days.
  *

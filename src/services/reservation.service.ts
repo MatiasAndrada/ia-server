@@ -394,7 +394,7 @@ export class ReservationService {
   }
 
   /**
-   * Move the draft into the date step (asking which day within the next 7 days).
+   * Move the draft into the date step (asking which day within the booking window).
    */
   /**
    * Saves a pre-computed proposed slot into the draft and transitions to the
@@ -435,7 +435,7 @@ export class ReservationService {
   }
 
   /**
-   * Update draft with the chosen day (within the next 7 days) and advance to the time step.
+   * Update draft with the chosen day (within the booking window) and advance to the time step.
    */
   static async setScheduledDate(
     conversationId: string,

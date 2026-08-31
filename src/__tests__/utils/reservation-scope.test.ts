@@ -23,7 +23,7 @@ describe('reservation-scope', () => {
     });
 
     it('flags far-future date intents as out_of_window when a draft is active', () => {
-      const result = evaluateReservationScope('quiero reservar para la semana que viene', {
+      const result = evaluateReservationScope('quiero reservar para el mes que viene', {
         currentStep: 'date',
       });
       expect(result.decision).toBe('out_of_window');
@@ -31,8 +31,29 @@ describe('reservation-scope', () => {
     });
 
     it('does not flag far-future phrases with no active draft or reservation intent', () => {
-      const result = evaluateReservationScope('la semana que viene tengo examenes', {
+      const result = evaluateReservationScope('el mes que viene tengo examenes', {
         currentStep: null,
+      });
+      expect(result.decision).not.toBe('out_of_window');
+    });
+
+    it('no longer flags "la semana que viene" — it fits within the 60-day booking window', () => {
+      const result = evaluateReservationScope('quiero reservar para la semana que viene', {
+        currentStep: 'date',
+      });
+      expect(result.decision).not.toBe('out_of_window');
+    });
+
+    it('flags an explicit day count that reaches or exceeds the 60-day window', () => {
+      const result = evaluateReservationScope('quiero reservar en 65 dias', {
+        currentStep: 'date',
+      });
+      expect(result.decision).toBe('out_of_window');
+    });
+
+    it('does not flag an explicit day count that still fits within the 60-day window', () => {
+      const result = evaluateReservationScope('quiero reservar en 20 dias', {
+        currentStep: 'date',
       });
       expect(result.decision).not.toBe('out_of_window');
     });
