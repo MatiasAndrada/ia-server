@@ -99,9 +99,9 @@ describe('reservation-datetime', () => {
       });
 
       it('returns a date even when it falls outside the booking window, so the caller can reject it with the specific message', () => {
-        const result = parseRelativeDay('15/08', NOW_BA);
+        const result = parseRelativeDay('15/09', NOW_BA);
         expect(result).not.toBeNull();
-        expect(result && formatBaDateKey(result.baDate)).toBe('2026-08-15');
+        expect(result && formatBaDateKey(result.baDate)).toBe('2026-09-15');
         expect(result && isWithinBookingWindow(result.baDate, NOW_BA)).toBe(false);
       });
 
@@ -134,7 +134,7 @@ describe('reservation-datetime', () => {
 
     describe('weekday + explicit day-of-month', () => {
       it('resolves directly when the day-of-month is a real occurrence of that weekday in the window', () => {
-        // Thursdays in the 30-day window from 2026-07-02: 2, 9, 16, 23, 30.
+        // Thursdays close to 2026-07-02: 2, 9, 16, 23, 30 — all well within the 60-day window.
         const result = parseRelativeDay('jueves 16', NOW_BA);
         expect(result?.matchedWeekdayName).toBe(true);
         expect(result?.isToday).toBe(false);
@@ -151,13 +151,13 @@ describe('reservation-datetime', () => {
   });
 
   describe('isWithinBookingWindow', () => {
-    it('accepts today through today+29', () => {
+    it('accepts today through today+59', () => {
       expect(isWithinBookingWindow(startOfBaDay(NOW_BA), NOW_BA)).toBe(true);
-      expect(isWithinBookingWindow(parseBaDateKey('2026-07-31'), NOW_BA)).toBe(true);
+      expect(isWithinBookingWindow(parseBaDateKey('2026-08-30'), NOW_BA)).toBe(true);
     });
 
-    it('rejects days outside the 30-day window', () => {
-      expect(isWithinBookingWindow(parseBaDateKey('2026-08-01'), NOW_BA)).toBe(false);
+    it('rejects days outside the 60-day window', () => {
+      expect(isWithinBookingWindow(parseBaDateKey('2026-08-31'), NOW_BA)).toBe(false);
       expect(isWithinBookingWindow(parseBaDateKey('2026-07-01'), NOW_BA)).toBe(false);
     });
   });

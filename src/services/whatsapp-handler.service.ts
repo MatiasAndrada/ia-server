@@ -3035,7 +3035,7 @@ export class WhatsAppHandler {
   /**
    * When the customer names a weekday together with an explicit day-of-month
    * number that doesn't match ANY occurrence of that weekday within the
-   * booking window (e.g. "jueves 17" when no Thursday in the next 30 days
+   * booking window (e.g. "jueves 17" when no Thursday in the next 60 days
    * falls on the 17th — `parseRelativeDay` already tried resolving that exact
    * combination and fell back to the nearest occurrence instead). Stash the
    * nearest in-window alternative (plus any time already given in the same

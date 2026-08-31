@@ -645,12 +645,12 @@ export function isInstantChoiceMessage(normalizedMessage: string): boolean {
  * (not imported directly — that module already imports FROM this one, so
  * importing back would create a cycle; keep the two in sync by hand).
  */
-const OUT_OF_WINDOW_DAY_THRESHOLD = 30;
+const OUT_OF_WINDOW_DAY_THRESHOLD = 60;
 
 /**
  * Detects references to dates clearly OUTSIDE the booking window
- * (`OUT_OF_WINDOW_DAY_THRESHOLD` days), e.g. "el mes que viene", "en 40 días".
- * Near-term references (mañana, el viernes, la semana que viene, en 10 días,
+ * (`OUT_OF_WINDOW_DAY_THRESHOLD` days), e.g. "el mes que viene", "en 65 días".
+ * Near-term references (mañana, el viernes, la semana que viene, en 20 días,
  * etc.) are NOT flagged here — those are valid and handled by the
  * `schedule_choice`/`date`/`time` step branches instead (including, for a
  * named weekday, "que viene"/"próximo" qualifiers resolved directly by

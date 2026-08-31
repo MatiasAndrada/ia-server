@@ -91,25 +91,25 @@ describe('ReservationReminderService', () => {
     expect(message).toContain('CANCELAR');
   });
 
-  it('sends the arrival reminder about fifteen minutes before', async () => {
+  it('no longer sends an arrival reminder within fifteen minutes of the reservation', async () => {
+    // El envío de 'arrival' se sacó (era redundante con el de proximidad).
+    // Además, el piso del recordatorio de antelación sigue en 15' por
+    // defecto, así que tampoco sale ese otro mensaje esta cerca de la hora.
     entriesResult = { data: [reservationIn(14)], error: null };
 
     await ReservationReminderService.processDueReminders();
 
-    expect(sendMessageMock).toHaveBeenCalledTimes(1);
-    const [, , message] = sendMessageMock.mock.calls[0];
-    expect(message).toContain('Ya deberías estar cerca');
+    expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
-  it('does not send the lead reminder once the arrival window has been reached', async () => {
-    // Un solo mensaje: el de proximidad. Mandar además "falta una hora" cuando
-    // faltan diez minutos sería peor que no mandar nada.
+  it('sends nothing once the old arrival window has been reached, only marks it as done', async () => {
+    // Sin el recordatorio de 'arrival', y con el piso del de antelación
+    // también en 15', una reserva a 10' vista no dispara ningún mensaje.
     entriesResult = { data: [reservationIn(10)], error: null };
 
     await ReservationReminderService.processDueReminders();
 
-    expect(sendMessageMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageMock.mock.calls[0][2]).toContain('Ya deberías estar cerca');
+    expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
   it('marks a reminder that arrived too late so it does not fire on the next pass', async () => {

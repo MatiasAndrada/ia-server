@@ -586,7 +586,7 @@ export const enCatalog: MessageCatalog = {
   },
 
   closedNoAvailability(): string {
-    return `❌ We're closed right now and I couldn't find availability in the next 30 days.`;
+    return `❌ We're closed right now and I couldn't find availability in the next 60 days.`;
   },
 
   closedSuggestNextSlot(slotLabel: string): string {
@@ -594,11 +594,11 @@ export const enCatalog: MessageCatalog = {
   },
 
   outOfWindowPrefix(): string {
-    return `For now I can only take bookings within the next 30 days. `;
+    return `For now I can only take bookings within the next 60 days. `;
   },
 
   outOfWindowAskDay(): string {
-    return `For now I can only take bookings within the next 30 days. Which day would you like?`;
+    return `For now I can only take bookings within the next 60 days. Which day would you like?`;
   },
 
   scheduleChoiceInvalid(optionCount: number = 2): string {
@@ -671,7 +671,7 @@ export const enCatalog: MessageCatalog = {
   },
 
   weekdayDayMismatchPrompt(weekdayLabel: string, requestedDayNumber: number, nearestLabel: string): string {
-    return `For now I can only take bookings within the *next 30 days*, so I can't book for *${weekdayLabel} the ${requestedDayNumber}*.\n\nWould you like *${nearestLabel}* (the next ${weekdayLabel}) instead?\n\nReply *yes* or *no*.`;
+    return `For now I can only take bookings within the *next 60 days*, so I can't book for *${weekdayLabel} the ${requestedDayNumber}*.\n\nWould you like *${nearestLabel}* (the next ${weekdayLabel}) instead?\n\nReply *yes* or *no*.`;
   },
 
   weekdayDayMismatchInvalid(nearestLabel: string): string {
@@ -886,7 +886,7 @@ export const enCatalog: MessageCatalog = {
   },
 
   reservationOutOfWindow(businessName: string): string {
-    return `Hello 😊 At “${businessName}” I can currently only take bookings within the next 30 days. Would you like to choose a closer day?`;
+    return `Hello 😊 At “${businessName}” I can currently only take bookings within the next 60 days. Would you like to choose a closer day?`;
   },
 
   inactiveFallback(): string {

@@ -619,7 +619,7 @@ export const esCatalog = {
   },
 
   closedNoAvailability(): string {
-    return `❌ El local está cerrado en este momento y no encontré disponibilidad en los próximos 30 días.`;
+    return `❌ El local está cerrado en este momento y no encontré disponibilidad en los próximos 60 días.`;
   },
 
   closedSuggestNextSlot(slotLabel: string): string {
@@ -627,11 +627,11 @@ export const esCatalog = {
   },
 
   outOfWindowPrefix(): string {
-    return `Por ahora solo puedo tomar reservas dentro de los próximos 30 días. `;
+    return `Por ahora solo puedo tomar reservas dentro de los próximos 60 días. `;
   },
 
   outOfWindowAskDay(): string {
-    return `Por ahora solo puedo tomar reservas dentro de los próximos 30 días. ¿Para qué día la querés?`;
+    return `Por ahora solo puedo tomar reservas dentro de los próximos 60 días. ¿Para qué día la querés?`;
   },
 
   scheduleChoiceInvalid(optionCount: number = 2): string {
@@ -707,7 +707,7 @@ export const esCatalog = {
   },
 
   weekdayDayMismatchPrompt(weekdayLabel: string, requestedDayNumber: number, nearestLabel: string): string {
-    return `Por ahora solo puedo tomar reservas dentro de los *próximos 30 días*, así que no puedo agendar para el *${weekdayLabel} ${requestedDayNumber}*.\n\n¿Querés que sea para el *${nearestLabel}* (el próximo ${weekdayLabel}) en su lugar?\n\nRespondé *sí* o *no*.`;
+    return `Por ahora solo puedo tomar reservas dentro de los *próximos 60 días*, así que no puedo agendar para el *${weekdayLabel} ${requestedDayNumber}*.\n\n¿Querés que sea para el *${nearestLabel}* (el próximo ${weekdayLabel}) en su lugar?\n\nRespondé *sí* o *no*.`;
   },
 
   weekdayDayMismatchInvalid(nearestLabel: string): string {
@@ -966,7 +966,7 @@ export const esCatalog = {
   },
 
   reservationOutOfWindow(businessName: string): string {
-    return `Hola 😊 En “${businessName}” por ahora solo puedo tomar reservas dentro de los próximos 30 días. ¿Querés elegir un día más cercano?`;
+    return `Hola 😊 En “${businessName}” por ahora solo puedo tomar reservas dentro de los próximos 60 días. ¿Querés elegir un día más cercano?`;
   },
 
   inactiveFallback(): string {

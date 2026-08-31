@@ -156,7 +156,6 @@ export class ReservationReminderService {
         { businessId: reservation.business_id, entryId: reservation.id },
         async () => {
           await this.processReminder(reservation, 'upcoming', minutesUntil, upcomingLead, arrivalLead);
-          await this.processReminder(reservation, 'arrival', minutesUntil, arrivalLead, 0);
         }
       );
     }

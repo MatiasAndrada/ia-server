@@ -585,7 +585,7 @@ export const ptCatalog: MessageCatalog = {
   },
 
   closedNoAvailability(): string {
-    return `❌ Estamos fechados neste momento e não encontrei disponibilidade nos próximos 30 dias.`;
+    return `❌ Estamos fechados neste momento e não encontrei disponibilidade nos próximos 60 dias.`;
   },
 
   closedSuggestNextSlot(slotLabel: string): string {
@@ -593,11 +593,11 @@ export const ptCatalog: MessageCatalog = {
   },
 
   outOfWindowPrefix(): string {
-    return `Por enquanto só posso aceitar reservas dentro dos próximos 30 dias. `;
+    return `Por enquanto só posso aceitar reservas dentro dos próximos 60 dias. `;
   },
 
   outOfWindowAskDay(): string {
-    return `Por enquanto só posso aceitar reservas dentro dos próximos 30 dias. Para qual dia você quer?`;
+    return `Por enquanto só posso aceitar reservas dentro dos próximos 60 dias. Para qual dia você quer?`;
   },
 
   scheduleChoiceInvalid(optionCount: number = 2): string {
@@ -670,7 +670,7 @@ export const ptCatalog: MessageCatalog = {
   },
 
   weekdayDayMismatchPrompt(weekdayLabel: string, requestedDayNumber: number, nearestLabel: string): string {
-    return `Por enquanto só posso aceitar reservas dentro dos *próximos 30 dias*, então não consigo agendar para *${weekdayLabel} dia ${requestedDayNumber}*.\n\nVocê quer que seja *${nearestLabel}* (a próxima ${weekdayLabel}) no lugar?\n\nResponda *sim* ou *não*.`;
+    return `Por enquanto só posso aceitar reservas dentro dos *próximos 60 dias*, então não consigo agendar para *${weekdayLabel} dia ${requestedDayNumber}*.\n\nVocê quer que seja *${nearestLabel}* (a próxima ${weekdayLabel}) no lugar?\n\nResponda *sim* ou *não*.`;
   },
 
   weekdayDayMismatchInvalid(nearestLabel: string): string {
@@ -885,7 +885,7 @@ export const ptCatalog: MessageCatalog = {
   },
 
   reservationOutOfWindow(businessName: string): string {
-    return `Olá 😊 No “${businessName}” por enquanto só posso aceitar reservas dentro dos próximos 30 dias. Você quer escolher um dia mais próximo?`;
+    return `Olá 😊 No “${businessName}” por enquanto só posso aceitar reservas dentro dos próximos 60 dias. Você quer escolher um dia mais próximo?`;
   },
 
   inactiveFallback(): string {

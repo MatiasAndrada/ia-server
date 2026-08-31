@@ -12,7 +12,7 @@ import type { WeeklyHours, WeeklyHoursDayKey, WeeklyHoursShift } from '../types/
 export const BA_OFFSET_MS = 3 * 60 * 60 * 1000;
 
 const WEEKDAY_KEYS = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
-const REQUESTED_DAY_WINDOW = 30; // today + next 29 days
+const REQUESTED_DAY_WINDOW = 60; // today + next 59 days
 /** Same value, exported for callers outside this module (e.g. reservation-scope.ts). */
 export const BOOKING_WINDOW_DAYS = REQUESTED_DAY_WINDOW;
 
@@ -21,7 +21,7 @@ export const BOOKING_WINDOW_DAYS = REQUESTED_DAY_WINDOW;
  * (`formatBookableDays`, `getUpcomingOpenDaysWithHours`), which offer a
  * customer a bare weekday to answer with (e.g. "lunes, martes"). A reply of
  * just a weekday name always resolves to its NEAREST occurrence (see
- * `parseRelativeDay`), so these listings must stay scoped to the same 7-day
+ * `parseRelativeDay`), so these listings must stay scoped to that same 7-day
  * reach — otherwise they could list a weekday whose nearest occurrence is
  * closed/blocked while a later occurrence (out of reach for a bare-name
  * reply) is open.
@@ -267,7 +267,7 @@ export function findWeekdayDayNumberMismatch(
   };
 }
 
-/** True when `baDate` falls within [today, today + 29 days] in Buenos Aires time. */
+/** True when `baDate` falls within [today, today + 59 days] in Buenos Aires time. */
 export function isWithinBookingWindow(baDate: Date, nowBA: Date): boolean {
   const start = startOfBaDay(nowBA);
   const end = addBaDays(start, REQUESTED_DAY_WINDOW - 1);
