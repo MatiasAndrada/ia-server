@@ -151,17 +151,25 @@ describe('agent tool registry', () => {
       expect(result).toMatchObject({ ok: false, error: { code: 'missing_name' } });
     });
 
-    it('no crea una segunda reserva si el cliente ya tiene una activa', async () => {
-      jest
-        .spyOn(SupabaseService, 'getActiveReservationsByPhone')
-        .mockResolvedValue([{ id: 'r1', status: 'WAITING', party_size: 2, scheduled_at: null }] as any);
-
-      const createSpy = jest.spyOn(SupabaseService, 'createReservation');
+    it('permite una segunda reserva activa si no se superpone en horario (la red de superposición decide)', async () => {
+      // El cliente puede tener varias reservas activas a la vez; lo único que
+      // bloquea una nueva es que se superponga en horario con otra, y esa
+      // regla la aplica `SupabaseService.createReservation`, no este tool.
+      const createSpy = jest.spyOn(SupabaseService, 'createReservation').mockResolvedValue({
+        success: true,
+        waitlistEntry: {
+          id: 'r2',
+          status: 'WAITING',
+          party_size: 4,
+          scheduled_at: null,
+          display_code: 'A123',
+        },
+      } as any);
 
       const result = await run('create_reservation', { customerName: 'Ana', partySize: 4 });
 
-      expect(result).toMatchObject({ ok: false, error: { code: 'already_has_active_reservation' } });
-      expect(createSpy).not.toHaveBeenCalled();
+      expect(result.ok).toBe(true);
+      expect(createSpy).toHaveBeenCalled();
     });
   });
 
