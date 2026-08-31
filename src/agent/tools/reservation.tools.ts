@@ -91,16 +91,6 @@ export const createReservationTool: AgentTool<CreateArgs> = {
       );
     }
 
-    // Una reserva activa por cliente: si ya tiene una, no se crea otra en
-    // silencio — el modelo debe ofrecerle modificar la que tiene.
-    const existing = await SupabaseService.getActiveReservationsByPhone(ctx.phone, ctx.businessId);
-    if (existing.length > 0) {
-      return fail(
-        'already_has_active_reservation',
-        'El cliente ya tiene una reserva activa. No crees otra: ofrecele modificar o cancelar la existente.'
-      );
-    }
-
     // Reserva de evento: la fecha SIEMPRE sale del evento, nunca del modelo.
     //
     // El modelo tiende a tratar un evento como una reserva común — resolver una
