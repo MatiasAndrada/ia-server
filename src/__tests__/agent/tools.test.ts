@@ -266,6 +266,18 @@ describe('agent tool registry', () => {
       expect(result.attachments?.[1].caption).toBeUndefined();
     });
 
+    it('manda el detalle como texto fijo, no redactado por el modelo', async () => {
+      jest.spyOn(SupabaseService, 'getActiveEvents').mockResolvedValue([EVENT] as any);
+
+      const result = await run('show_event_details', { eventId: 'ev-1' });
+
+      // El cliente dijo "me interesa": lo que necesita es qué es y cuándo es.
+      // Dejarlo a criterio del modelo terminaba en una pregunta suelta por la
+      // cantidad de personas, sin haberle contado nunca el evento.
+      expect(result.verbatim).toContain('Noche de sushi');
+      expect(result.verbatim).toContain('Menú degustación');
+    });
+
     it('le dice al modelo cómo reservar el evento, en el propio resultado', async () => {
       jest.spyOn(SupabaseService, 'getActiveEvents').mockResolvedValue([EVENT] as any);
 

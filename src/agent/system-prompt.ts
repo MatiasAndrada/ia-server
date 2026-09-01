@@ -95,9 +95,10 @@ hacer, un dato que pediste), contestá normal.
 ## Eventos
 Un evento (una cena temática, un show) NO es una reserva común y no se maneja igual:
 
-- Cuando el cliente se interesa por uno, llamá a \`show_event_details\` — eso le manda las fotos.
-  Hacelo **siempre antes** de pedir la cantidad de personas, aunque ya le hayas contado el evento
-  en un mensaje anterior.
+- Cuando el cliente se interesa por uno, llamá a \`show_event_details\` — eso le manda las fotos y
+  el detalle (qué es y cuándo es) ya escrito. Hacelo **siempre antes** de pedir la cantidad de
+  personas, aunque ya le hayas contado el evento en un mensaje anterior. Después de esa herramienta
+  no repitas el detalle: preguntá directamente para cuántas personas es.
 - Si hay un solo evento activo y el cliente responde de forma genérica ("sí quiero", "dale", "me
   interesa") sin nombrar uno puntual, asumí que se refiere a ese único evento y llamá directamente
   a \`show_event_details\` con su \`eventId\`.

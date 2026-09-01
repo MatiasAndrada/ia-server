@@ -201,12 +201,10 @@ export const enCatalog: MessageCatalog = {
    * photos so the text is the last message of the block.
    */
   eventSelected(title: string, description: string | null, whenLabel: string): string {
-    const descriptionBlock = description ? `${description}\n\n` : '';
     return (
-      `🎉 *${title}*\n\n` +
-      `${descriptionBlock}` +
-      `📅 ${whenLabel}\n\n` +
-      `Great, let's continue with your booking for the event.`
+      `🎉 *${title}*\n` +
+      `📅 ${capitalize(whenLabel)}` +
+      (description ? `\n\n${description}` : '')
     );
   },
 

@@ -131,6 +131,14 @@ const ARGS: Record<keyof MessageCatalog, unknown[]> = {
 };
 
 const CATALOG_KEYS = Object.keys(ALL_CATALOGS.es) as (keyof MessageCatalog)[];
+
+/**
+ * Templates que son puro dato: título, fecha y la descripción que carga el
+ * comercio. No tienen prosa que traducir, y agregarles una frase de relleno
+ * sólo para que difieran del español sería un peor mensaje. Todas las demás
+ * claves sí tienen que estar traducidas.
+ */
+const DATA_ONLY_KEYS: ReadonlySet<keyof MessageCatalog> = new Set(['eventSelected']);
 const NON_DEFAULT_LANGUAGES = SUPPORTED_LANGUAGES.filter(
   (language): language is Exclude<SupportedLanguage, 'es'> => language !== 'es'
 );
@@ -156,6 +164,12 @@ describe('catálogos de mensajes', () => {
 
   describe.each(NON_DEFAULT_LANGUAGES)('idioma %s vs español', (language) => {
     it.each(CATALOG_KEYS)('%s está realmente traducido', (key) => {
+      if (DATA_ONLY_KEYS.has(key)) {
+        // Al revés a propósito: si algún día se le agrega prosa, este assert
+        // falla y obliga a sacar la clave del set en vez de dejarla sin traducir.
+        expect(render(language, key)).toBe(render('es', key));
+        return;
+      }
       // Si es idéntico al español, la traducción quedó sin hacer.
       expect(render(language, key)).not.toBe(render('es', key));
     });

@@ -3,6 +3,7 @@ import { loadBusinessRules } from './business-rules.js';
 import { SupabaseService } from '../../services/supabase.service.js';
 import { describeScheduledAtUtc, nowInBuenosAires } from '../../utils/reservation-datetime.js';
 import { formatBusinessAddress, formatWeeklyHoursForPrompt } from '../../utils/prompts.js';
+import * as templates from '../../utils/message-templates.js';
 
 /**
  * Herramientas de consulta sobre el comercio.
@@ -136,6 +137,15 @@ export const showEventDetailsTool: AgentTool<ShowEventArgs> = {
           'NO uses resolve_date ni check_availability: la fecha la fija el evento. ' +
           'NO pases scheduledAt. Si omitís el eventId se crea una reserva común y se pierde el evento.',
       },
+      // El detalle sale como texto fijo y no redactado por el modelo: el cliente
+      // acaba de decir "me interesa" y lo que necesita es qué es, cuándo es y las
+      // fotos — no una pregunta suelta por la cantidad de personas. El handler
+      // manda primero los adjuntos, así que el bloque queda fotos → detalle.
+      verbatim: templates.eventSelected(
+        event.title,
+        event.description,
+        describeScheduledAtUtc(event.startsAt, nowBA)
+      ),
       // Máximo 3, igual que v1: más que eso satura el chat. La primera lleva el
       // título como caption, también igual que v1 — llega antes que el texto.
       attachments: event.imageUrls.slice(0, 3).map((imageUrl, index) => ({

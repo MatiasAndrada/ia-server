@@ -234,16 +234,17 @@ export const esCatalog = {
   },
 
   /**
-   * Confirma la elección del evento y da paso al resumen. Se envía DESPUÉS de
-   * las fotos, para que el texto quede como último mensaje del bloque.
+   * El detalle del evento que eligió el cliente. Se envía DESPUÉS de las fotos,
+   * así el bloque queda "fotos → detalle → siguiente pregunta".
+   *
+   * No cierra ni invita a seguir: de eso se encarga el mensaje que va después
+   * (el resumen en v1, la pregunta del modelo en v2).
    */
   eventSelected(title: string, description: string | null, whenLabel: string): string {
-    const descriptionBlock = description ? `${description}\n\n` : '';
     return (
-      `🎉 *${title}*\n\n` +
-      `${descriptionBlock}` +
-      `📅 ${whenLabel}\n\n` +
-      `Genial, sigamos con tu reserva para el evento.`
+      `🎉 *${title}*\n` +
+      `📅 ${capitalize(whenLabel)}` +
+      (description ? `\n\n${description}` : '')
     );
   },
 

@@ -200,12 +200,10 @@ export const ptCatalog: MessageCatalog = {
    * para que o texto seja a última mensagem do bloco.
    */
   eventSelected(title: string, description: string | null, whenLabel: string): string {
-    const descriptionBlock = description ? `${description}\n\n` : '';
     return (
-      `🎉 *${title}*\n\n` +
-      `${descriptionBlock}` +
-      `📅 ${whenLabel}\n\n` +
-      `Ótimo, vamos seguir com a sua reserva para o evento.`
+      `🎉 *${title}*\n` +
+      `📅 ${capitalize(whenLabel)}` +
+      (description ? `\n\n${description}` : '')
     );
   },
 
