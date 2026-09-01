@@ -14,7 +14,7 @@ module.exports = {
       // watch: false porque ts-node-dev ya hace su propio --respawn sobre
       // cambios en src/. Dejarlo en true duplicaría los reinicios.
       merge_logs: true,
-      autorestart: true,
+      autorestart: false,
       max_restarts: 10,
       min_uptime: '10s',
       restart_delay: 4000,
