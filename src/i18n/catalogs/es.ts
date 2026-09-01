@@ -118,14 +118,44 @@ export const esCatalog = {
    * No reemplaza a `welcomeMessage`: ese es el saludo del flujo por pasos de
    * v1, donde lo único que se espera a continuación es el nombre.
    */
-  welcomeMenu(businessName: string, customerName?: string | null): string {
-    const greeting = customerName ? `¡Hola, ${customerName}!` : `¡Hola!`;
+  welcomeMenu(
+    businessName: string,
+    customerName?: string | null,
+    events: { title: string; whenLabel: string }[] = []
+  ): string {
+    const lines = [
+      customerName ? `¡Hola, ${customerName}! 👋` : `¡Hola! 👋`,
+      `Por acá te ayudamos con tus reservas en ${businessName} 😊`,
+      '',
+      `¿Qué querés hacer?`,
+      '',
+      `${NUMBER_EMOJI[0]} Reservar una mesa`,
+      `${NUMBER_EMOJI[1]} Modificar o cancelar una reserva`,
+      '',
+    ];
+
+    // Sin eventos no va ni la sección ni la invitación a nombrar uno: ofrecer
+    // algo que no existe deja al cliente escribiendo contra la nada.
+    if (events.length > 0) {
+      lines.push(`✨ *Próximos eventos:*`, '');
+      lines.push(...events.map((event) => `• ${event.title} · ${capitalize(event.whenLabel)}`));
+      lines.push('', `Respondé *1* o *2*, o escribí el nombre del evento.`);
+    } else {
+      lines.push(`Respondé *1* o *2*, o contame qué necesitás.`);
+    }
+
+    return lines.join('\n');
+  },
+
+  /**
+   * Segundo mensaje del alta de un cliente nuevo: entre elegir idioma y el menú
+   * de apertura. Se le pide sólo el nombre — el apellido, si hace falta, lo pide
+   * el agente cuando llega el momento de reservar.
+   */
+  onboardingAskName(): string {
     return (
-      `${greeting} 👋 ¿Cómo estás? Por acá te ayudamos con tus reservas 😊 en ${businessName}.\n\n` +
-      `¿Qué necesitás hacer?\n` +
-      `${NUMBER_EMOJI[0]} Reservar una mesa\n` +
-      `${NUMBER_EMOJI[1]} Modificar o cancelar una reserva\n\n` +
-      `Podés responder *1* o *2*, o simplemente contarme qué necesitás.`
+      `¡Perfecto! 😊\n` +
+      `Antes de comenzar, ¿cómo te llamás? Así podemos acompañarte de forma más personalizada.`
     );
   },
 

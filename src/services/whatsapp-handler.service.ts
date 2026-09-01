@@ -23,7 +23,14 @@ import {
   recordDraftStep,
   recordBlocked,
 } from '../utils/turn-stats.js';
-import { runWithLanguage, currentLanguage, SupportedLanguage, DEFAULT_LANGUAGE, ALL_CATALOGS } from '../i18n/index.js';
+import {
+  runWithLanguage,
+  currentLanguage,
+  getTemplates,
+  SupportedLanguage,
+  DEFAULT_LANGUAGE,
+  ALL_CATALOGS,
+} from '../i18n/index.js';
 import {
   cacheDetectedLanguage,
   persistLanguage,
@@ -38,13 +45,20 @@ import {
 import { isMultilingualGreeting } from '../i18n/keywords.js';
 import { isAgentShadowEnabled, isAgentV2Enabled } from '../agent/feature-flag.js';
 import { handleTurn } from '../agent/orchestrator.js';
-import { appendAssistantMessage, loadHistory } from '../agent/state.js';
+import {
+  appendExchange,
+  clearOnboardingStep,
+  loadHistory,
+  loadOnboardingStep,
+  setOnboardingStep,
+} from '../agent/state.js';
 import { extractReservationUpdate, ReservationSlots } from './reservation-nlu.service.js';
 import { planReservationActions, countActionableIntents, PlannedAction } from './reservation-planner.service.js';
 import {
   evaluateReservationScope,
   isGreetingOrReservationOptInMessage,
   isObviouslyGibberish,
+  looksLikePersonName,
   isInstantChoiceMessage,
   isPureNoiseMessage,
   normalizeReservationScopeText,
@@ -62,6 +76,7 @@ import {
   formatBaDateKey,
   describeScheduledDateTime,
   describeScheduledAtUtc,
+  describeScheduledAtUtcCompact,
   describeBaDateKey,
   isDayOpen,
   checkBusinessHours,
@@ -84,6 +99,7 @@ import {
   type ParsedDay,
 } from '../utils/reservation-datetime.js';
 import * as templates from '../utils/message-templates.js';
+import { formatName } from '../utils/formatters.js';
 import { formatActiveEventsForPrompt, formatBusinessAddress, formatWeeklyHoursForPrompt } from '../utils/prompts.js';
 
 type ActiveReservationSnapshot = {
@@ -463,6 +479,7 @@ export class WhatsAppHandler {
       // flujo — al dar su nombre, por ejemplo, que no es un saludo y no trae
       // señal de idioma suficiente.
       const conversationStarted = (await loadHistory(conversationId)).length > 0;
+      const onboardingStep = conversationStarted ? await loadOnboardingStep(conversationId) : null;
 
       const languageAction = conversationStarted
         ? 'none'
@@ -476,7 +493,8 @@ export class WhatsAppHandler {
         // cliente conteste "2" o mande una bandera, el modelo tenga a la vista
         // qué se le ofreció y pueda resolverlo con `set_language`. Sin esto la
         // respuesta llegaría sin contexto y parecería un mensaje suelto.
-        await appendAssistantMessage(conversationId, menu);
+        await appendExchange(conversationId, messageText, menu);
+        await setOnboardingStep(conversationId, 'language');
 
         logger.debug('Agent v2: language menu offered on first contact', {
           conversationId,
@@ -489,6 +507,58 @@ export class WhatsAppHandler {
         await this.sendWhatsAppMessage(businessId, from, templates.languageChangeHint());
         // No hay `return`: el mensaje ya trae contenido real, así que el turno
         // sigue normalmente en el idioma inferido.
+      }
+
+      // Alta de un cliente nuevo: idioma → nombre → menú de apertura. Los tres
+      // mensajes son fijos, así que los manda el handler y no el modelo.
+      //
+      // Ningún paso reintenta: si el cliente contesta otra cosa, se abandona el
+      // alta y el turno sigue con el modelo. Insistir con "elegí una opción"
+      // es justo lo que se sacó del flujo viejo.
+      if (onboardingStep === 'language') {
+        const choice = parseLanguageMenuChoice(messageText);
+        if (choice) {
+          await persistLanguage(businessId, phone, choice.language);
+
+          // El turno se resolvió con el idioma anterior (se fijó antes de leer
+          // este mensaje), así que la pregunta se renderiza con el catálogo
+          // nuevo a mano en vez de esperar al turno siguiente.
+          const askName = getTemplates(choice.language).onboardingAskName();
+          await this.sendWhatsAppMessage(businessId, from, askName);
+          await appendExchange(conversationId, messageText, askName);
+          await setOnboardingStep(conversationId, 'name');
+
+          logger.debug('Agent v2: language chosen, asking for the name', {
+            conversationId,
+            businessId,
+            language: choice.language,
+          });
+          return;
+        }
+        await clearOnboardingStep(conversationId);
+      }
+
+      if (onboardingStep === 'name') {
+        await clearOnboardingStep(conversationId);
+        const parsedName = this.parseOnboardingName(messageText);
+        if (parsedName) {
+          // Se crea la ficha ahora y no al reservar: el cliente ya dio su
+          // nombre, y si se pierde acá el próximo "hola" vuelve a arrancar por
+          // el menú de idiomas como si nunca hubiera escrito.
+          await SupabaseService.getOrCreateCustomer(
+            parsedName.name,
+            phone,
+            businessId,
+            parsedName.lastName
+          );
+
+          const menu = await this.buildWelcomeMenu(businessId, businessStatus.name, parsedName.name);
+          await this.sendWhatsAppMessage(businessId, from, menu);
+          await appendExchange(conversationId, messageText, menu);
+
+          logger.debug('Agent v2: onboarding completed', { conversationId, businessId });
+          return;
+        }
       }
 
       // Saludo de apertura con las dos cosas que el asistente sabe hacer.
@@ -507,12 +577,13 @@ export class WhatsAppHandler {
         // 'unknown' es el placeholder de las altas sin nombre real: saludar
         // "¡Hola, unknown!" es peor que no saludar por nombre.
         const knownName = customer?.name?.trim();
-        const menu = templates.welcomeMenu(
-          businessStatus.name || 'el local',
+        const menu = await this.buildWelcomeMenu(
+          businessId,
+          businessStatus.name,
           knownName && knownName.toLowerCase() !== 'unknown' ? knownName : null
         );
         await this.sendWhatsAppMessage(businessId, from, menu);
-        await appendAssistantMessage(conversationId, menu);
+        await appendExchange(conversationId, messageText, menu);
 
         logger.debug('Agent v2: welcome menu sent on first contact', {
           conversationId,
@@ -556,6 +627,58 @@ export class WhatsAppHandler {
       logger.error('Agent v2 turn failed', { error, conversationId, businessId });
       await this.sendWhatsAppMessage(businessId, from, templates.genericError());
     }
+  }
+
+  /**
+   * Menú de apertura con los eventos vigentes del local.
+   *
+   * Los eventos se listan acá y no los cuenta el modelo: es el primer mensaje
+   * de la conversación y todavía no corrió ninguna herramienta, así que si no
+   * van en el texto fijo el cliente no se entera de que existen.
+   */
+  private async buildWelcomeMenu(
+    businessId: string,
+    businessName: string | null | undefined,
+    customerName: string | null
+  ): Promise<string> {
+    const events = await SupabaseService.getActiveEvents(businessId);
+    const nowBA = nowInBuenosAires();
+
+    return templates.welcomeMenu(
+      businessName || 'el local',
+      customerName,
+      events.map((event) => ({
+        title: event.title,
+        whenLabel: describeScheduledAtUtcCompact(event.startsAt, nowBA),
+      }))
+    );
+  }
+
+  /**
+   * El nombre con el que contesta un cliente nuevo: "Daniel", "soy Daniel",
+   * "me llamo Daniel Pérez".
+   *
+   * Devuelve null ante cualquier duda — y entonces el turno lo atiende el
+   * modelo. Guardar "quiero reservar para hoy" como nombre es mucho peor que
+   * dejar pasar un nombre raro: el saludo por nombre queda roto para siempre.
+   */
+  private parseOnboardingName(text: string): { name: string; lastName: string | null } | null {
+    const candidate = text
+      .trim()
+      .replace(/^hola[,!\s]+/i, '')
+      .replace(/^(soy|me llamo|mi nombre es|my name is|i am|i'm|meu nome e|meu nome é|sou)\s+/i, '')
+      .replace(/[.!¡¿?]+$/g, '')
+      .trim();
+
+    if (!candidate || !looksLikePersonName(candidate) || isObviouslyGibberish(candidate)) {
+      return null;
+    }
+
+    const words = candidate.split(/\s+/);
+    return {
+      name: formatName(words[0]),
+      lastName: words.length > 1 ? formatName(words.slice(1).join(' ')) : null,
+    };
   }
 
   /**

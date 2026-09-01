@@ -193,6 +193,77 @@ export async function appendAssistantMessage(
   await saveHistory(conversationId, [...history, { role: 'assistant', content }]);
 }
 
+/**
+ * Agrega el turno completo (lo que dijo el cliente y lo que se le contestó).
+ *
+ * Los mensajes deterministas del alta no pasan por el modelo, así que nadie
+ * persiste el lado del cliente. Sin él, el modelo hereda tres mensajes del
+ * assistant seguidos y ningún "1" ni "Daniel" que los explique.
+ */
+export async function appendExchange(
+  conversationId: string,
+  userText: string,
+  assistantText: string
+): Promise<void> {
+  const history = await loadHistory(conversationId);
+  await saveHistory(conversationId, [
+    ...history,
+    { role: 'user', content: userText },
+    { role: 'assistant', content: assistantText },
+  ]);
+}
+
+/**
+ * Alta de un cliente nuevo: idioma → nombre → menú de apertura.
+ *
+ * Son tres mensajes fijos, sin nada que el modelo tenga que decidir, y por eso
+ * el paso vive acá y no en el historial: preguntar "¿el último mensaje fue el
+ * menú de idiomas?" comparando textos es frágil, y el modelo no necesita saber
+ * que existe una máquina de estados de dos pasos.
+ *
+ * TTL igual al del historial: si el cliente vuelve al día siguiente, el alta
+ * arranca de cero en vez de esperar un nombre que ya nadie le pidió.
+ */
+export type OnboardingStep = 'language' | 'name';
+
+const ONBOARDING_KEY_PREFIX = 'agent_v2_onboarding:';
+
+export async function loadOnboardingStep(conversationId: string): Promise<OnboardingStep | null> {
+  try {
+    if (!RedisConfig.isReady()) return null;
+    const raw = await RedisConfig.getClient().get(`${ONBOARDING_KEY_PREFIX}${conversationId}`);
+    return raw === 'language' || raw === 'name' ? raw : null;
+  } catch (error) {
+    logger.warn('Failed to load onboarding step', { conversationId, error });
+    return null;
+  }
+}
+
+export async function setOnboardingStep(
+  conversationId: string,
+  step: OnboardingStep
+): Promise<void> {
+  try {
+    if (!RedisConfig.isReady()) return;
+    await RedisConfig.getClient().setEx(
+      `${ONBOARDING_KEY_PREFIX}${conversationId}`,
+      HISTORY_TTL_SECONDS,
+      step
+    );
+  } catch (error) {
+    logger.warn('Failed to set onboarding step', { conversationId, error });
+  }
+}
+
+export async function clearOnboardingStep(conversationId: string): Promise<void> {
+  try {
+    if (!RedisConfig.isReady()) return;
+    await RedisConfig.getClient().del(`${ONBOARDING_KEY_PREFIX}${conversationId}`);
+  } catch (error) {
+    logger.warn('Failed to clear onboarding step', { conversationId, error });
+  }
+}
+
 const STUCK_KEY_PREFIX = 'agent_v2_stuck:';
 
 /**
@@ -238,6 +309,7 @@ export async function clearHistory(conversationId: string): Promise<void> {
     if (!RedisConfig.isReady()) return;
     await RedisConfig.getClient().del(historyKey(conversationId));
     await RedisConfig.getClient().del(historyKey(conversationId, true));
+    await RedisConfig.getClient().del(`${ONBOARDING_KEY_PREFIX}${conversationId}`);
   } catch (error) {
     logger.warn('Failed to clear agent history', { conversationId, error });
   }

@@ -80,14 +80,37 @@ export const ptCatalog: MessageCatalog = {
   // M1 — Nova reserva
   // ============================
 
-  welcomeMenu(businessName: string, customerName?: string | null): string {
-    const greeting = customerName ? `Olá, ${customerName}!` : `Olá!`;
+  welcomeMenu(
+    businessName: string,
+    customerName?: string | null,
+    events: { title: string; whenLabel: string }[] = []
+  ): string {
+    const lines = [
+      customerName ? `Olá, ${customerName}! 👋` : `Olá! 👋`,
+      `Por aqui a gente te ajuda com suas reservas no ${businessName} 😊`,
+      '',
+      `O que você quer fazer?`,
+      '',
+      `${NUMBER_EMOJI[0]} Reservar uma mesa`,
+      `${NUMBER_EMOJI[1]} Alterar ou cancelar uma reserva`,
+      '',
+    ];
+
+    if (events.length > 0) {
+      lines.push(`✨ *Próximos eventos:*`, '');
+      lines.push(...events.map((event) => `• ${event.title} · ${capitalize(event.whenLabel)}`));
+      lines.push('', `Responda *1* ou *2*, ou escreva o nome do evento.`);
+    } else {
+      lines.push(`Responda *1* ou *2*, ou me conte o que você precisa.`);
+    }
+
+    return lines.join('\n');
+  },
+
+  onboardingAskName(): string {
     return (
-      `${greeting} 👋 Tudo bem? Por aqui a gente te ajuda com suas reservas 😊 no ${businessName}.\n\n` +
-      `O que você precisa?\n` +
-      `${NUMBER_EMOJI[0]} Reservar uma mesa\n` +
-      `${NUMBER_EMOJI[1]} Alterar ou cancelar uma reserva\n\n` +
-      `Responda *1* ou *2*, ou simplesmente me conte o que você precisa.`
+      `Perfeito! 😊\n` +
+      `Antes de começar, como você se chama? Assim podemos te atender de forma mais personalizada.`
     );
   },
 

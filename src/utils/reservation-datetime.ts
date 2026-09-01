@@ -397,6 +397,22 @@ export function utcIsoToBaParts(utcISO: string): { dateKey: string; hour: number
   };
 }
 
+/**
+ * "hoy 31/08 · 23:30" — variante compacta para listar varios eventos seguidos.
+ *
+ * El conector ("a las", "at", "às") se reemplaza por un separador: en una lista
+ * de tres renglones la frase completa hace ruido y no agrega nada.
+ */
+export function describeScheduledAtUtcCompact(utcISO: string, nowBA: Date): string {
+  const instant = new Date(utcISO);
+  const baInstant = new Date(instant.getTime() - BA_OFFSET_MS);
+  const baDate = startOfBaDay(baInstant);
+  const isToday = formatBaDateKey(baDate) === formatBaDateKey(startOfBaDay(nowBA));
+  const hh = String(baInstant.getUTCHours()).padStart(2, '0');
+  const mm = String(baInstant.getUTCMinutes()).padStart(2, '0');
+  return `${formatDayLabel(baDate, isToday)} · ${hh}:${mm}`;
+}
+
 /** Same as {@link formatScheduledLabel} but starting from a stored `scheduled_at` UTC ISO instant. */
 export function describeScheduledAtUtc(utcISO: string, nowBA: Date): string {
   const instant = new Date(utcISO);

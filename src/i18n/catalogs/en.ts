@@ -81,14 +81,37 @@ export const enCatalog: MessageCatalog = {
   // M1 — New booking
   // ============================
 
-  welcomeMenu(businessName: string, customerName?: string | null): string {
-    const greeting = customerName ? `Hi, ${customerName}!` : `Hi there!`;
+  welcomeMenu(
+    businessName: string,
+    customerName?: string | null,
+    events: { title: string; whenLabel: string }[] = []
+  ): string {
+    const lines = [
+      customerName ? `Hi, ${customerName}! 👋` : `Hi there! 👋`,
+      `We're here to help you with your bookings at ${businessName} 😊`,
+      '',
+      `What would you like to do?`,
+      '',
+      `${NUMBER_EMOJI[0]} Book a table`,
+      `${NUMBER_EMOJI[1]} Change or cancel a booking`,
+      '',
+    ];
+
+    if (events.length > 0) {
+      lines.push(`✨ *Upcoming events:*`, '');
+      lines.push(...events.map((event) => `• ${event.title} · ${capitalize(event.whenLabel)}`));
+      lines.push('', `Reply *1* or *2*, or write the name of the event.`);
+    } else {
+      lines.push(`Reply *1* or *2*, or just tell me what you need.`);
+    }
+
+    return lines.join('\n');
+  },
+
+  onboardingAskName(): string {
     return (
-      `${greeting} 👋 How are you? We're here to help you with your bookings 😊 at ${businessName}.\n\n` +
-      `What would you like to do?\n` +
-      `${NUMBER_EMOJI[0]} Book a table\n` +
-      `${NUMBER_EMOJI[1]} Change or cancel a booking\n\n` +
-      `Reply *1* or *2*, or just tell me what you need.`
+      `Perfect! 😊\n` +
+      `Before we start, what's your name? That way we can look after you properly.`
     );
   },
 
