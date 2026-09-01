@@ -351,8 +351,8 @@ export class ReservationService {
       return null;
     }
 
-    if (partySize < 1 || partySize > 50) {
-      throw new Error('Party size must be between 1 and 50');
+    if (partySize < 1) {
+      throw new Error('Party size must be at least 1');
     }
 
     draft.partySize = partySize;

@@ -142,8 +142,25 @@ describe('agent tool registry', () => {
 
   describe('create_reservation — reglas duras', () => {
     it('rechaza una cantidad de personas fuera de rango', async () => {
-      const result = await run('create_reservation', { customerName: 'Ana', partySize: 99 });
+      const result = await run('create_reservation', { customerName: 'Ana', partySize: 0 });
       expect(result).toMatchObject({ ok: false, error: { code: 'invalid_party_size' } });
+    });
+
+    it('acepta una cantidad de personas grande (sin límite superior)', async () => {
+      const createSpy = jest.spyOn(SupabaseService, 'createReservation').mockResolvedValue({
+        success: true,
+        waitlistEntry: {
+          id: 'r99',
+          status: 'WAITING',
+          party_size: 99,
+          scheduled_at: null,
+          display_code: 'A199',
+        },
+      } as any);
+
+      const result = await run('create_reservation', { customerName: 'Ana', partySize: 99 });
+      expect(result).toMatchObject({ ok: true });
+      createSpy.mockRestore();
     });
 
     it('exige nombre', async () => {

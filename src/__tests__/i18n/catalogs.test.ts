@@ -39,7 +39,7 @@ const ARGS: Record<keyof MessageCatalog, unknown[]> = {
   summaryEditMenuEvent: [],
   eventSelected: ['__EVENT__', '__DESC__', '__WHEN__'],
   eventNoLongerAvailable: ['__EVENT__'],
-  reservationConfirmed: ['__NAME__', 999, '__WHEN__', '__CODE__', '__EVENT__'],
+  reservationConfirmed: [999, '__WHEN__', '__CODE__', true, '__EVENT__'],
   reservationReceived: [999, '__WHEN__', '__CODE__', '__EVENT__'],
   editMenu: [999, '__WHEN__', '__CODE__', '__STATUS__', '__NAME__', '__EVENT__'],
   editMenuInvalidChoice: [],
@@ -108,7 +108,7 @@ const ARGS: Record<keyof MessageCatalog, unknown[]> = {
   timeAlreadyPassedSuggestTomorrow: ['__TIME__', '__TOMORROW__'],
   timeAlreadyPassed: [],
   noActiveReservationsInquiry: [],
-  reservationConfirmedNotice: ['__NAME__', 999, '__CODE__', '__WHEN__', '__EVENT__'],
+  reservationConfirmedNotice: [999, '__CODE__', '__WHEN__', true, '__EVENT__'],
   reservationRegisteredNotice: [999, '__CODE__', '__WHEN__', '__EVENT__'],
   reservationUpcomingReminder: ['__NAME__', 999, '__WHEN__', '__CODE__', 60],
   reservationArrivalReminder: ['__WHEN__', '__CODE__', 15],
@@ -160,6 +160,27 @@ describe('catálogos de mensajes', () => {
       const output = render(language, key);
       expect(typeof output).toBe('string');
       expect(output.trim().length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('puntuación del español', () => {
+    // El español abre y cierra: "¿...?" y "¡...!". Un template con el signo de
+    // cierre suelto se lee como escrito en inglés, y es un error que pasa
+    // desapercibido en la revisión pero no en el chat del cliente.
+    it.each(CATALOG_KEYS)('%s abre todos los signos que cierra', (key) => {
+      const text = render('es', key);
+      const count = (needle: string) => text.split(needle).length - 1;
+
+      expect({ key, abre: count('¿'), cierra: count('?') }).toEqual({
+        key,
+        abre: count('?'),
+        cierra: count('?'),
+      });
+      expect({ key, abre: count('¡'), cierra: count('!') }).toEqual({
+        key,
+        abre: count('!'),
+        cierra: count('!'),
+      });
     });
   });
 

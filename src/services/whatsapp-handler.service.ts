@@ -1507,7 +1507,7 @@ export class WhatsAppHandler {
           const activeEventsAtNameStep = await SupabaseService.getActiveEvents(businessId);
           const eventMentionedAtNameStep = this.matchEventByTitleInText(activeEventsAtNameStep, messageText);
           if (eventMentionedAtNameStep) {
-            if (partySize && partySize > 0 && partySize <= 50) {
+            if (partySize && partySize > 0) {
               await ReservationService.setPartySize(conversationId, partySize);
             }
             draft.pendingEventId = eventMentionedAtNameStep.id;
@@ -1680,7 +1680,7 @@ export class WhatsAppHandler {
               await this.syncCorrectedCustomerName(businessId, jid, firstName, lastName);
               logger.debug('Name corrected at party_size step', { conversationId, correctedName });
 
-              if (partySize && partySize > 0 && partySize <= 50) {
+              if (partySize && partySize > 0) {
                 await ReservationService.setPartySize(conversationId, partySize);
                 logger.debug('Embedded party size set alongside name correction', {
                   conversationId,
@@ -1719,7 +1719,7 @@ export class WhatsAppHandler {
             }
           }
 
-          if (resolvedPartySize && resolvedPartySize > 0 && resolvedPartySize <= 50) {
+          if (resolvedPartySize && resolvedPartySize > 0) {
             // ----- EDIT MODE: just update the existing reservation -----
             if (draft.editMode && draft.existingReservationId) {
               const ok = await SupabaseService.updateReservationPartySize(
@@ -4089,18 +4089,18 @@ export class WhatsAppHandler {
         });
 
         let confirmationMessage: string;
+        // Compacta ("mañana 01/09 · 21:30"): comparte renglón con las personas.
         const whenLabel = entry.scheduled_at
-          ? this.describeReservationWhen(entry.scheduled_at)
+          ? describeScheduledAtUtcCompact(entry.scheduled_at, nowInBuenosAires())
           : templates.instantTurnLabel();
-        const customerLabel = draft.customerName || 'Cliente';
         const partySizeLabel = draft.partySize || entry.party_size;
 
         if (entry.status === 'CONFIRMED' || entry.status === 'NOTIFIED') {
           confirmationMessage = templates.reservationConfirmed(
-            customerLabel,
             partySizeLabel,
             whenLabel,
             entry.display_code,
+            entry.scheduled_at != null,
             draft.eventTitle ?? null
           );
         } else {
@@ -5240,7 +5240,7 @@ export class WhatsAppHandler {
 
     if (!fullName) {
       // No name yet — stash the party size and let the normal flow ask name/apellido.
-      if (partySize && partySize > 0 && partySize <= 50) {
+      if (partySize && partySize > 0) {
         await ReservationService.setPartySize(conversationId, partySize);
       }
       await this.sendWhatsAppMessage(businessId, jid, templates.askName());
@@ -5251,7 +5251,7 @@ export class WhatsAppHandler {
     const { firstName, lastName } = this.splitFullName(fullName);
     await ReservationService.setCustomerNameParts(conversationId, firstName, lastName);
 
-    if (!(partySize && partySize > 0 && partySize <= 50)) {
+    if (!(partySize && partySize > 0)) {
       await this.sendWhatsAppMessage(businessId, jid, templates.askPartySize(firstName));
       return;
     }
@@ -5791,7 +5791,7 @@ export class WhatsAppHandler {
       if (mentionedEventForPrefill) {
         const prefillPartySize = this.extractPartySize(messageText);
         const prefillDraft = await ReservationService.startReservation(conversationId, businessId);
-        if (prefillPartySize && prefillPartySize > 0 && prefillPartySize <= 50) {
+        if (prefillPartySize && prefillPartySize > 0) {
           await ReservationService.setPartySize(conversationId, prefillPartySize);
         }
         prefillDraft.pendingEventId = mentionedEventForPrefill.id;
@@ -5851,9 +5851,9 @@ export class WhatsAppHandler {
       return null;
     }
 
-    if (/^\d{1,2}$/.test(trimmed)) {
+    if (/^\d{1,3}$/.test(trimmed)) {
       const numericValue = parseInt(trimmed, 10);
-      return numericValue >= 1 && numericValue <= 50 ? numericValue : null;
+      return numericValue >= 1 ? numericValue : null;
     }
 
     const withoutTimeHints = trimmed
@@ -5861,15 +5861,15 @@ export class WhatsAppHandler {
       .replace(/\b(?:1[0-2]|0?\d)\s?(?:am|pm|a\.m\.|p\.m\.)\b/gi, ' ');
 
     const contextualPatterns = [
-      /\b(?:somos|para|de|total(?:es)?)\s+(\d{1,2})(?:\s+personas?)?\b/i,
-      /\b(\d{1,2})\s+personas?\b/i,
+      /\b(?:somos|para|de|total(?:es)?)\s+(\d{1,3})(?:\s+personas?)?\b/i,
+      /\b(\d{1,3})\s+personas?\b/i,
     ];
 
     for (const pattern of contextualPatterns) {
       const match = withoutTimeHints.match(pattern);
       if (match?.[1]) {
         const numericValue = parseInt(match[1], 10);
-        if (numericValue >= 1 && numericValue <= 50) {
+        if (numericValue >= 1) {
           return numericValue;
         }
       }
@@ -5889,11 +5889,11 @@ export class WhatsAppHandler {
       .replace(/\b(?:[01]?\d|2[0-3])[:.]\d{2}\b/g, ' ')
       .replace(/\b(?:1[0-2]|0?\d)\s?(?:am|pm|a\.m\.|p\.m\.)\b/gi, ' ');
 
-    const match = withoutTimeHints.match(/\b(\d{1,2})\s+personas?\b/i);
+    const match = withoutTimeHints.match(/\b(\d{1,3})\s+personas?\b/i);
     if (!match) return null;
 
     const numericValue = parseInt(match[1], 10);
-    return numericValue >= 1 && numericValue <= 50 ? numericValue : null;
+    return numericValue >= 1 ? numericValue : null;
   }
 
   /**
@@ -5954,12 +5954,12 @@ export class WhatsAppHandler {
   ): Promise<void> {
     const draftNow = await ReservationService.getDraft(conversationId);
     const validEmbedded =
-      embeddedPartySize && embeddedPartySize > 0 && embeddedPartySize <= 50
+      embeddedPartySize && embeddedPartySize > 0
         ? embeddedPartySize
         : null;
     const effectivePartySize = validEmbedded ?? draftNow?.partySize ?? null;
 
-    if (!(effectivePartySize && effectivePartySize > 0 && effectivePartySize <= 50)) {
+    if (!(effectivePartySize && effectivePartySize > 0)) {
       await this.sendWhatsAppMessage(businessId, jid, templates.askPartySize(displayName));
       return;
     }
@@ -6300,7 +6300,7 @@ export class WhatsAppHandler {
       // fast path is skipped for them.
       if (knownCustomer?.name) {
         const partySize = this.extractPartySize(messageText);
-        if (partySize && partySize > 0 && partySize <= 50) {
+        if (partySize && partySize > 0) {
           await ReservationService.setPartySize(conversationId, partySize);
           await this.resolveEmbeddedScheduleOrPromptChoice(conversationId, businessId, jid, messageText);
           return true;

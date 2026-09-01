@@ -40,9 +40,16 @@ function capitalize(text: string): string {
 }
 
 /** Os dados operacionais da reserva em uma única linha — ver a nota em es.ts. */
-function reservationLine(whenLabel: string, partySize: number, displayCode: string): string {
+function reservationLine(whenLabel: string, partySize: number): string {
   const people = `${partySize} ${partySize === 1 ? 'pessoa' : 'pessoas'}`;
-  return `📅 ${capitalize(whenLabel)} · 👥 ${people} · Código: *${displayCode}*`;
+  return `📅 ${capitalize(whenLabel)} · 👥 ${people}`;
+}
+
+/** A retenção só vale para uma reserva com horário — ver a nota em es.ts. */
+function retentionLine(isScheduled: boolean): string {
+  return isScheduled
+    ? `\nSua mesa será mantida até *20 minutos após* o horário reservado.`
+    : '';
 }
 
 /** O evento vai em linha própria: o título é longo e quebraria a linha de dados. */
@@ -276,16 +283,18 @@ export const ptCatalog: MessageCatalog = {
   },
 
   reservationConfirmed(
-    name: string,
     partySize: number,
     whenLabel: string,
     displayCode: string,
+    isScheduled: boolean,
     eventTitle?: string | null
   ): string {
     return (
-      `✅ Reserva confirmada, ${name}!\n` +
-      `${reservationLine(whenLabel, partySize, displayCode)}${eventLine(eventTitle)}\n\n` +
-      `Esperamos por você 👋`
+      `✅ Reserva confirmada!\n` +
+      `${reservationLine(whenLabel, partySize)}${eventLine(eventTitle)}\n` +
+      `Código: *${displayCode}*\n` +
+      `Esperamos por você 🙌` +
+      retentionLine(isScheduled)
     );
   },
 
@@ -297,7 +306,7 @@ export const ptCatalog: MessageCatalog = {
   ): string {
     return (
       `Pronto ✅\n` +
-      `${reservationLine(whenLabel, partySize, displayCode)}${eventLine(eventTitle)}\n` +
+      `${reservationLine(whenLabel, partySize)} · Código: *${displayCode}*${eventLine(eventTitle)}\n` +
       `Aviso assim que o restaurante confirmar.`
     );
   },
@@ -731,16 +740,18 @@ export const ptCatalog: MessageCatalog = {
   },
 
   reservationConfirmedNotice(
-    name: string,
     partySize: number,
     displayCode: string,
     whenLabel: string,
+    isScheduled: boolean,
     eventTitle?: string | null
   ): string {
     return (
-      `✅ Reserva confirmada, ${name}!\n` +
-      `${reservationLine(whenLabel, partySize, displayCode)}${eventLine(eventTitle)}\n\n` +
-      `Esperamos por você 👋`
+      `✅ Reserva confirmada!\n` +
+      `${reservationLine(whenLabel, partySize)}${eventLine(eventTitle)}\n` +
+      `Código: *${displayCode}*\n` +
+      `Esperamos por você 🙌` +
+      retentionLine(isScheduled)
     );
   },
 
@@ -752,7 +763,7 @@ export const ptCatalog: MessageCatalog = {
   ): string {
     return (
       `Pronto ✅\n` +
-      `${reservationLine(whenLabel, partySize, displayCode)}${eventLine(eventTitle)}\n` +
+      `${reservationLine(whenLabel, partySize)} · Código: *${displayCode}*${eventLine(eventTitle)}\n` +
       `Aviso assim que o restaurante confirmar.`
     );
   },

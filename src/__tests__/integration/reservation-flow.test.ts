@@ -99,13 +99,13 @@ describe('Reservation Flow Integration Tests', () => {
     it('should reject invalid party size', async () => {
       await expect(
         ReservationService.setPartySize(TEST_CONVERSATION_ID, 0)
-      ).rejects.toThrow('Party size must be between 1 and 50');
+      ).rejects.toThrow('Party size must be at least 1');
     });
 
     it('should reject negative party size', async () => {
       await expect(
         ReservationService.setPartySize(TEST_CONVERSATION_ID, -5)
-      ).rejects.toThrow('Party size must be between 1 and 50');
+      ).rejects.toThrow('Party size must be at least 1');
     });
   });
 

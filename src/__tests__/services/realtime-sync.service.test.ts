@@ -121,9 +121,9 @@ describe('RealtimeSyncService.handleWaitlistStatusChange', () => {
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
-  it('pone fecha, personas y código en una sola línea', async () => {
-    // La confirmación se acortó a tres líneas: sin ficha de datos etiquetada y
-    // sin las promesas (recordatorio, retención) que repetía de más.
+  it('pone fecha y personas en una línea, y avisa la retención de 20 minutos', async () => {
+    // La confirmación se acortó: sin ficha de datos etiquetada campo por campo,
+    // pero conservando el plazo, que es lo único accionable que traía.
     await (RealtimeSyncService as any).handleWaitlistStatusChange({
       eventType: 'UPDATE',
       old: { ...baseEntry, status: 'WAITING', scheduled_at: '2026-07-08T22:00:00.000Z' },
@@ -135,8 +135,8 @@ describe('RealtimeSyncService.handleWaitlistStatusChange', () => {
     const dataLine = message.split('\n').find((line) => line.includes('personas'));
     expect(dataLine).toContain('19:00');
     expect(dataLine).toContain('4 personas');
-    expect(dataLine).toContain('M102');
-    expect(message).not.toContain('20 minutos');
+    expect(message).toContain('M102');
+    expect(message).toContain('20 minutos después');
   });
 
   it('la reserva instantánea también sale en una línea, con la etiqueta del turno', async () => {

@@ -4,6 +4,7 @@ import { SupabaseService } from '../../services/supabase.service.js';
 import { BusinessEvent, WaitlistEntry } from '../../types/index.js';
 import {
   describeScheduledAtUtc,
+  describeScheduledAtUtcCompact,
   nowInBuenosAires,
   utcIsoToBaParts,
   describeBaDateKey,
@@ -29,7 +30,6 @@ import {
  */
 
 const MIN_PARTY_SIZE = 1;
-const MAX_PARTY_SIZE = 20;
 
 interface CreateArgs {
   customerName: string;
@@ -57,7 +57,7 @@ export const createReservationTool: AgentTool<CreateArgs> = {
           customerLastName: { type: 'string', description: 'Apellido, sólo si el cliente lo dio.' },
           partySize: {
             type: 'integer',
-            description: `Cantidad de personas (entre ${MIN_PARTY_SIZE} y ${MAX_PARTY_SIZE}).`,
+            description: `Cantidad de personas (mínimo ${MIN_PARTY_SIZE}).`,
           },
           scheduledAt: {
             type: 'string',
@@ -84,10 +84,10 @@ export const createReservationTool: AgentTool<CreateArgs> = {
       return fail('missing_name', 'Falta el nombre del cliente. Preguntáselo antes de crear la reserva.');
     }
 
-    if (!Number.isInteger(partySize) || partySize < MIN_PARTY_SIZE || partySize > MAX_PARTY_SIZE) {
+    if (!Number.isInteger(partySize) || partySize < MIN_PARTY_SIZE) {
       return fail(
         'invalid_party_size',
-        `La cantidad de personas debe estar entre ${MIN_PARTY_SIZE} y ${MAX_PARTY_SIZE}. Confirmá el número con el cliente.`
+        `La cantidad de personas debe ser un número entero de al menos ${MIN_PARTY_SIZE}. Confirmá el número con el cliente.`
       );
     }
 
@@ -163,8 +163,10 @@ export const createReservationTool: AgentTool<CreateArgs> = {
 
     const entry = response.waitlistEntry;
     const nowBA = nowInBuenosAires();
+    // Etiqueta compacta ("mañana 01/09 · 21:30"): en la confirmación el día y
+    // la hora comparten renglón con la cantidad de personas.
     const whenLabel = entry.scheduled_at
-      ? describeScheduledAtUtc(entry.scheduled_at, nowBA)
+      ? describeScheduledAtUtcCompact(entry.scheduled_at, nowBA)
       : templates.instantTurnLabel();
 
     // El evento ya se resolvió arriba, así que no hace falta volver a pedir el título.
@@ -183,10 +185,10 @@ export const createReservationTool: AgentTool<CreateArgs> = {
 
     const confirmation = isConfirmed
       ? templates.reservationConfirmed(
-          customerName.trim(),
           partySize,
           whenLabel,
           entry.display_code ?? '',
+          entry.scheduled_at != null,
           eventTitle
         )
       : templates.reservationReceived(partySize, whenLabel, entry.display_code ?? '', eventTitle);
@@ -352,7 +354,7 @@ export const modifyReservationTool: AgentTool<ModifyArgs> = {
           reservationId: { type: 'string', description: 'Id devuelto por list_my_reservations.' },
           partySize: {
             type: 'integer',
-            description: `Nueva cantidad de personas (${MIN_PARTY_SIZE}-${MAX_PARTY_SIZE}). Omitilo si no cambia.`,
+            description: `Nueva cantidad de personas (mínimo ${MIN_PARTY_SIZE}). Omitilo si no cambia.`,
           },
           scheduledAt: {
             type: 'string',
@@ -385,10 +387,10 @@ export const modifyReservationTool: AgentTool<ModifyArgs> = {
     }
 
     if (partySize !== undefined) {
-      if (!Number.isInteger(partySize) || partySize < MIN_PARTY_SIZE || partySize > MAX_PARTY_SIZE) {
+      if (!Number.isInteger(partySize) || partySize < MIN_PARTY_SIZE) {
         return fail(
           'invalid_party_size',
-          `La cantidad debe estar entre ${MIN_PARTY_SIZE} y ${MAX_PARTY_SIZE}.`
+          `La cantidad debe ser un número entero de al menos ${MIN_PARTY_SIZE}.`
         );
       }
       const updated = await SupabaseService.updateReservationPartySize(reservationId, partySize);

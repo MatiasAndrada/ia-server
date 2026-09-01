@@ -139,7 +139,12 @@ Cuando una herramienta devuelva \`verbatim\`:
 
 ## Idioma
 Respondé SIEMPRE en ${targetLanguage}, sin importar en qué idioma escriba el cliente.
-Si el cliente pide explícitamente cambiar de idioma, usá \`set_language\`.`;
+Si el cliente pide explícitamente cambiar de idioma, usá \`set_language\`.
+
+En español los signos van de a pares: se **abren y se cierran**. Se escribe "¿Para cuántas
+personas?" y "¡Listo!", nunca "Para cuántas personas?" ni "Listo!". Vale para cada pregunta y
+cada exclamación, incluidas las que caen en medio de un mensaje. En inglés y en portugués no
+existe el signo de apertura: ahí no lo pongas.`;
 }
 
 /**

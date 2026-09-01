@@ -64,9 +64,19 @@ function capitalize(text: string): string {
  * "👥 Personas: …", "📅 Fecha y hora: …", "📁 Código: …"): media pantalla de
  * WhatsApp para decir tres datos que entran en una línea.
  */
-function reservationLine(whenLabel: string, partySize: number, displayCode: string): string {
+function reservationLine(whenLabel: string, partySize: number): string {
   const people = `${partySize} ${partySize === 1 ? 'persona' : 'personas'}`;
-  return `📅 ${capitalize(whenLabel)} · 👥 ${people} · Código: *${displayCode}*`;
+  return `📅 ${capitalize(whenLabel)} · 👥 ${people}`;
+}
+
+/**
+ * La retención sólo aplica a una reserva con horario: para una instantánea
+ * ("el turno actual") no hay un "horario reservado" desde el cual contar.
+ */
+function retentionLine(isScheduled: boolean): string {
+  return isScheduled
+    ? `\nTu reserva se mantendrá hasta *20 minutos después* del horario reservado.`
+    : '';
 }
 
 /** El evento va en su propia línea: el título es largo y rompería el renglón de datos. */
@@ -324,16 +334,18 @@ export const esCatalog = {
   },
 
   reservationConfirmed(
-    name: string,
     partySize: number,
     whenLabel: string,
     displayCode: string,
+    isScheduled: boolean,
     eventTitle?: string | null
   ): string {
     return (
-      `✅ ¡Reserva confirmada, ${name}!\n` +
-      `${reservationLine(whenLabel, partySize, displayCode)}${eventLine(eventTitle)}\n\n` +
-      `Te esperamos 👋`
+      `✅ ¡Reserva confirmada!\n` +
+      `${reservationLine(whenLabel, partySize)}${eventLine(eventTitle)}\n` +
+      `Código: *${displayCode}*\n` +
+      `Te esperamos 🙌` +
+      retentionLine(isScheduled)
     );
   },
 
@@ -345,7 +357,7 @@ export const esCatalog = {
   ): string {
     return (
       `Listo ✅\n` +
-      `${reservationLine(whenLabel, partySize, displayCode)}${eventLine(eventTitle)}\n` +
+      `${reservationLine(whenLabel, partySize)} · Código: *${displayCode}*${eventLine(eventTitle)}\n` +
       `Te aviso apenas el restaurante confirme.`
     );
   },
@@ -810,16 +822,18 @@ export const esCatalog = {
    * chat — y por eso son dos claves y no una.
    */
   reservationConfirmedNotice(
-    name: string,
     partySize: number,
     displayCode: string,
     whenLabel: string,
+    isScheduled: boolean,
     eventTitle?: string | null
   ): string {
     return (
-      `✅ ¡Reserva confirmada, ${name}!\n` +
-      `${reservationLine(whenLabel, partySize, displayCode)}${eventLine(eventTitle)}\n\n` +
-      `Te esperamos 👋`
+      `✅ ¡Reserva confirmada!\n` +
+      `${reservationLine(whenLabel, partySize)}${eventLine(eventTitle)}\n` +
+      `Código: *${displayCode}*\n` +
+      `Te esperamos 🙌` +
+      retentionLine(isScheduled)
     );
   },
 
@@ -832,7 +846,7 @@ export const esCatalog = {
   ): string {
     return (
       `Listo ✅\n` +
-      `${reservationLine(whenLabel, partySize, displayCode)}${eventLine(eventTitle)}\n` +
+      `${reservationLine(whenLabel, partySize)} · Código: *${displayCode}*${eventLine(eventTitle)}\n` +
       `Te aviso apenas el restaurante confirme.`
     );
   },

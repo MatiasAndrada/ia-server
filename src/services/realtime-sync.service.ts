@@ -7,7 +7,11 @@ import { runWithLanguage } from '../i18n/index.js';
 import { resolveLanguage } from '../i18n/language-store.js';
 import type { Database } from '../types/supabase.js';
 import * as templates from '../utils/message-templates.js';
-import { describeScheduledAtUtc, nowInBuenosAires } from '../utils/reservation-datetime.js';
+import {
+  describeScheduledAtUtc,
+  describeScheduledAtUtcCompact,
+  nowInBuenosAires,
+} from '../utils/reservation-datetime.js';
 import {
   createdNotificationKey,
   markNotified,
@@ -310,7 +314,7 @@ export class RealtimeSyncService {
       const eventTitle = entry.event_id ? await SupabaseService.getEventTitle(entry.event_id) : null;
       await runWithLanguage(language, async () => {
       const whenLabel = entry.scheduled_at
-        ? describeScheduledAtUtc(entry.scheduled_at, nowInBuenosAires())
+        ? describeScheduledAtUtcCompact(entry.scheduled_at, nowInBuenosAires())
         : templates.instantTurnLabel();
 
       if (entry.status === 'SEATED') {
@@ -318,10 +322,10 @@ export class RealtimeSyncService {
         // un WhatsApp de bienvenida sólo le suena el teléfono en la mesa.
       } else if (entry.status === 'CONFIRMED' || entry.status === 'NOTIFIED') {
         notificationMessage = templates.reservationConfirmedNotice(
-          customer.name,
           entry.party_size,
           entry.display_code,
           whenLabel,
+          entry.scheduled_at != null,
           eventTitle
         );
       } else {
@@ -744,12 +748,12 @@ export class RealtimeSyncService {
           ? await SupabaseService.getEventTitle(newEntry.event_id)
           : null;
         notificationMessage = templates.reservationConfirmedNotice(
-          customer.name,
           newEntry.party_size,
           newEntry.display_code,
           newEntry.scheduled_at
-            ? describeScheduledAtUtc(newEntry.scheduled_at, nowInBuenosAires())
+            ? describeScheduledAtUtcCompact(newEntry.scheduled_at, nowInBuenosAires())
             : templates.instantTurnLabel(),
+          newEntry.scheduled_at != null,
           eventTitle
         );
       }

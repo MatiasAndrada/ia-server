@@ -165,13 +165,13 @@ export function eventNoLongerAvailable(title: string): string {
 
 /** Confirmación final de reserva (M1 — "Reserva confirmada"). */
 export function reservationConfirmed(
-  name: string,
   partySize: number,
   whenLabel: string,
   displayCode: string,
+  isScheduled: boolean,
   eventTitle?: string | null
 ): string {
-  return catalog().reservationConfirmed(name, partySize, whenLabel, displayCode, eventTitle);
+  return catalog().reservationConfirmed(partySize, whenLabel, displayCode, isScheduled, eventTitle);
 }
 
 /** Reserva registrada pero pendiente de confirmación del local (fuera del manual). */
@@ -405,13 +405,13 @@ export function askPartySizeShort(): string {
 
 /** La reserva pasó a CONFIRMED desde el dashboard. */
 export function reservationConfirmedNotice(
-  name: string,
   partySize: number,
   displayCode: string,
   whenLabel: string,
+  isScheduled: boolean,
   eventTitle?: string | null
 ): string {
-  return catalog().reservationConfirmedNotice(name, partySize, displayCode, whenLabel, eventTitle);
+  return catalog().reservationConfirmedNotice(partySize, displayCode, whenLabel, isScheduled, eventTitle);
 }
 
 /** La reserva quedó registrada, pendiente de confirmación del local. */
