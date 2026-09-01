@@ -26,19 +26,26 @@ import {
   parseLanguageMenuChoice,
   DETECTION_THRESHOLD,
 } from '../i18n/detect.js';
-import { isMultilingualGreeting } from '../i18n/keywords.js';
+import {
+  AFFIRMATIVE_KEYWORDS,
+  BOOK_KEYWORDS,
+  CANCEL_KEYWORDS,
+  EXIT_KEYWORDS,
+  GRATITUDE_KEYWORDS,
+  NEGATIVE_KEYWORDS,
+  buildKeywordPattern,
+  isMultilingualGreeting,
+} from '../i18n/keywords.js';
 import { handleTurn } from '../agent/orchestrator.js';
 import {
   appendExchange,
   clearOnboardingStep,
+  conversationIdleMs,
   loadHistory,
   loadOnboardingStep,
   setOnboardingStep,
 } from '../agent/state.js';
-import {
-  isObviouslyGibberish,
-  looksLikePersonName,
-} from '../utils/reservation-scope.js';
+import { isObviouslyGibberish } from '../utils/reservation-scope.js';
 import {
   nowInBuenosAires,
   describeScheduledAtUtcCompact,
@@ -50,6 +57,41 @@ import { formatName } from '../utils/formatters.js';
 const DEBOUNCE_MS = 1500;
 const DUPLICATE_OUTBOUND_WINDOW_MS = 10000;
 const INACTIVE_FALLBACK_TTL_SECONDS = 120;
+
+/**
+ * Silencio a partir del cual un "hola" deja de ser un mensaje más de la charla
+ * en curso y pasa a abrir una conversación nueva (y por lo tanto le toca el
+ * menú de apertura). Diez minutos: lo suficiente para no cortar a alguien que
+ * está pensando qué contestar, lo bastante corto para que el que vuelve más
+ * tarde encuentre siempre la misma carta de presentación.
+ */
+const CONVERSATION_IDLE_RESET_MS = 10 * 60 * 1000;
+
+/** Una palabra de un nombre: letras, con guiones y apóstrofes ("O'Brien", "Ana-María"). */
+const NAME_WORD_PATTERN = /^\p{L}[\p{L}'’-]*$/u;
+
+/**
+ * Palabras que, en el paso del nombre, significan otra cosa: nadie se llama
+ * "reservar", "gracias" ni "mañana".
+ *
+ * Se matchean como PALABRA COMPLETA, que es la diferencia con
+ * `looksLikePersonName`: ese busca sus marcadores como subcadena y por eso
+ * rechaza nombres reales (Horacio contiene "hora", Michel contiene "che").
+ */
+const NON_NAME_PATTERN = buildKeywordPattern([
+  ...BOOK_KEYWORDS,
+  ...CANCEL_KEYWORDS,
+  ...EXIT_KEYWORDS,
+  ...AFFIRMATIVE_KEYWORDS,
+  ...NEGATIVE_KEYWORDS,
+  ...GRATITUDE_KEYWORDS,
+  'hola', 'buenas', 'mesa', 'mesas', 'persona', 'personas', 'gente',
+  'hoy', 'manana', 'noche', 'tarde', 'mediodia', 'evento', 'menu', 'carta',
+  'quiero', 'queria', 'necesito', 'puedo', 'podes', 'tengo', 'hacer',
+  'horario', 'horarios', 'direccion', 'ubicacion', 'telefono',
+  'table', 'people', 'today', 'tomorrow', 'want', 'need',
+  'reserva', 'agendar', 'marcar', 'amanha', 'hoje', 'quero', 'preciso',
+]);
 
 export class WhatsAppHandler {
   private baileysService: BaileysService;
@@ -401,12 +443,24 @@ export class WhatsAppHandler {
           // Se crea la ficha ahora y no al reservar: el cliente ya dio su
           // nombre, y si se pierde acá el próximo "hola" vuelve a arrancar por
           // el menú de idiomas como si nunca hubiera escrito.
-          await SupabaseService.getOrCreateCustomer(
-            parsedName.name,
-            phone,
-            businessId,
-            parsedName.lastName
-          );
+          //
+          // Si el alta falla, el menú sale igual: el cliente ya contestó lo que
+          // le preguntamos y lo que sigue es su respuesta, no un error. La
+          // ficha se recupera sola en la próxima reserva.
+          try {
+            await SupabaseService.getOrCreateCustomer(
+              parsedName.name,
+              phone,
+              businessId,
+              parsedName.lastName
+            );
+          } catch (error) {
+            logger.error('Failed to persist the customer during onboarding', {
+              conversationId,
+              businessId,
+              error,
+            });
+          }
 
           const menu = await this.buildWelcomeMenu(businessId, businessStatus.name, parsedName.name);
           await this.sendWhatsAppMessage(businessId, from, menu);
@@ -424,11 +478,21 @@ export class WhatsAppHandler {
       // el primer mensaje ya trae el pedido ("hoy 21:30 para 4"), mostrarle un
       // menú sería hacerle repetir lo que acaba de escribir.
       //
+      // "Abre una conversación" NO es lo mismo que "nunca escribió": el
+      // historial vive una hora en Redis, así que un cliente que vuelve a la
+      // tarde encontraba `conversationStarted` en true y su "hola" lo contestaba
+      // el modelo con un saludo improvisado distinto cada vez. Por eso la
+      // condición es la inactividad, no la existencia del historial: sólo se
+      // considera "conversación en curso" si el último mensaje es reciente.
+      //
       // El menú no es un paso: se registra en el historial y ahí termina su
       // trabajo. Si el cliente contesta cualquier otra cosa en vez de 1 o 2, el
       // turno siguiente lo atiende el modelo como cualquier mensaje. No hay
       // reintentos ni "opción inválida" — para este menú no existe.
-      if (!conversationStarted && this.isGreetingMessage(messageText)) {
+      if (
+        this.isGreetingMessage(messageText) &&
+        !(await this.isConversationInProgress(conversationId, conversationStarted))
+      ) {
         const customer = await SupabaseService.getCustomerByPhone(phone, businessId);
         // 'unknown' es el placeholder de las altas sin nombre real: saludar
         // "¡Hola, unknown!" es peor que no saludar por nombre.
@@ -485,6 +549,29 @@ export class WhatsAppHandler {
   }
 
   /**
+   * ¿Hay una conversación viva, o el cliente está abriendo una nueva?
+   *
+   * Un "hola" en medio de un flujo (acabamos de preguntarle algo) no reinicia
+   * nada; el mismo "hola" después de un rato de silencio SÍ abre de cero y le
+   * corresponde el menú de apertura. El corte es la inactividad: el historial
+   * dura una hora, y contra eso cualquier cliente que volviera dentro de esa
+   * hora se quedaba sin menú.
+   */
+  private async isConversationInProgress(
+    conversationId: string,
+    conversationStarted: boolean
+  ): Promise<boolean> {
+    if (!conversationStarted) return false;
+
+    const idleMs = await conversationIdleMs(conversationId);
+    // Sin dato de antigüedad (Redis caído) se asume conversación en curso: es
+    // el comportamiento conservador, no interrumpe nada.
+    if (idleMs === null) return true;
+
+    return idleMs < CONVERSATION_IDLE_RESET_MS;
+  }
+
+  /**
    * Menú de apertura con los eventos vigentes del local.
    *
    * Los eventos se listan acá y no los cuenta el modelo: es el primer mensaje
@@ -513,6 +600,13 @@ export class WhatsAppHandler {
    * El nombre con el que contesta un cliente nuevo: "Daniel", "soy Daniel",
    * "me llamo Daniel Pérez".
    *
+   * Acabamos de preguntarle cómo se llama, así que lo que venga ES su nombre
+   * salvo que, palabra por palabra, sea otra cosa ("quiero reservar", "mañana").
+   * Ese listón es a propósito más bajo que el de `looksLikePersonName`: aquel
+   * matchea sus marcadores como subcadena y rechaza nombres reales — Horacio
+   * tiene "hora", Michel tiene "che" —, y cada rechazo abandona el alta entera,
+   * que es la razón por la que el menú de apertura a veces no llegaba.
+   *
    * Devuelve null ante cualquier duda — y entonces el turno lo atiende el
    * modelo. Guardar "quiero reservar para hoy" como nombre es mucho peor que
    * dejar pasar un nombre raro: el saludo por nombre queda roto para siempre.
@@ -525,11 +619,20 @@ export class WhatsAppHandler {
       .replace(/[.!¡¿?]+$/g, '')
       .trim();
 
-    if (!candidate || !looksLikePersonName(candidate) || isObviouslyGibberish(candidate)) {
+    if (!candidate || isObviouslyGibberish(candidate)) {
       return null;
     }
 
+    // Un nombre son una a tres palabras de letras: sin dígitos, sin emojis.
     const words = candidate.split(/\s+/);
+    if (words.length > 3 || !words.every((word) => NAME_WORD_PATTERN.test(word))) {
+      return null;
+    }
+
+    if (NON_NAME_PATTERN.test(this.normalizeCourtesyText(candidate))) {
+      return null;
+    }
+
     return {
       name: formatName(words[0]),
       lastName: words.length > 1 ? formatName(words.slice(1).join(' ')) : null,
