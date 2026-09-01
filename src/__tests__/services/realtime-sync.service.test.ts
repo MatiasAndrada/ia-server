@@ -80,7 +80,9 @@ describe('RealtimeSyncService.handleWaitlistStatusChange', () => {
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
-  it('still notifies on a genuine CONFIRMED -> NOTIFIED transition', async () => {
+  it('AVISAR: tells the walk-in their table is ready on CONFIRMED -> NOTIFIED', async () => {
+    // Sin scheduled_at: llegó sin reserva y quedó esperando una mesa. Es el
+    // único caso en el que "tu mesa está lista" significa algo.
     await (RealtimeSyncService as any).handleWaitlistStatusChange({
       eventType: 'UPDATE',
       old: { ...baseEntry, status: 'CONFIRMED' },
@@ -93,6 +95,53 @@ describe('RealtimeSyncService.handleWaitlistStatusChange', () => {
       expect.any(String),
       expect.stringContaining('¡Es tu momento!')
     );
+  });
+
+  it('AVISAR: says nothing about the 20-minute hold', async () => {
+    // El aviso de "tenés 20 minutos para acercarte" se sacó: la retención vive
+    // en el mensaje de reserva confirmada, no acá.
+    await (RealtimeSyncService as any).handleWaitlistStatusChange({
+      eventType: 'UPDATE',
+      old: { ...baseEntry, status: 'CONFIRMED' },
+      new: { ...baseEntry, status: 'NOTIFIED' },
+    });
+
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageMock.mock.calls[0][2]).not.toContain('20 minutos');
+  });
+
+  it('AVISAR: does NOT fire for a scheduled reservation moved to NOTIFIED', async () => {
+    // Una reserva agendada ya tiene su horario: no está esperando una mesa, así
+    // que no le corresponde el aviso de mesa lista.
+    await (RealtimeSyncService as any).handleWaitlistStatusChange({
+      eventType: 'UPDATE',
+      old: { ...baseEntry, status: 'CONFIRMED', scheduled_at: '2026-07-08T22:00:00.000Z' },
+      new: { ...baseEntry, status: 'NOTIFIED', scheduled_at: '2026-07-08T22:00:00.000Z' },
+    });
+
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it('tells a scheduled reservation it is held for 20 minutes after its time', async () => {
+    await (RealtimeSyncService as any).handleWaitlistStatusChange({
+      eventType: 'UPDATE',
+      old: { ...baseEntry, status: 'WAITING', scheduled_at: '2026-07-08T22:00:00.000Z' },
+      new: { ...baseEntry, status: 'CONFIRMED', scheduled_at: '2026-07-08T22:00:00.000Z' },
+    });
+
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageMock.mock.calls[0][2]).toContain('20 minutos después');
+  });
+
+  it('omits the 20-minute hold for an instant reservation with no scheduled time', async () => {
+    await (RealtimeSyncService as any).handleWaitlistStatusChange({
+      eventType: 'UPDATE',
+      old: { ...baseEntry, status: 'WAITING' },
+      new: { ...baseEntry, status: 'CONFIRMED' },
+    });
+
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageMock.mock.calls[0][2]).not.toContain('20 minutos después');
   });
 
   it('notifies the customer when the restaurant cancels the reservation', async () => {
@@ -188,7 +237,7 @@ describe('RealtimeSyncService.handleWaitlistStatusChange', () => {
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
-  it('M11: sends the welcome-at-restaurant message on a WAITING -> SEATED transition and schedules M12', async () => {
+  it('does not message the customer when seating them, but still schedules M12', async () => {
     const schedulePostVisitSpy = jest
       .spyOn(PostVisitService, 'schedulePostVisit')
       .mockResolvedValue(undefined);
@@ -199,16 +248,13 @@ describe('RealtimeSyncService.handleWaitlistStatusChange', () => {
       new: { ...baseEntry, status: 'SEATED' },
     });
 
-    expect(sendMessageMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageMock).toHaveBeenCalledWith(
-      'business-1',
-      expect.any(String),
-      expect.stringContaining('Tu mesa ya está lista')
-    );
+    // La persona ya está en el local: un WhatsApp de bienvenida sólo le suena
+    // el teléfono en la mesa.
+    expect(sendMessageMock).not.toHaveBeenCalled();
     expect(schedulePostVisitSpy).toHaveBeenCalledWith('entry-1', 'business-1');
   });
 
-  it('M11: does not re-send the welcome when the SEATED status is unchanged', async () => {
+  it('does not act again when the SEATED status is unchanged', async () => {
     jest.spyOn(PostVisitService, 'schedulePostVisit').mockResolvedValue(undefined);
 
     await (RealtimeSyncService as any).handleWaitlistStatusChange({

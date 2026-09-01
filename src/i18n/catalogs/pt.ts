@@ -244,7 +244,8 @@ export const ptCatalog: MessageCatalog = {
       `${eventLine}` +
       `📅 Data e hora: ${whenLabel}\n` +
       `📁 Código da reserva: *${displayCode}*\n\n` +
-      `✨ Esperamos por você! Que tenha uma experiência excelente.\n\n` +
+      `✨ Esperamos por você!\n` +
+      `Sua reserva será mantida até *20 minutos após* o horário reservado.\n\n` +
       `Se precisar cancelar, é só escrever: *CANCELAR*`
     );
   },
@@ -703,12 +704,17 @@ export const ptCatalog: MessageCatalog = {
     partySize: number,
     displayCode: string,
     leadMinutes: number,
-    eventTitle?: string | null
+    eventTitle?: string | null,
+    /** La reserva tiene horario agendado: sólo entonces aplica la retención de 20 min. */
+    isScheduled: boolean = false
   ): string {
     const reminderLine =
       leadMinutes > 0
         ? `✨ Avisaremos quando faltar ${countdownLabel(leadMinutes)} para sua reserva.\n`
         : '';
+    const retentionLine = isScheduled
+      ? `Sua reserva será mantida até *20 minutos após* o horário reservado.\n`
+      : '';
     const eventLine = eventTitle ? `🎉 Evento: ${eventTitle}\n` : '';
     return (
       `✅ Sua reserva está CONFIRMADA!\n\n` +
@@ -717,6 +723,7 @@ export const ptCatalog: MessageCatalog = {
       `${eventLine}` +
       `📁 Código da reserva: *${displayCode}*\n\n` +
       reminderLine +
+      retentionLine +
       `Agradecemos sua pontualidade.\n\n` +
       `_Se precisar cancelar, responda *CANCELAR*._`
     );
@@ -803,8 +810,7 @@ export const ptCatalog: MessageCatalog = {
     return (
       `🚀 Chegou a sua vez!\n` +
       `Sua mesa está disponível.\n` +
-      `Você pode ocupá-la nos próximos 20 minutos.\n` +
-      `Depois desse tempo, a reserva pode ser liberada.`
+      `Estamos à sua espera.`
     );
   },
 
@@ -822,10 +828,6 @@ export const ptCatalog: MessageCatalog = {
   // ============================
   // M11 — Boas-vindas no restaurante
   // ============================
-
-  welcomeAtRestaurant(): string {
-    return `👋 Bem-vindo!\n\nSua mesa já está pronta.\nEsperamos que tenha uma experiência excelente.`;
-  },
 
   // ============================
   // M12 — Mensagem pós-visita

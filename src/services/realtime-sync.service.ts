@@ -312,8 +312,9 @@ export class RealtimeSyncService {
       const eventTitle = entry.event_id ? await SupabaseService.getEventTitle(entry.event_id) : null;
       await runWithLanguage(language, async () => {
       if (entry.status === 'SEATED') {
-        // M11 — bienvenida al restaurante, y programa M12 (mensaje post-visita)
-        notificationMessage = templates.welcomeAtRestaurant();
+        // Sentado: no se le manda nada. La persona ya está en el local, así que
+        // un WhatsApp de bienvenida sólo le suena el teléfono en la mesa.
+        // El mensaje post-visita (M12) sí se sigue programando.
         await PostVisitService.schedulePostVisit(entry.id, entry.business_id);
       } else if (entry.status === 'CONFIRMED' || entry.status === 'NOTIFIED') {
         notificationMessage = templates.reservationConfirmedNotice(
@@ -321,7 +322,8 @@ export class RealtimeSyncService {
           entry.party_size,
           entry.display_code,
           entry.scheduled_at ? ReservationReminderService.getUpcomingLeadMinutes() : 0,
-          eventTitle
+          eventTitle,
+          entry.scheduled_at != null
         );
       } else {
         // WAITING — requiere confirmación manual del operador
@@ -333,6 +335,14 @@ export class RealtimeSyncService {
         );
       }
       });
+
+      // Hay estados que deliberadamente no le mandan nada al cliente (sentado).
+      if (!notificationMessage) {
+        logger.debug('No message for this status, skipping INSERT notification', {
+          status: entry.status,
+        });
+        return;
+      }
 
       // `sendMessage` → `resolveJid` ya normaliza el número y consulta la cache
       // de JIDs. Duplicar esa búsqueda acá, además, la hacía con el teléfono
@@ -691,12 +701,17 @@ export class RealtimeSyncService {
       let notificationMessage = '';
       await runWithLanguage(language, async () => {
       if (isSeated) {
-        // M11 — bienvenida al restaurante + programa el mensaje post-visita (M12)
-        notificationMessage = templates.welcomeAtRestaurant();
+        // Sentado: no se le manda nada (ya está en el local). Sólo se programa
+        // el mensaje post-visita (M12).
         await PostVisitService.schedulePostVisit(newEntry.id, newEntry.business_id);
       } else if (isNotified) {
-        // Paso 6: Mesa disponible (NOTIFIED)
-        notificationMessage = templates.tableReadyNotice();
+        // AVISAR — "tu mesa está lista". Sólo tiene sentido para quien está
+        // esperando una mesa: alguien que llegó sin reserva y quedó en la fila.
+        // Una reserva agendada ya tiene su horario, así que el panel la pasa a
+        // NOTIFIED sin que haya nada que avisar.
+        if (newEntry.scheduled_at == null) {
+          notificationMessage = templates.tableReadyNotice();
+        }
       } else if (isCancelled) {
         // El restaurante dio de baja la reserva desde el panel.
         //
@@ -736,7 +751,8 @@ export class RealtimeSyncService {
           newEntry.party_size,
           newEntry.display_code,
           newEntry.scheduled_at ? ReservationReminderService.getUpcomingLeadMinutes() : 0,
-          eventTitle
+          eventTitle,
+          newEntry.scheduled_at != null
         );
       }
       });
@@ -745,6 +761,16 @@ export class RealtimeSyncService {
         messageLength: notificationMessage.length,
         status: newEntry.status,
       });
+
+      // Hay transiciones que deliberadamente no le mandan nada al cliente:
+      // sentarlo, y avisar una reserva que ya tenía horario agendado.
+      if (!notificationMessage) {
+        logger.debug('No message for this transition, skipping notification', {
+          status: newEntry.status,
+          scheduled: newEntry.scheduled_at != null,
+        });
+        return;
+      }
 
       // Send WhatsApp notification.
       //

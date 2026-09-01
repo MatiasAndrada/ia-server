@@ -245,7 +245,8 @@ export const enCatalog: MessageCatalog = {
       `${eventLine}` +
       `📅 Date and time: ${whenLabel}\n` +
       `📁 Booking code: *${displayCode}*\n\n` +
-      `✨ We look forward to seeing you! We hope you have a wonderful experience.\n\n` +
+      `✨ We look forward to seeing you!\n` +
+      `Your booking will be held for up to *20 minutes after* the reserved time.\n\n` +
       `If you need to cancel, just type: *CANCEL*`
     );
   },
@@ -704,12 +705,17 @@ export const enCatalog: MessageCatalog = {
     partySize: number,
     displayCode: string,
     leadMinutes: number,
-    eventTitle?: string | null
+    eventTitle?: string | null,
+    /** La reserva tiene horario agendado: sólo entonces aplica la retención de 20 min. */
+    isScheduled: boolean = false
   ): string {
     const reminderLine =
       leadMinutes > 0
         ? `✨ We'll remind you ${countdownLabel(leadMinutes)} before your booking.\n`
         : '';
+    const retentionLine = isScheduled
+      ? `Your booking will be held for up to *20 minutes after* the reserved time.\n`
+      : '';
     const eventLine = eventTitle ? `🎉 Event: ${eventTitle}\n` : '';
     return (
       `✅ Your booking is CONFIRMED!\n\n` +
@@ -718,6 +724,7 @@ export const enCatalog: MessageCatalog = {
       `${eventLine}` +
       `📁 Booking code: *${displayCode}*\n\n` +
       reminderLine +
+      retentionLine +
       `We appreciate your punctuality.\n\n` +
       `_If you need to cancel, reply *CANCEL*._`
     );
@@ -804,8 +811,7 @@ export const enCatalog: MessageCatalog = {
     return (
       `🚀 It's your turn!\n` +
       `Your table is ready.\n` +
-      `You can take it within the next 20 minutes.\n` +
-      `After that, the booking may be released.`
+      `We're waiting for you.`
     );
   },
 
@@ -823,10 +829,6 @@ export const enCatalog: MessageCatalog = {
   // ============================
   // M11 — Welcome at the restaurant
   // ============================
-
-  welcomeAtRestaurant(): string {
-    return `👋 Welcome!\n\nYour table is ready.\nWe hope you have a wonderful experience.`;
-  },
 
   // ============================
   // M12 — Post-visit message

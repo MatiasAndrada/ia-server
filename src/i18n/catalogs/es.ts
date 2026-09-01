@@ -264,7 +264,8 @@ export const esCatalog = {
       `${eventLine}` +
       `📅 Fecha y hora: ${whenLabel}\n` +
       `📁 Código de reserva: *${displayCode}*\n\n` +
-      `✨ ¡Te esperamos! Esperamos que disfrutes una excelente experiencia.\n\n` +
+      `✨ ¡Te esperamos!\n` +
+      `Tu reserva se mantendrá hasta *20 minutos después* del horario reservado.\n\n` +
       `Si necesitás cancelar, simplemente escribí: *CANCELAR*`
     );
   },
@@ -754,12 +755,17 @@ export const esCatalog = {
     partySize: number,
     displayCode: string,
     leadMinutes: number,
-    eventTitle?: string | null
+    eventTitle?: string | null,
+    /** La reserva tiene horario agendado: sólo entonces aplica la retención de 20 min. */
+    isScheduled: boolean = false
   ): string {
     const reminderLine =
       leadMinutes > 0
         ? `✨ Te avisaremos cuando falte ${countdownLabel(leadMinutes)} para tu reserva.\n`
         : '';
+    const retentionLine = isScheduled
+      ? `Tu reserva se mantendrá hasta *20 minutos después* del horario reservado.\n`
+      : '';
     const eventLine = eventTitle ? `🎉 Evento: ${eventTitle}\n` : '';
     return (
       `✅ ¡Tu reserva está CONFIRMADA!\n\n` +
@@ -768,6 +774,7 @@ export const esCatalog = {
       `${eventLine}` +
       `📁 Código de reserva: *${displayCode}*\n\n` +
       reminderLine +
+      retentionLine +
       `Apreciamos tu puntualidad.\n\n` +
       `_Si necesitás cancelar, respondé *CANCELAR*._`
     );
@@ -875,8 +882,7 @@ export const esCatalog = {
     return (
       `🚀 ¡Es tu momento!\n` +
       `Tu mesa está disponible.\n` +
-      `Podés ocuparla dentro de los próximos 20 minutos.\n` +
-      `Luego de ese tiempo, la reserva podría liberarse.`
+      `Te esperamos.`
     );
   },
 
@@ -894,18 +900,6 @@ export const esCatalog = {
     return isGratitude
       ? `¡De nada! 🙌\n\nTu reserva${reservationRef} ya está confirmada. Si necesitas algo más, estoy para ayudarte.`
       : `¡Genial! 🙌\n\nTu reserva${reservationRef} ya está confirmada. Si necesitas algo más, estoy para ayudarte.`;
-  },
-
-  // ============================
-  // M11 — Bienvenida al restaurante
-  // ============================
-
-  welcomeAtRestaurant(): string {
-    return (
-      `👋 ¡Bienvenido!\n\n` +
-      `Tu mesa ya está lista.\n` +
-      `Esperamos que disfrutes una excelente experiencia.`
-    );
   },
 
   // ============================

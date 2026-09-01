@@ -395,9 +395,17 @@ export function reservationConfirmedNotice(
   partySize: number,
   displayCode: string,
   leadMinutes: number,
-  eventTitle?: string | null
+  eventTitle?: string | null,
+  isScheduled: boolean = false
 ): string {
-  return catalog().reservationConfirmedNotice(name, partySize, displayCode, leadMinutes, eventTitle);
+  return catalog().reservationConfirmedNotice(
+    name,
+    partySize,
+    displayCode,
+    leadMinutes,
+    eventTitle,
+    isScheduled
+  );
 }
 
 /** La reserva quedó registrada, pendiente de confirmación del local. */
@@ -441,14 +449,6 @@ export function postReservationCourtesyReply(
   isGratitude: boolean
 ): string {
   return catalog().postReservationCourtesyReply(reservationRef, isPending, isGratitude);
-}
-
-// ============================
-// M11 — Bienvenida al restaurante
-// ============================
-
-export function welcomeAtRestaurant(): string {
-  return catalog().welcomeAtRestaurant();
 }
 
 // ============================
