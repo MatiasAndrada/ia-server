@@ -71,6 +71,8 @@ describe('WhatsAppHandler — camino del agente', () => {
     jest.spyOn(state, 'setOnboardingStep').mockResolvedValue();
     jest.spyOn(state, 'clearOnboardingStep').mockResolvedValue();
     jest.spyOn(state, 'loadOnboardingStep').mockResolvedValue(null);
+    // Por defecto, la última respuesta fue recién: conversación en curso.
+    jest.spyOn(state, 'conversationIdleMs').mockResolvedValue(1000);
     jest.spyOn(SupabaseService, 'getActiveEvents').mockResolvedValue([]);
     // Sin historial por defecto = primer contacto. Los casos que necesitan una
     // conversación ya empezada lo sobrescriben.
@@ -179,6 +181,20 @@ describe('WhatsAppHandler — camino del agente', () => {
       expect(createSpy).toHaveBeenCalledWith('Daniel', PHONE, BUSINESS_ID, null);
       expect(sent[0]).toContain('¡Hola, Daniel!');
       expect(sent[0]).toContain('Reservar una mesa');
+    });
+
+    it('acepta un nombre que contiene una palabra del flujo como subcadena', async () => {
+      jest.spyOn(state, 'loadOnboardingStep').mockResolvedValue('name');
+      const createSpy = jest
+        .spyOn(SupabaseService, 'getOrCreateCustomer')
+        .mockResolvedValue({ id: 'c1', name: 'Horacio' } as any);
+
+      await process('Horacio');
+
+      // "Horacio" contiene "hora", y con eso el alta se abandonaba entera y el
+      // menú de apertura no llegaba nunca.
+      expect(createSpy).toHaveBeenCalledWith('Horacio', PHONE, BUSINESS_ID, null);
+      expect(sent[0]).toContain('¡Hola, Horacio!');
     });
 
     it('acepta "me llamo Daniel Pérez" y separa el apellido', async () => {
@@ -308,6 +324,26 @@ describe('WhatsAppHandler — camino del agente', () => {
       // Mostrarle un menú sería hacerle repetir lo que acaba de escribir.
       expect(turnSpy).toHaveBeenCalled();
       expect(sent).toEqual(['Listo Matías, mesa para 4.']);
+    });
+
+    it('lo manda igual cuando el cliente vuelve tras un rato de silencio', async () => {
+      jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue(knownCustomer as any);
+      // Hay historial de hace 20 minutos: el cliente vuelve, no sigue hablando.
+      jest.spyOn(state, 'loadHistory').mockResolvedValue([
+        { role: 'user', content: 'gracias' },
+        { role: 'assistant', content: 'Listo, Matías.' },
+      ]);
+      jest.spyOn(state, 'conversationIdleMs').mockResolvedValue(20 * 60 * 1000);
+      const turnSpy = jest.spyOn(orchestrator, 'handleTurn');
+
+      await process('hola');
+
+      // El bug: el historial vive una hora, así que este "hola" lo contestaba
+      // el modelo con un saludo improvisado en vez de la carta de presentación.
+      expect(turnSpy).not.toHaveBeenCalled();
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toContain('¡Hola, Matías!');
+      expect(sent[0]).toContain('Reservar una mesa');
     });
 
     it('NO lo repite a mitad de conversación', async () => {
