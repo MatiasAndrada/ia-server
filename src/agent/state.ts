@@ -158,6 +158,32 @@ export async function loadHistory(conversationId: string, shadow = false): Promi
   }
 }
 
+/**
+ * Hace cuánto que no se escribe nada en esta conversación, en milisegundos.
+ * `null` si no hay historial (primer contacto, o Redis caído).
+ *
+ * Se deduce del TTL de la propia key del historial en vez de guardar un
+ * timestamp aparte: cada `saveHistory` lo reinicia a HISTORY_TTL_SECONDS, así
+ * que lo que le queda de vida es exactamente el tiempo transcurrido desde el
+ * último mensaje. Una key menos que mantener y una sola ida a Redis.
+ */
+export async function conversationIdleMs(conversationId: string): Promise<number | null> {
+  try {
+    if (!RedisConfig.isReady()) return null;
+    // -2 = la key no existe, -1 = existe sin expiración. Ninguno de los dos
+    // permite calcular una antigüedad, así que valen lo mismo que "no sé".
+    const ttl = await RedisConfig.getClient().ttl(historyKey(conversationId));
+    if (ttl < 0) return null;
+    return Math.max(0, HISTORY_TTL_SECONDS - ttl) * 1000;
+  } catch (error) {
+    logger.warn('Failed to read conversation idle time', {
+      conversationId,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+    return null;
+  }
+}
+
 export async function saveHistory(
   conversationId: string,
   messages: LlmMessage[],
