@@ -2,7 +2,7 @@ import { LlmToolDefinition } from '../../types/index.js';
 import type { SupportedLanguage } from '../../i18n/index.js';
 
 /**
- * Resultado uniforme de toda herramienta del agente v2.
+ * Resultado uniforme de toda herramienta del agente.
  *
  * Se serializa a JSON y se devuelve al modelo como contenido de un mensaje
  * `tool`. El modelo lee `data` para redactar, y `error.hint` para saber qué
@@ -29,8 +29,7 @@ export interface ToolResult<T = unknown> {
   /**
    * Imágenes a enviar en este turno. Mismo principio que `verbatim`: el modelo
    * no puede producir una imagen, así que la herramienta la adjunta y el
-   * orquestador la entrega. Se usan para las fotos de un evento, que en v1
-   * mandaba `applyEventChoice`.
+   * orquestador la entrega. Se usan para las fotos de un evento elegido.
    */
   attachments?: { imageUrl: string; caption?: string }[];
 }
@@ -57,14 +56,13 @@ export interface ToolContext {
   jid: string;
   language: SupportedLanguage;
   /**
-   * Modo sombra: v2 corre en paralelo a v1 sobre tráfico real para poder
-   * compararlos, pero el cliente ve la respuesta de v1. En ese modo NINGUNA
-   * herramienta puede escribir — crearía reservas fantasma, cancelaría las
-   * reales y pisaría el nombre o el idioma del cliente.
+   * Modo dry-run: el turno se computa entero sobre tráfico real, pero el
+   * cliente no ve la respuesta. En ese modo NINGUNA herramienta puede
+   * escribir — crearía reservas fantasma, cancelaría las reales y pisaría el
+   * nombre o el idioma del cliente.
    *
    * Las herramientas de lectura ignoran esta bandera; las de escritura simulan
-   * el resultado para que el modelo siga razonando como si hubiera funcionado,
-   * que es lo que hace comparable el turno.
+   * el resultado para que el modelo siga razonando como si hubiera funcionado.
    */
   dryRun?: boolean;
 }

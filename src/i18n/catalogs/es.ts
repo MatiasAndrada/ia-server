@@ -117,16 +117,13 @@ export const esCatalog = {
   // ============================
 
   /**
-   * Saludo de primer contacto del agente v2: se presenta y ofrece las dos cosas
+   * Saludo de primer contacto del agente: se presenta y ofrece las dos cosas
    * que sabe hacer.
    *
    * El menú es un ATAJO, no un formulario. El cliente puede responder 1 o 2,
    * escribir su pedido entero ("hoy 21:30 para 4") o preguntar cualquier otra
    * cosa: el agente lo atiende igual. Por eso no hay un template de "opción
    * inválida" que lo acompañe — para este menú no existe la opción inválida.
-   *
-   * No reemplaza a `welcomeMessage`: ese es el saludo del flujo por pasos de
-   * v1, donde lo único que se espera a continuación es el nombre.
    */
   welcomeMenu(
     businessName: string,
@@ -166,15 +163,6 @@ export const esCatalog = {
     return (
       `¡Perfecto! 😊\n` +
       `Antes de comenzar, ¿cómo te llamás? Así podemos acompañarte de forma más personalizada.`
-    );
-  },
-
-  welcomeMessage(businessName: string): string {
-    return (
-      `👋 ¡Hola!\n` +
-      `Soy el asistente de reservas de *${businessName}*.\n` +
-      `Voy a ayudarte a reservar tu mesa en pocos segundos.\n\n` +
-      `¿Cómo te llamás? Decime tu *nombre y apellido*.`
     );
   },
 
@@ -277,8 +265,8 @@ export const esCatalog = {
    * El detalle del evento que eligió el cliente. Se envía DESPUÉS de las fotos,
    * así el bloque queda "fotos → detalle → siguiente pregunta".
    *
-   * No cierra ni invita a seguir: de eso se encarga el mensaje que va después
-   * (el resumen en v1, la pregunta del modelo en v2).
+   * No cierra ni invita a seguir: de eso se encarga la pregunta del modelo que
+   * va después.
    */
   eventSelected(title: string, description: string | null, whenLabel: string): string {
     return (

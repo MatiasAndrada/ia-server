@@ -19,7 +19,7 @@ import { logger } from '../../utils/logger.js';
 export type { ToolContext, ToolResult } from './types.js';
 
 /**
- * Registro de herramientas del agente v2.
+ * Registro de herramientas del agente.
  *
  * El ORDEN importa y es deliberado: OpenRouter reenvía este array en cada
  * request del loop, así que mantenerlo estable es lo que permite que el

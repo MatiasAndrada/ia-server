@@ -122,15 +122,6 @@ export const enCatalog: MessageCatalog = {
     );
   },
 
-  welcomeMessage(businessName: string): string {
-    return (
-      `👋 Hello!\n` +
-      `I'm the booking assistant for *${businessName}*.\n` +
-      `I'll help you reserve your table in just a few seconds.\n\n` +
-      `What's your name? Please tell me your *first and last name*.`
-    );
-  },
-
   askPartySize(name: string): string {
     return (
       `✅ Perfect, *${name}*.\n\n` +

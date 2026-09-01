@@ -4,7 +4,6 @@
  * "sim") y un brasileño puede escribir CANCEL. Estos tests fijan ese contrato.
  */
 
-import { WhatsAppHandler } from '../../services/whatsapp-handler.service.js';
 import { isMultilingualGreeting } from '../../i18n/keywords.js';
 import {
   evaluateReservationScope,
@@ -12,14 +11,6 @@ import {
 } from '../../utils/reservation-scope.js';
 
 jest.mock('../../utils/logger');
-
-const handler = new WhatsAppHandler({
-  sendMessage: jest.fn(),
-  getSelfJid: jest.fn().mockReturnValue(''),
-} as any);
-
-const call = (method: string, text: string): boolean =>
-  (handler as any)[method](text) as boolean;
 
 describe('saludos multilingües', () => {
   const greetings = [
@@ -58,98 +49,5 @@ describe('pedidos de reserva en los tres idiomas pasan el guard de alcance', () 
 
   it.each(requests)('%p → allow', (text) => {
     expect(evaluateReservationScope(text, {}).decision).toBe('allow');
-  });
-});
-
-describe('isCancellationIntent', () => {
-  const positives = [
-    'quiero cancelar',
-    'cancelar',
-    'anular mi reserva',
-    'cancel',
-    'I want to cancel my booking',
-    'please delete my reservation',
-    'quero cancelar',
-    'desmarcar a reserva',
-    'quero desistir',
-  ];
-
-  it.each(positives)('%p → true', (text) => {
-    expect(call('isCancellationIntent', text)).toBe(true);
-  });
-
-  const negatives = ['quiero reservar', 'a table for 4', 'uma mesa para 4'];
-  it.each(negatives)('%p → false', (text) => {
-    expect(call('isCancellationIntent', text)).toBe(false);
-  });
-});
-
-describe('isExitKeyword', () => {
-  const positives = [
-    'salir', 'dejalo', 'olvidalo',
-    'exit', 'quit', 'nevermind', 'forget it', 'no thanks',
-    'sair', 'esquece', 'voltar',
-  ];
-
-  it.each(positives)('%p → true', (text) => {
-    expect(call('isExitKeyword', text)).toBe(true);
-  });
-});
-
-describe('isGratitudeMessage', () => {
-  const positives = [
-    'gracias', 'muchas gracias', 'mil gracias',
-    'thanks', 'thank you', 'thank you so much', 'thx',
-    'obrigado', 'obrigada', 'muito obrigado', 'valeu',
-  ];
-
-  it.each(positives)('%p → true', (text) => {
-    expect(call('isGratitudeMessage', text)).toBe(true);
-  });
-});
-
-describe('isShortAcknowledgementMessage', () => {
-  const positives = [
-    'ok', 'dale', 'perfecto', 'listo',
-    'sure', 'alright', 'great', 'got it',
-    'beleza', 'certo', 'otimo',
-  ];
-
-  it.each(positives)('%p → true', (text) => {
-    expect(call('isShortAcknowledgementMessage', text)).toBe(true);
-  });
-});
-
-describe('isModificationIntent', () => {
-  const positives = [
-    'quiero modificar mi reserva',
-    'cambiar mi reserva',
-    'I want to change my booking',
-    'can you modify my reservation',
-    'reschedule',
-    'quero alterar minha reserva',
-    'remarcar',
-  ];
-
-  it.each(positives)('%p → true', (text) => {
-    expect(call('isModificationIntent', text)).toBe(true);
-  });
-});
-
-describe('isExplicitNewReservationIntent', () => {
-  const positives = [
-    'reservar',
-    'quiero hacer otra reserva',
-    'nueva reserva',
-    'book',
-    'I want to book',
-    'make a reservation',
-    'another booking',
-    'quero reservar',
-    'nova reserva',
-  ];
-
-  it.each(positives)('%p → true', (text) => {
-    expect(call('isExplicitNewReservationIntent', text)).toBe(true);
   });
 });

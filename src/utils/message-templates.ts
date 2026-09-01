@@ -43,7 +43,7 @@ export function instantTurnLabel(): string {
 // ============================
 
 /**
- * Saludo de primer contacto del agente v2, con las dos opciones del menú.
+ * Saludo de primer contacto del agente, con las dos opciones del menú.
  * Responder una opción es opcional: ver la nota del template en es.ts.
  */
 export function welcomeMenu(
@@ -57,10 +57,6 @@ export function welcomeMenu(
 /** Segundo mensaje del alta: se le pide el nombre antes de mostrarle el menú. */
 export function onboardingAskName(): string {
   return catalog().onboardingAskName();
-}
-
-export function welcomeMessage(businessName: string): string {
-  return catalog().welcomeMessage(businessName);
 }
 
 export function askPartySize(name: string): string {

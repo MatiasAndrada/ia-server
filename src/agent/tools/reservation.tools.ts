@@ -96,9 +96,8 @@ export const createReservationTool: AgentTool<CreateArgs> = {
     // El modelo tiende a tratar un evento como una reserva común — resolver una
     // fecha con check_availability y mandar ese scheduledAt — y así se perdía la
     // asociación. Acá se ignora lo que haya mandado y se toma `startsAt` real
-    // del evento, que es lo mismo que hacía `applyEventChoice` en v1. Si el
-    // evento no existe se corta: es preferible a crear una reserva común
-    // silenciosamente cuando el cliente pidió un evento.
+    // del evento. Si el evento no existe se corta: es preferible a crear una
+    // reserva común silenciosamente cuando el cliente pidió un evento.
     let effectiveScheduledAt = scheduledAt ?? null;
     let event: BusinessEvent | undefined;
 
@@ -207,7 +206,7 @@ export const createReservationTool: AgentTool<CreateArgs> = {
       reservationId: entry.id,
       partySize,
       scheduledAt: entry.scheduled_at,
-      via: 'agent_v2',
+      via: 'agent',
     });
 
     return ok(
@@ -323,7 +322,7 @@ export const cancelReservationTool: AgentTool<CancelArgs> = {
       conversationId: ctx.conversationId,
       businessId: ctx.businessId,
       reservationId,
-      via: 'agent_v2',
+      via: 'agent',
     });
 
     return ok(
@@ -430,7 +429,7 @@ export const modifyReservationTool: AgentTool<ModifyArgs> = {
       conversationId: ctx.conversationId,
       businessId: ctx.businessId,
       reservationId,
-      via: 'agent_v2',
+      via: 'agent',
     });
 
     logger.debug('modify_reservation applied', { reservationId, partySize, scheduledAt });

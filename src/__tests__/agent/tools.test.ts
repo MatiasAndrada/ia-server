@@ -262,7 +262,7 @@ describe('agent tool registry', () => {
       imageUrls: ['https://x/1.jpg', 'https://x/2.jpg', 'https://x/3.jpg', 'https://x/4.jpg'],
     };
 
-    it('adjunta las fotos del evento, con tope de 3 como en v1', async () => {
+    it('adjunta las fotos del evento, con tope de 3', async () => {
       jest.spyOn(SupabaseService, 'getActiveEvents').mockResolvedValue([EVENT] as any);
 
       const result = await run('show_event_details', { eventId: 'ev-1' });

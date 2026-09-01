@@ -7,7 +7,7 @@ import * as templates from '../utils/message-templates.js';
 import { logger } from '../utils/logger.js';
 
 /**
- * Estado conversacional del agente v2.
+ * Estado conversacional del agente.
  *
  * Reemplaza por completo a `ReservationDraft`: no hay `step`, ni campos
  * `pending*` / `awaiting*`. Lo único que se persiste es el historial (con sus
@@ -128,10 +128,10 @@ export async function loadCustomerProfile(
 }
 
 /**
- * El modo sombra usa su propio namespace: la conversación que "imagina" v2
- * diverge de la real desde el primer turno (responde distinto, así que el
- * cliente contesta otra cosa). Compartir la key haría que cada flujo
- * corrompiera la memoria del otro.
+ * El modo dry-run usa su propio namespace: la conversación "imaginada" diverge
+ * de la real desde el primer turno (responde distinto, así que el cliente
+ * contesta otra cosa). Compartir la key haría que cada flujo corrompiera la
+ * memoria del otro.
  */
 function historyKey(conversationId: string, shadow = false): string {
   return `${shadow ? SHADOW_KEY_PREFIX : HISTORY_KEY_PREFIX}${conversationId}`;
@@ -269,12 +269,10 @@ const STUCK_KEY_PREFIX = 'agent_v2_stuck:';
 /**
  * Turnos consecutivos improductivos.
  *
- * Es el equivalente en v2 de los `invalidAttempts` del draft de v1: si el
- * agente no logra avanzar dos turnos seguidos, hay que sacar al cliente del
- * loop en vez de dejarlo dando vueltas. La diferencia es qué cuenta como
- * "improductivo": en v1 era una respuesta que el parser del paso no entendía;
- * acá es que el modelo agote las iteraciones sin cerrar el turno, o que todas
- * las herramientas del turno hayan fallado.
+ * Si el agente no logra avanzar dos turnos seguidos, hay que sacar al cliente
+ * del loop en vez de dejarlo dando vueltas. "Improductivo" quiere decir que el
+ * modelo agotó las iteraciones sin cerrar el turno, o que todas las
+ * herramientas del turno fallaron.
  *
  * Vive en su propia key con TTL corto: es estado de recuperación, no memoria de
  * la conversación, y no debe sobrevivir a una pausa larga del cliente.

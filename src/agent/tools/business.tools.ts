@@ -79,8 +79,7 @@ interface ShowEventArgs {
 }
 
 /**
- * Equivalente en v2 del momento en que v1 aplicaba `applyEventChoice`: cuando
- * el cliente se interesa por un evento concreto, se le mandan sus fotos.
+ * Cuando el cliente se interesa por un evento concreto, se le mandan sus fotos.
  *
  * Es una herramienta aparte de `list_events` a propósito — listar cinco eventos
  * no debe disparar quince imágenes; las fotos salen sólo del que el cliente
@@ -146,8 +145,8 @@ export const showEventDetailsTool: AgentTool<ShowEventArgs> = {
         event.description,
         describeScheduledAtUtc(event.startsAt, nowBA)
       ),
-      // Máximo 3, igual que v1: más que eso satura el chat. La primera lleva el
-      // título como caption, también igual que v1 — llega antes que el texto.
+      // Máximo 3: más que eso satura el chat. La primera lleva el título como
+      // caption, porque llega antes que el texto.
       attachments: event.imageUrls.slice(0, 3).map((imageUrl, index) => ({
         imageUrl,
         ...(index === 0 ? { caption: `🎉 *${event.title}*` } : {}),

@@ -4,8 +4,9 @@
  * Each scenario represents a realistic multi-turn WhatsApp conversation
  * classified by category (happy path, edge case, abuse, hallucination trigger, etc.).
  *
- * The runner uses the WhatsAppHandler with mocked services to verify that the
- * bot never hallucinates, stays on-topic, and completes the reservation flow.
+ * Consumed by scripts/agent-eval.ts (`pnpm eval`), which runs each scenario
+ * against the real orchestrator and the real model to verify that the bot
+ * never hallucinates, stays on-topic, and completes the reservation flow.
  */
 
 export interface ConversationTurn {

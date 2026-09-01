@@ -440,7 +440,7 @@ export class SupabaseService {
       });
 
       // Red de seguridad: una reserva con horario ya pasado nunca debe llegar
-      // a la base, sin importar qué camino la generó (chat, agente v2 o
+      // a la base, sin importar qué camino la generó (chat, agente o
       // dashboard). Los eventos quedan afuera porque su fecha la fija el
       // comercio al publicarlo, no el cliente.
       if (request.scheduledAt && !request.eventId && isInPast(request.scheduledAt)) {

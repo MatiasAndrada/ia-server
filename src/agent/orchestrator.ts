@@ -18,7 +18,7 @@ import * as templates from '../utils/message-templates.js';
 import type { SupportedLanguage } from '../i18n/index.js';
 
 /**
- * Orquestador del agente v2.
+ * Orquestador del agente.
  *
  * Un turno es: cargar quién escribe → armar el prompt → dejar que el modelo
  * decida qué herramientas usar → devolver lo que haya que enviar.
@@ -58,9 +58,8 @@ export interface TurnInput {
   language: SupportedLanguage;
   businessName: string;
   /**
-   * Modo sombra: el turno se computa entero para poder compararlo con v1, pero
-   * ninguna herramienta escribe y la respuesta no se envía. Usa su propio
-   * historial (ver state.historyKey).
+   * Modo dry-run: el turno se computa entero pero ninguna herramienta escribe
+   * y la respuesta no se envía. Usa su propio historial (ver state.historyKey).
    */
   dryRun?: boolean;
 }
@@ -76,7 +75,7 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
   // --- Guards deterministas: nunca llegan al modelo ---
   const scope = evaluateReservationScope(messageText, { businessName });
   if (scope.decision === 'out_of_window' || scope.reason === 'prompt_injection') {
-    logger.debug('Agent v2: blocked by deterministic scope guard', {
+    logger.debug('Agent: blocked by deterministic scope guard', {
       conversationId,
       decision: scope.decision,
       reason: scope.reason,
@@ -97,7 +96,7 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
   ]);
 
   if (!rules) {
-    logger.error('Agent v2: business not found', { businessId });
+    logger.error('Agent: business not found', { businessId });
     return { messages: [templates.genericError()], attachments: [], toolsCalled: [], iterations: 0 };
   }
 
@@ -160,8 +159,7 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
 
   // Un turno es improductivo si el modelo agotó las iteraciones sin cerrar, o
   // si todas las herramientas que pidió fallaron. Dos seguidos y se corta: sin
-  // esto el cliente puede quedar en un loop sin salida, que es justo lo que
-  // evitaba `invalidAttempts` en v1.
+  // esto el cliente puede quedar en un loop sin salida.
   const allToolsFailed =
     result.executedToolCalls.length > 0 &&
     result.executedToolCalls.every((c) => (c.output as ToolResult | undefined)?.ok === false);
@@ -169,7 +167,7 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
   if (!dryRun && (result.exhausted || allToolsFailed)) {
     const streak = await bumpUnproductiveStreak(conversationId);
     if (streak >= 2) {
-      logger.warn('Agent v2: unproductive streak reached, handing off', {
+      logger.warn('Agent: unproductive streak reached, handing off', {
         conversationId,
         businessId,
         streak,
@@ -193,7 +191,7 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
     logEvent('info', 'turn.silenced', {
       conversationId,
       businessId,
-      via: dryRun ? 'agent_v2_shadow' : 'agent_v2',
+      via: dryRun ? 'agent_dry_run' : 'agent',
       // El centinela debería venir solo; si vino con texto, ese texto igual se envía.
       withText: outbound.length > 0,
     });
@@ -203,7 +201,7 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
   // el modelo devolvió vacío y ninguna herramienta produjo `verbatim` — y no
   // si el silencio fue deliberado.
   if (!silenced && outbound.length === 0 && attachments.length === 0) {
-    logger.warn('Agent v2: empty turn, falling back to generic reply', {
+    logger.warn('Agent: empty turn, falling back to generic reply', {
       conversationId,
       iterations: result.iterations,
       exhausted: result.exhausted,
@@ -214,7 +212,7 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
   logEvent('info', 'turn.completed', {
     conversationId,
     businessId,
-    via: dryRun ? 'agent_v2_shadow' : 'agent_v2',
+    via: dryRun ? 'agent_dry_run' : 'agent',
     iterations: result.iterations,
     tools: result.executedToolCalls.map((c) => c.name),
     exhausted: result.exhausted,

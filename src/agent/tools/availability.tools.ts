@@ -30,8 +30,8 @@ import { logger } from '../../utils/logger.js';
  *
  * Todas devuelven texto crudo del cliente como entrada (`dateText`, `timeText`)
  * en vez de fechas ya calculadas: si el modelo calculara la fecha, un error
- * suyo se volvería una reserva mal creada. El parser determinista
- * (`parseRelativeDay` / `parseTimeOfDay`) es el mismo que usa el flujo v1.
+ * suyo se volvería una reserva mal creada. `parseRelativeDay` / `parseTimeOfDay`
+ * son el mismo parser determinista que usan el resto de las reglas de negocio.
  */
 
 interface ResolveDateArgs {
@@ -100,8 +100,7 @@ export const resolveDateTool: AgentTool<ResolveDateArgs> = {
 
     // "El jueves" dicho un jueves es genuinamente ambiguo: puede ser hoy o el
     // de la semana que viene. No se resuelve por defecto — se le devuelve la
-    // ambigüedad al modelo para que pregunte, que es exactamente el caso que
-    // en v1 requería el campo `pendingWeekdayDisambiguation` en el draft.
+    // ambigüedad al modelo para que pregunte.
     const ambiguous = parsed.matchedWeekdayName && parsed.isToday;
 
     const hours = formatDayHoursForDate(parsed.baDate, rules.weeklyHours);

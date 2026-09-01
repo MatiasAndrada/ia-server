@@ -5,7 +5,7 @@ import { formatBusinessAddress, formatWeeklyHoursForPrompt } from '../utils/prom
 import { describeScheduledAtUtc, nowInBuenosAires } from '../utils/reservation-datetime.js';
 
 /**
- * System prompt del agente v2.
+ * System prompt del agente.
  *
  * Se arma en dos bloques deliberadamente separados:
  *

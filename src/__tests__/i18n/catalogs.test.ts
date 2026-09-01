@@ -24,7 +24,6 @@ const ARGS: Record<keyof MessageCatalog, unknown[]> = {
   instantTurnLabel: [],
   welcomeMenu: ['__BIZ__', '__NAME__', [{ title: '__EVENT__', whenLabel: '__WHEN__' }]],
   onboardingAskName: [],
-  welcomeMessage: ['__BIZ__'],
   askPartySize: ['__NAME__'],
   welcomeBackAskPartySize: ['__NAME__'],
   askScheduleChoice: [['__EVENT__'], true],
@@ -235,13 +234,13 @@ describe('catálogos de mensajes', () => {
 describe('contexto de idioma', () => {
   it('fuera de runWithLanguage el idioma activo es español', () => {
     expect(currentLanguage()).toBe('es');
-    expect(templates.welcomeMessage('X')).toBe(ALL_CATALOGS.es.welcomeMessage('X'));
+    expect(templates.askPartySize('X')).toBe(ALL_CATALOGS.es.askPartySize('X'));
   });
 
   it('los dispatchers de message-templates siguen el idioma activo', () => {
     runWithLanguage('en', () => {
       expect(currentLanguage()).toBe('en');
-      expect(templates.welcomeMessage('X')).toBe(ALL_CATALOGS.en.welcomeMessage('X'));
+      expect(templates.askPartySize('X')).toBe(ALL_CATALOGS.en.askPartySize('X'));
     });
 
     runWithLanguage('pt', () => {

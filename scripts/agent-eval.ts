@@ -1,5 +1,5 @@
 /**
- * 📊 Evals del agente v2 contra el modelo REAL
+ * 📊 Evals del agente contra el modelo REAL
  *
  * Corre los escenarios de conversación de src/__tests__/scenarios contra el
  * orquestador y el modelo de verdad, y puntúa el resultado.
@@ -62,8 +62,8 @@ interface ScenarioOutcome {
 
 /**
  * Reglas duras. Son las que justifican el eval: un fraseo distinto no es un
- * fallo (v2 redacta cada vez), pero crear una reserva cuando el escenario
- * espera un bloqueo sí lo es.
+ * fallo (el modelo redacta cada vez), pero crear una reserva cuando el
+ * escenario espera un bloqueo sí lo es.
  */
 function checkViolations(
   reply: string,
@@ -84,8 +84,9 @@ function checkViolations(
     violations.push('creó una reserva ante un mensaje fuera de tema');
   }
 
-  // notContains sigue siendo válido en v2: son cosas que el bot no debe decir
-  // nunca (datos inventados, disculpas por capacidades que sí tiene), no fraseo.
+  // notContains: cosas que el bot no debe decir nunca (datos inventados,
+  // disculpas por capacidades que sí tiene), no fraseo — eso puede variar
+  // libremente entre corridas.
   for (const forbidden of expect.notContains ?? []) {
     if (reply.toLowerCase().includes(forbidden.toLowerCase())) {
       violations.push(`dijo "${forbidden}"`);
@@ -209,7 +210,7 @@ function report(outcomes: ScenarioOutcome[]): void {
     }
   }
 
-  console.log('\nGate de promoción: 0 violaciones y completitud >= la de v1.\n');
+  console.log('\nGate de promoción: 0 violaciones.\n');
 }
 
 async function main(): Promise<void> {

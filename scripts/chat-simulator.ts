@@ -31,8 +31,7 @@ import { ReservationService } from '../src/services/reservation.service';
 import { agentService } from '../src/services/agent.service';
 import { SupabaseService } from '../src/services/supabase.service';
 import { clearCachedLanguage } from '../src/i18n/language-store';
-import { configureAgentMode, __setAgentModeForTests, isAgentV2Enabled } from '../src/agent/feature-flag';
-import { resetConversation as resetAgentV2Conversation } from '../src/agent/orchestrator';
+import { resetConversation as resetAgentConversation } from '../src/agent/orchestrator';
 import { BaileysMessage, EnvConfig } from '../src/types';
 
 const BUSINESS_ID = process.env.TEST_BUSINESS_ID;
@@ -87,9 +86,7 @@ async function resetConversation(handler: WhatsAppHandler): Promise<void> {
   const conversationId = `${BUSINESS_ID}-${phone}`;
   await ReservationService.deleteDraft(conversationId);
   await agentService.clearConversationHistory(conversationId);
-  // El agente v2 guarda su historial bajo otra key (`agent_v2:`), así que un
-  // reset que sólo limpie la de v1 dejaría al v2 recordando la charla anterior.
-  await resetAgentV2Conversation(conversationId);
+  await resetAgentConversation(conversationId);
   await clearCachedLanguage(BUSINESS_ID as string, phone);
   console.log('🔄 Conversación reiniciada (draft, historial e idioma cacheado borrados).');
   console.log('   El idioma guardado en customers.preferred_language NO se borra —');
@@ -119,10 +116,6 @@ async function main(): Promise<void> {
     openRouterSiteName: process.env.OPENROUTER_SITE_NAME,
   } as EnvConfig);
 
-  // El simulador no pasa por el bootstrap de src/index.ts, así que el modo del
-  // agente se configura acá a mano. Se puede alternar en vivo con /mode.
-  configureAgentMode(process.env.AGENT_MODE, process.env.AGENT_V2_BUSINESS_IDS);
-
   // El handler exige `whatsapp_session_id` para procesar un mensaje (si no,
   // contesta "el servicio no está disponible"). Acá esa comprobación no aplica:
   // el simulador YA reemplazó el transporte por la terminal, así que la sesión
@@ -143,8 +136,7 @@ async function main(): Promise<void> {
 
   console.log(`✅ Conectado — Negocio: ${business.name}`);
   console.log(`📱 Simulando cliente: ${phone}`);
-  console.log(`🔀 Modo del agente: ${isAgentV2Enabled(BUSINESS_ID as string) ? 'V2 (orquestador)' : 'V1 (pasos)'}`);
-  console.log('\nComandos: /reset · /phone <numero> · /mode v1|v2 · /exit\n');
+  console.log('\nComandos: /reset · /phone <numero> · /exit\n');
 
   const handler = new WhatsAppHandler(stubBaileysService as any);
 
@@ -176,21 +168,6 @@ async function main(): Promise<void> {
     if (text.startsWith('/phone ')) {
       phone = text.slice('/phone '.length).trim();
       console.log(`📱 Ahora simulás como: ${phone}\n`);
-      return;
-    }
-
-    // Alternar v1/v2 en vivo es la forma más directa de comparar: se manda el
-    // mismo mensaje en los dos modos y se ve la diferencia de naturalidad.
-    if (text === '/mode' || text.startsWith('/mode ')) {
-      const requested = text.slice('/mode'.length).trim().toLowerCase();
-      if (requested === 'v1' || requested === 'v2') {
-        __setAgentModeForTests(requested, requested === 'v2' ? [BUSINESS_ID as string] : []);
-        await resetConversation(handler);
-        console.log(`🔀 Modo del agente: ${requested.toUpperCase()}\n`);
-      } else {
-        const active = isAgentV2Enabled(BUSINESS_ID as string) ? 'V2' : 'V1';
-        console.log(`🔀 Modo actual: ${active}. Usá "/mode v1" o "/mode v2" para cambiarlo.\n`);
-      }
       return;
     }
 

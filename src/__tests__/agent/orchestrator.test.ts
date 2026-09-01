@@ -41,7 +41,7 @@ function turn(messageText: string) {
   return runWithLanguage('es', () => handleTurn({ ...BASE_INPUT, messageText }));
 }
 
-describe('agent v2 orchestrator', () => {
+describe('agent orchestrator', () => {
   let savedHistory: any[] = [];
 
   beforeEach(() => {
@@ -239,7 +239,7 @@ describe('agent v2 orchestrator', () => {
     });
   });
 
-  describe('válvula de escape (equivalente a invalidAttempts de v1)', () => {
+  describe('válvula de escape (racha improductiva)', () => {
     it('no corta al primer turno improductivo', async () => {
       jest.spyOn(state, 'bumpUnproductiveStreak').mockResolvedValue(1);
       const clearSpy = jest.spyOn(state, 'clearHistory').mockResolvedValue();

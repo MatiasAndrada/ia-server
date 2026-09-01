@@ -121,15 +121,6 @@ export const ptCatalog: MessageCatalog = {
     );
   },
 
-  welcomeMessage(businessName: string): string {
-    return (
-      `👋 Olá!\n` +
-      `Sou o assistente de reservas do *${businessName}*.\n` +
-      `Vou te ajudar a reservar sua mesa em poucos segundos.\n\n` +
-      `Como você se chama? Me diga seu *nome e sobrenome*.`
-    );
-  },
-
   askPartySize(name: string): string {
     return (
       `✅ Perfeito, *${name}*.\n\n` +
