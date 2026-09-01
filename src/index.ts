@@ -153,8 +153,9 @@ async function initializeApp() {
     const app = express();
 
     // Trust proxy - Required for X-Forwarded-For header when behind a proxy
-    // This prevents 'ERR_ERL_UNEXPECTED_X_FORWARDED_FOR' error from express-rate-limit
-    app.set('trust proxy', true);
+    // Set to 1 (trust exactly one hop: nginx) instead of `true` (trust all hops),
+    // which express-rate-limit rejects as ERR_ERL_PERMISSIVE_TRUST_PROXY
+    app.set('trust proxy', 1);
 
     // Create server (HTTP or HTTPS)
     let server: any;
