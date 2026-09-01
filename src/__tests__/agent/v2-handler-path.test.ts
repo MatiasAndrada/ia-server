@@ -11,8 +11,9 @@ jest.mock('../../utils/logger');
  * Camino v2 dentro del handler.
  *
  * Cubre lo que el orquestador NO puede cubrir por sí solo: lo que pasa antes y
- * después de él — el menú de idioma del primer contacto (que v1 hacía en
- * `_processMessageLocalized`, del que v2 se desvía) y la entrega de imágenes.
+ * después de él — el menú de idioma y el saludo de apertura del primer contacto
+ * (que v1 hacía en `_processMessageLocalized`, del que v2 se desvía) y la
+ * entrega de imágenes.
  */
 
 const BUSINESS_ID = '00000000-0000-0000-0000-000000000001';
@@ -124,24 +125,89 @@ describe('handler — camino agente v2', () => {
       expect(sent).toEqual(['Listo Matías.']);
     });
 
-    it('NO interrumpe a un cliente ya conocido del comercio', async () => {
+    it('NO se lo muestra a un cliente ya conocido del comercio', async () => {
       jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue({
         id: 'c1',
         name: 'Matías',
         lastName: null,
         preferred_language: 'es',
       } as any);
+
+      await process('hola');
+
+      // Ya eligió idioma alguna vez: lo que recibe es el saludo de apertura.
+      expect(sent).toHaveLength(1);
+      expect(sent[0].toLowerCase()).not.toContain('português');
+    });
+  });
+
+  describe('saludo de apertura', () => {
+    const knownCustomer = {
+      id: 'c1',
+      name: 'Matías',
+      lastName: null,
+      preferred_language: 'es',
+    };
+
+    it('saluda por nombre y ofrece las dos opciones, sin llegar al orquestador', async () => {
+      jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue(knownCustomer as any);
+      const turnSpy = jest.spyOn(orchestrator, 'handleTurn');
+
+      await process('hola');
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toContain('¡Hola, Matías!');
+      expect(sent[0]).toContain('Reservar una mesa');
+      expect(sent[0]).toContain('Modificar o cancelar una reserva');
+      // Es texto fijo: el modelo no interviene en la carta de presentación.
+      expect(turnSpy).not.toHaveBeenCalled();
+    });
+
+    it('lo registra en el historial para que el modelo entienda el "1" siguiente', async () => {
+      jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue(knownCustomer as any);
+      const appendSpy = jest.spyOn(state, 'appendAssistantMessage').mockResolvedValue();
+
+      await process('hola');
+
+      expect(appendSpy).toHaveBeenCalledWith(
+        `${BUSINESS_ID}-${PHONE}`,
+        expect.stringContaining('Reservar una mesa')
+      );
+    });
+
+    it('NO lo muestra si el primer mensaje ya trae el pedido', async () => {
+      jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue(knownCustomer as any);
       const turnSpy = jest.spyOn(orchestrator, 'handleTurn').mockResolvedValue({
-        messages: ['¡Hola Matías!'],
+        messages: ['Listo Matías, mesa para 4.'],
+        attachments: [],
+        toolsCalled: ['create_reservation'],
+        iterations: 2,
+      });
+
+      await process('hoy 21:30 para 4');
+
+      // Mostrarle un menú sería hacerle repetir lo que acaba de escribir.
+      expect(turnSpy).toHaveBeenCalled();
+      expect(sent).toEqual(['Listo Matías, mesa para 4.']);
+    });
+
+    it('NO lo repite a mitad de conversación', async () => {
+      jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue(knownCustomer as any);
+      jest.spyOn(state, 'loadHistory').mockResolvedValue([
+        { role: 'assistant', content: '¿Para cuántas personas?' },
+      ]);
+      const turnSpy = jest.spyOn(orchestrator, 'handleTurn').mockResolvedValue({
+        messages: ['Perfecto.'],
         attachments: [],
         toolsCalled: [],
         iterations: 1,
       });
 
+      // Un "hola" suelto en medio del flujo no reinicia nada.
       await process('hola');
 
       expect(turnSpy).toHaveBeenCalled();
-      expect(sent).toEqual(['¡Hola Matías!']);
+      expect(sent).toEqual(['Perfecto.']);
     });
   });
 

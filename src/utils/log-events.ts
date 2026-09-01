@@ -54,13 +54,13 @@ export type LogEvent =
   | 'reservation.cancelled'
   | 'reservation.rejected'
   | 'turn.completed'
+  | 'turn.silenced'
 
   // ─── Realtime / jobs ───
   | 'realtime.subscribed'
   | 'realtime.lost'
   | 'realtime.notified'
   | 'realtime.recovered'
-  | 'job.postvisit_sent'
   | 'job.reminder_sent'
 
   // ─── HTTP / seguridad ───
@@ -109,12 +109,12 @@ export const EVENT_LABELS: Record<LogEvent, string> = {
   'reservation.cancelled': 'Reservation cancelled',
   'reservation.rejected': 'Reservation rejected',
   'turn.completed': 'Conversation turn completed',
+  'turn.silenced': 'Turn closed without replying',
 
   'realtime.subscribed': 'Realtime channel subscribed',
   'realtime.lost': 'Realtime channel lost',
   'realtime.notified': 'Realtime notification sent',
   'realtime.recovered': 'Realtime missed notifications recovered',
-  'job.postvisit_sent': 'Post-visit message sent',
   'job.reminder_sent': 'Reservation reminder sent',
 
   'http.error': 'HTTP request failed',

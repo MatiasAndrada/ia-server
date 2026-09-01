@@ -52,6 +52,28 @@ function prefixBlock(reason?: string): string {
   return reason ? `${reason}\n\n` : '';
 }
 
+/** "hoy 31/08 a las 21:30" → "Hoy 31/08 a las 21:30": el label abre la línea. */
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/**
+ * Los datos operativos de una reserva en un solo renglón.
+ *
+ * Antes cada confirmación repetía cuatro líneas etiquetadas ("👤 Nombre: …",
+ * "👥 Personas: …", "📅 Fecha y hora: …", "📁 Código: …"): media pantalla de
+ * WhatsApp para decir tres datos que entran en una línea.
+ */
+function reservationLine(whenLabel: string, partySize: number, displayCode: string): string {
+  const people = `${partySize} ${partySize === 1 ? 'persona' : 'personas'}`;
+  return `📅 ${capitalize(whenLabel)} · 👥 ${people} · Código: *${displayCode}*`;
+}
+
+/** El evento va en su propia línea: el título es largo y rompería el renglón de datos. */
+function eventLine(eventTitle?: string | null): string {
+  return eventTitle ? `\n🎉 ${eventTitle}` : '';
+}
+
 export const esCatalog = {
   // ============================
   // M0 — Selección de idioma
@@ -83,6 +105,29 @@ export const esCatalog = {
   // ============================
   // M1 — Nueva reserva
   // ============================
+
+  /**
+   * Saludo de primer contacto del agente v2: se presenta y ofrece las dos cosas
+   * que sabe hacer.
+   *
+   * El menú es un ATAJO, no un formulario. El cliente puede responder 1 o 2,
+   * escribir su pedido entero ("hoy 21:30 para 4") o preguntar cualquier otra
+   * cosa: el agente lo atiende igual. Por eso no hay un template de "opción
+   * inválida" que lo acompañe — para este menú no existe la opción inválida.
+   *
+   * No reemplaza a `welcomeMessage`: ese es el saludo del flujo por pasos de
+   * v1, donde lo único que se espera a continuación es el nombre.
+   */
+  welcomeMenu(businessName: string, customerName?: string | null): string {
+    const greeting = customerName ? `¡Hola, ${customerName}!` : `¡Hola!`;
+    return (
+      `${greeting} 👋 ¿Cómo estás? Por acá te ayudamos con tus reservas 😊 en ${businessName}.\n\n` +
+      `¿Qué necesitás hacer?\n` +
+      `${NUMBER_EMOJI[0]} Reservar una mesa\n` +
+      `${NUMBER_EMOJI[1]} Modificar o cancelar una reserva\n\n` +
+      `Podés responder *1* o *2*, o simplemente contarme qué necesitás.`
+    );
+  },
 
   welcomeMessage(businessName: string): string {
     return (
@@ -252,42 +297,25 @@ export const esCatalog = {
     partySize: number,
     whenLabel: string,
     displayCode: string,
-    fullName: string = name,
     eventTitle?: string | null
   ): string {
-    const eventLine = eventTitle ? `🎉 Evento: ${eventTitle}\n` : '';
     return (
-      `✅ ¡Reserva confirmada!\n\n` +
-      `Gracias, *${name}*. Tu reserva fue registrada correctamente.\n\n` +
-      `👤 Nombre: ${fullName}\n` +
-      `👥 Personas: ${partySize}\n` +
-      `${eventLine}` +
-      `📅 Fecha y hora: ${whenLabel}\n` +
-      `📁 Código de reserva: *${displayCode}*\n\n` +
-      `✨ ¡Te esperamos!\n` +
-      `Tu reserva se mantendrá hasta *20 minutos después* del horario reservado.\n\n` +
-      `Si necesitás cancelar, simplemente escribí: *CANCELAR*`
+      `✅ ¡Reserva confirmada, ${name}!\n` +
+      `${reservationLine(whenLabel, partySize, displayCode)}${eventLine(eventTitle)}\n\n` +
+      `Te esperamos 👋`
     );
   },
 
   reservationReceived(
-    name: string,
     partySize: number,
     whenLabel: string,
     displayCode: string,
-    fullName: string = name,
     eventTitle?: string | null
   ): string {
-    const eventLine = eventTitle ? `🎉 Evento: ${eventTitle}\n` : '';
     return (
-      `⏳ *Reserva RECIBIDA*\n\n` +
-      `👤 Nombre: ${fullName}\n` +
-      `👥 Personas: ${partySize}\n` +
-      `${eventLine}` +
-      `📅 Fecha y hora: ${whenLabel}\n` +
-      `📁 Código: *${displayCode}*\n\n` +
-      `⏰ Te notificaremos cuando confirmen tu reserva.\n\n` +
-      `Si necesitás cancelar, simplemente escribí: *CANCELAR*`
+      `Listo ✅\n` +
+      `${reservationLine(whenLabel, partySize, displayCode)}${eventLine(eventTitle)}\n` +
+      `Te aviso apenas el restaurante confirme.`
     );
   },
 
@@ -743,54 +771,38 @@ export const esCatalog = {
   },
 
   /**
-   * Notificación proactiva: la reserva pasó a CONFIRMED.
+   * Notificación proactiva: el local aprobó la reserva (pasó a CONFIRMED).
    *
-   * `leadMinutes` es la antelación real del recordatorio que va a mandar
-   * `ReservationReminderService` (0 si la reserva no tiene `scheduled_at` o si
-   * los recordatorios están deshabilitados por config) — así la promesa que
-   * ve el cliente acá coincide con lo que efectivamente pasa después.
+   * Mismo texto que `reservationConfirmed` a propósito: el cliente no tiene por
+   * qué recibir dos confirmaciones distintas según quién la haya disparado. Lo
+   * que cambia es el camino — acá la aprobación llegó desde el panel, no del
+   * chat — y por eso son dos claves y no una.
    */
   reservationConfirmedNotice(
     name: string,
     partySize: number,
     displayCode: string,
-    leadMinutes: number,
-    eventTitle?: string | null,
-    /** La reserva tiene horario agendado: sólo entonces aplica la retención de 20 min. */
-    isScheduled: boolean = false
+    whenLabel: string,
+    eventTitle?: string | null
   ): string {
-    const reminderLine =
-      leadMinutes > 0
-        ? `✨ Te avisaremos cuando falte ${countdownLabel(leadMinutes)} para tu reserva.\n`
-        : '';
-    const retentionLine = isScheduled
-      ? `Tu reserva se mantendrá hasta *20 minutos después* del horario reservado.\n`
-      : '';
-    const eventLine = eventTitle ? `🎉 Evento: ${eventTitle}\n` : '';
     return (
-      `✅ ¡Tu reserva está CONFIRMADA!\n\n` +
-      `👤 Nombre: ${name}\n` +
-      `👥 Personas: ${partySize}\n` +
-      `${eventLine}` +
-      `📁 Código de reserva: *${displayCode}*\n\n` +
-      reminderLine +
-      retentionLine +
-      `Apreciamos tu puntualidad.\n\n` +
-      `_Si necesitás cancelar, respondé *CANCELAR*._`
+      `✅ ¡Reserva confirmada, ${name}!\n` +
+      `${reservationLine(whenLabel, partySize, displayCode)}${eventLine(eventTitle)}\n\n` +
+      `Te esperamos 👋`
     );
   },
 
   /** Notificación proactiva: la reserva quedó registrada, pendiente de confirmación. */
-  reservationRegisteredNotice(name: string, partySize: number, displayCode: string, eventTitle?: string | null): string {
-    const eventLine = eventTitle ? `🎉 Evento: ${eventTitle}\n` : '';
+  reservationRegisteredNotice(
+    partySize: number,
+    displayCode: string,
+    whenLabel: string,
+    eventTitle?: string | null
+  ): string {
     return (
-      `✅ ¡Tu reserva ha sido registrada!\n\n` +
-      `👤 Nombre: ${name}\n` +
-      `👥 Personas: ${partySize}\n` +
-      `${eventLine}` +
-      `📁 Código de reserva: *${displayCode}*\n\n` +
-      `⏰ Te notificaremos cuando confirmen tu reserva.\n\n` +
-      `_Si necesitás cancelar, respondé *CANCELAR*._`
+      `Listo ✅\n` +
+      `${reservationLine(whenLabel, partySize, displayCode)}${eventLine(eventTitle)}\n` +
+      `Te aviso apenas el restaurante confirme.`
     );
   },
 
@@ -880,9 +892,9 @@ export const esCatalog = {
   /** Notificación proactiva: la mesa quedó libre (NOTIFIED). */
   tableReadyNotice(): string {
     return (
-      `🚀 ¡Es tu momento!\n` +
-      `Tu mesa está disponible.\n` +
-      `Te esperamos.`
+      `🍽️ ¡Tu mesa está lista!\n` +
+      `Podés ocuparla dentro de los próximos 20 minutos.\n\n` +
+      `Luego de ese tiempo, la reserva podría liberarse.`
     );
   },
 
@@ -900,19 +912,6 @@ export const esCatalog = {
     return isGratitude
       ? `¡De nada! 🙌\n\nTu reserva${reservationRef} ya está confirmada. Si necesitas algo más, estoy para ayudarte.`
       : `¡Genial! 🙌\n\nTu reserva${reservationRef} ya está confirmada. Si necesitas algo más, estoy para ayudarte.`;
-  },
-
-  // ============================
-  // M12 — Mensaje posterior a la visita
-  // ============================
-
-  postVisitMessage(): string {
-    return (
-      `¡Gracias por visitarnos! 💛\n\n` +
-      `Esperamos que hayas disfrutado tu experiencia.\n\n` +
-      `Nos encantaría conocer tu opinión.\n` +
-      `⭐⭐⭐⭐⭐ Dejanos tu reseña.`
-    );
   },
 
   // ============================

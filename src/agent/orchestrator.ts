@@ -1,6 +1,6 @@
 import { openRouterService } from '../services/openrouter.service.js';
 import { executeToolCall, getToolDefinitions, ToolContext, ToolResult } from './tools/index.js';
-import { buildStateBlock, buildStaticPrompt } from './system-prompt.js';
+import { buildStateBlock, buildStaticPrompt, NO_REPLY_SENTINEL } from './system-prompt.js';
 import {
   bumpUnproductiveStreak,
   clearHistory,
@@ -141,10 +141,17 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
     'orchestrator'
   );
 
+  // El modelo puede cerrar el turno sin nada que decir (ver "Cuándo no
+  // contestar" en el system prompt). Ese silencio tiene que ser distinguible de
+  // un turno vacío por falla: uno se manda callado y el otro cae en el fallback
+  // genérico, y desde afuera los dos se ven igual — texto vacío.
+  const rawText = result.content?.trim() ?? '';
+  const silenced = rawText.includes(NO_REPLY_SENTINEL);
+
   // El historial se persiste SIN los `verbatim`: ya están representados como
   // resultados de herramienta dentro de `result.messages`, y duplicarlos como
   // texto del assistant haría que el modelo los repita en el turno siguiente.
-  const finalText = result.content?.trim() ?? '';
+  const finalText = silenced ? rawText.split(NO_REPLY_SENTINEL).join('').trim() : rawText;
   const toPersist: LlmMessage[] = [...result.messages];
   if (finalText) {
     toPersist.push({ role: 'assistant', content: finalText });
@@ -182,9 +189,20 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
 
   const outbound = [...verbatimMessages, finalText].filter((text) => text.length > 0);
 
+  if (silenced) {
+    logEvent('info', 'turn.silenced', {
+      conversationId,
+      businessId,
+      via: dryRun ? 'agent_v2_shadow' : 'agent_v2',
+      // El centinela debería venir solo; si vino con texto, ese texto igual se envía.
+      withText: outbound.length > 0,
+    });
+  }
+
   // Un turno sin nada que decir deja al cliente esperando. Sólo puede pasar si
-  // el modelo devolvió vacío y ninguna herramienta produjo `verbatim`.
-  if (outbound.length === 0 && attachments.length === 0) {
+  // el modelo devolvió vacío y ninguna herramienta produjo `verbatim` — y no
+  // si el silencio fue deliberado.
+  if (!silenced && outbound.length === 0 && attachments.length === 0) {
     logger.warn('Agent v2: empty turn, falling back to generic reply', {
       conversationId,
       iterations: result.iterations,

@@ -35,6 +35,22 @@ function prefixBlock(reason?: string): string {
   return reason ? `${reason}\n\n` : '';
 }
 
+/** "today 31/08 at 21:30" → "Today 31/08 at 21:30": the label opens the line. */
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** A booking's operational data on a single line — see the note in es.ts. */
+function reservationLine(whenLabel: string, partySize: number, displayCode: string): string {
+  const people = `${partySize} ${partySize === 1 ? 'person' : 'people'}`;
+  return `📅 ${capitalize(whenLabel)} · 👥 ${people} · Code: *${displayCode}*`;
+}
+
+/** The event gets its own line: the title is long and would break the data line. */
+function eventLine(eventTitle?: string | null): string {
+  return eventTitle ? `\n🎉 ${eventTitle}` : '';
+}
+
 export const enCatalog: MessageCatalog = {
   // ============================
   // M0 — Language selection
@@ -64,6 +80,17 @@ export const enCatalog: MessageCatalog = {
   // ============================
   // M1 — New booking
   // ============================
+
+  welcomeMenu(businessName: string, customerName?: string | null): string {
+    const greeting = customerName ? `Hi, ${customerName}!` : `Hi there!`;
+    return (
+      `${greeting} 👋 How are you? We're here to help you with your bookings 😊 at ${businessName}.\n\n` +
+      `What would you like to do?\n` +
+      `${NUMBER_EMOJI[0]} Book a table\n` +
+      `${NUMBER_EMOJI[1]} Change or cancel a booking\n\n` +
+      `Reply *1* or *2*, or just tell me what you need.`
+    );
+  },
 
   welcomeMessage(businessName: string): string {
     return (
@@ -233,42 +260,25 @@ export const enCatalog: MessageCatalog = {
     partySize: number,
     whenLabel: string,
     displayCode: string,
-    fullName: string = name,
     eventTitle?: string | null
   ): string {
-    const eventLine = eventTitle ? `🎉 Event: ${eventTitle}\n` : '';
     return (
-      `✅ Booking confirmed!\n\n` +
-      `Thank you, *${name}*. Your booking has been registered successfully.\n\n` +
-      `👤 Name: ${fullName}\n` +
-      `👥 People: ${partySize}\n` +
-      `${eventLine}` +
-      `📅 Date and time: ${whenLabel}\n` +
-      `📁 Booking code: *${displayCode}*\n\n` +
-      `✨ We look forward to seeing you!\n` +
-      `Your booking will be held for up to *20 minutes after* the reserved time.\n\n` +
-      `If you need to cancel, just type: *CANCEL*`
+      `✅ Booking confirmed, ${name}!\n` +
+      `${reservationLine(whenLabel, partySize, displayCode)}${eventLine(eventTitle)}\n\n` +
+      `See you soon 👋`
     );
   },
 
   reservationReceived(
-    name: string,
     partySize: number,
     whenLabel: string,
     displayCode: string,
-    fullName: string = name,
     eventTitle?: string | null
   ): string {
-    const eventLine = eventTitle ? `🎉 Event: ${eventTitle}\n` : '';
     return (
-      `⏳ *Booking RECEIVED*\n\n` +
-      `👤 Name: ${fullName}\n` +
-      `👥 People: ${partySize}\n` +
-      `${eventLine}` +
-      `📅 Date and time: ${whenLabel}\n` +
-      `📁 Code: *${displayCode}*\n\n` +
-      `⏰ We'll let you know as soon as the restaurant confirms your booking.\n\n` +
-      `If you need to cancel, just type: *CANCEL*`
+      `Done ✅\n` +
+      `${reservationLine(whenLabel, partySize, displayCode)}${eventLine(eventTitle)}\n` +
+      `I'll let you know as soon as the restaurant confirms.`
     );
   },
 
@@ -704,42 +714,26 @@ export const enCatalog: MessageCatalog = {
     name: string,
     partySize: number,
     displayCode: string,
-    leadMinutes: number,
-    eventTitle?: string | null,
-    /** La reserva tiene horario agendado: sólo entonces aplica la retención de 20 min. */
-    isScheduled: boolean = false
+    whenLabel: string,
+    eventTitle?: string | null
   ): string {
-    const reminderLine =
-      leadMinutes > 0
-        ? `✨ We'll remind you ${countdownLabel(leadMinutes)} before your booking.\n`
-        : '';
-    const retentionLine = isScheduled
-      ? `Your booking will be held for up to *20 minutes after* the reserved time.\n`
-      : '';
-    const eventLine = eventTitle ? `🎉 Event: ${eventTitle}\n` : '';
     return (
-      `✅ Your booking is CONFIRMED!\n\n` +
-      `👤 Name: ${name}\n` +
-      `👥 People: ${partySize}\n` +
-      `${eventLine}` +
-      `📁 Booking code: *${displayCode}*\n\n` +
-      reminderLine +
-      retentionLine +
-      `We appreciate your punctuality.\n\n` +
-      `_If you need to cancel, reply *CANCEL*._`
+      `✅ Booking confirmed, ${name}!\n` +
+      `${reservationLine(whenLabel, partySize, displayCode)}${eventLine(eventTitle)}\n\n` +
+      `See you soon 👋`
     );
   },
 
-  reservationRegisteredNotice(name: string, partySize: number, displayCode: string, eventTitle?: string | null): string {
-    const eventLine = eventTitle ? `🎉 Event: ${eventTitle}\n` : '';
+  reservationRegisteredNotice(
+    partySize: number,
+    displayCode: string,
+    whenLabel: string,
+    eventTitle?: string | null
+  ): string {
     return (
-      `✅ Your booking has been registered!\n\n` +
-      `👤 Name: ${name}\n` +
-      `👥 People: ${partySize}\n` +
-      `${eventLine}` +
-      `📁 Booking code: *${displayCode}*\n\n` +
-      `⏰ We'll notify you as soon as your booking is confirmed.\n\n` +
-      `_If you need to cancel, reply *CANCEL*._`
+      `Done ✅\n` +
+      `${reservationLine(whenLabel, partySize, displayCode)}${eventLine(eventTitle)}\n` +
+      `I'll let you know as soon as the restaurant confirms.`
     );
   },
 
@@ -809,9 +803,9 @@ export const enCatalog: MessageCatalog = {
 
   tableReadyNotice(): string {
     return (
-      `🚀 It's your turn!\n` +
-      `Your table is ready.\n` +
-      `We're waiting for you.`
+      `🍽️ Your table is ready!\n` +
+      `You can take it within the next 20 minutes.\n\n` +
+      `After that, the booking may be released.`
     );
   },
 
@@ -829,19 +823,6 @@ export const enCatalog: MessageCatalog = {
   // ============================
   // M11 — Welcome at the restaurant
   // ============================
-
-  // ============================
-  // M12 — Post-visit message
-  // ============================
-
-  postVisitMessage(): string {
-    return (
-      `Thank you for visiting us! 💛\n\n` +
-      `We hope you enjoyed your experience.\n\n` +
-      `We'd love to hear what you think.\n` +
-      `⭐⭐⭐⭐⭐ Leave us a review.`
-    );
-  },
 
   // ============================
   // Flow / guard messages

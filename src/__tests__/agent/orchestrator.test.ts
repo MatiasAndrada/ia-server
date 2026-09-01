@@ -1,4 +1,5 @@
 import { handleTurn } from '../../agent/orchestrator.js';
+import { NO_REPLY_SENTINEL } from '../../agent/system-prompt.js';
 import { openRouterService } from '../../services/openrouter.service.js';
 import { SupabaseService } from '../../services/supabase.service.js';
 import * as state from '../../agent/state.js';
@@ -313,6 +314,68 @@ describe('agent v2 orchestrator', () => {
       await turn('para mañana');
 
       expect(clearStreakSpy).toHaveBeenCalled();
+    });
+  });
+
+  describe('cierre sin respuesta', () => {
+    it('no manda nada cuando el modelo cierra con el centinela', async () => {
+      jest.spyOn(openRouterService, 'runToolLoop').mockResolvedValue({
+        content: NO_REPLY_SENTINEL,
+        executedToolCalls: [],
+        messages: [],
+        model: 'm',
+        iterations: 1,
+        exhausted: false,
+      });
+
+      // "nada más" no necesita despedida: un mensaje que no aporta igual le
+      // suena el teléfono al cliente.
+      const result = await turn('nada mas, gracias');
+
+      expect(result.messages).toEqual([]);
+    });
+
+    it('no guarda el centinela en el historial', async () => {
+      jest.spyOn(openRouterService, 'runToolLoop').mockResolvedValue({
+        content: NO_REPLY_SENTINEL,
+        executedToolCalls: [],
+        messages: [],
+        model: 'm',
+        iterations: 1,
+        exhausted: false,
+      });
+
+      await turn('listo, gracias');
+
+      // Si sobreviviera, el modelo lo vería como algo que "se dice" y lo imitaría.
+      expect(savedHistory.some((m) => String(m.content).includes(NO_REPLY_SENTINEL))).toBe(false);
+    });
+
+    it('igual envía el verbatim de una herramienta si el modelo se calla', async () => {
+      jest.spyOn(openRouterService, 'runToolLoop').mockImplementation(
+        async (_msgs, _sys, _tools, onToolCall: any) => {
+          await onToolCall({
+            id: 't1',
+            type: 'function',
+            function: { name: 'cancel_reservation', arguments: '{}' },
+          } as LlmToolCall);
+          return {
+            content: NO_REPLY_SENTINEL,
+            executedToolCalls: [],
+            messages: [],
+            model: 'm',
+            iterations: 1,
+            exhausted: false,
+          };
+        }
+      );
+      jest.spyOn(SupabaseService, 'getActiveReservationsByPhone').mockResolvedValue([]);
+
+      const result = await turn('cancelar');
+
+      // El centinela silencia al modelo, no a las herramientas: su texto son
+      // datos operativos que el cliente tiene que ver igual.
+      expect(result.messages.every((m) => !m.includes(NO_REPLY_SENTINEL))).toBe(true);
     });
   });
 

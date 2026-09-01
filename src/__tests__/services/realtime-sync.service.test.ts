@@ -3,7 +3,6 @@ import { RedisConfig } from '../../config/redis.js';
 import { SupabaseConfig } from '../../config/supabase.js';
 import { BaileysService } from '../../services/baileys.service.js';
 import { SupabaseService } from '../../services/supabase.service.js';
-import { PostVisitService } from '../../services/post-visit.service.js';
 
 jest.mock('../../utils/logger');
 
@@ -62,7 +61,7 @@ describe('RealtimeSyncService.handleWaitlistStatusChange', () => {
     expect(sendMessageMock).toHaveBeenCalledWith(
       'business-1',
       expect.any(String),
-      expect.stringContaining('¡Tu reserva está CONFIRMADA!')
+      expect.stringContaining('¡Reserva confirmada')
     );
   });
 
@@ -93,13 +92,13 @@ describe('RealtimeSyncService.handleWaitlistStatusChange', () => {
     expect(sendMessageMock).toHaveBeenCalledWith(
       'business-1',
       expect.any(String),
-      expect.stringContaining('¡Es tu momento!')
+      expect.stringContaining('¡Tu mesa está lista!')
     );
   });
 
-  it('AVISAR: says nothing about the 20-minute hold', async () => {
-    // El aviso de "tenés 20 minutos para acercarte" se sacó: la retención vive
-    // en el mensaje de reserva confirmada, no acá.
+  it('AVISAR: da el plazo de 20 minutos para ocupar la mesa', async () => {
+    // La retención se anuncia acá y sólo acá: es el momento en que el plazo
+    // empieza a correr. Los mensajes de confirmación ya no la repiten.
     await (RealtimeSyncService as any).handleWaitlistStatusChange({
       eventType: 'UPDATE',
       old: { ...baseEntry, status: 'CONFIRMED' },
@@ -107,7 +106,7 @@ describe('RealtimeSyncService.handleWaitlistStatusChange', () => {
     });
 
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageMock.mock.calls[0][2]).not.toContain('20 minutos');
+    expect(sendMessageMock.mock.calls[0][2]).toContain('20 minutos');
   });
 
   it('AVISAR: does NOT fire for a scheduled reservation moved to NOTIFIED', async () => {
@@ -122,7 +121,9 @@ describe('RealtimeSyncService.handleWaitlistStatusChange', () => {
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
-  it('tells a scheduled reservation it is held for 20 minutes after its time', async () => {
+  it('pone fecha, personas y código en una sola línea', async () => {
+    // La confirmación se acortó a tres líneas: sin ficha de datos etiquetada y
+    // sin las promesas (recordatorio, retención) que repetía de más.
     await (RealtimeSyncService as any).handleWaitlistStatusChange({
       eventType: 'UPDATE',
       old: { ...baseEntry, status: 'WAITING', scheduled_at: '2026-07-08T22:00:00.000Z' },
@@ -130,10 +131,15 @@ describe('RealtimeSyncService.handleWaitlistStatusChange', () => {
     });
 
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageMock.mock.calls[0][2]).toContain('20 minutos después');
+    const message = sendMessageMock.mock.calls[0][2] as string;
+    const dataLine = message.split('\n').find((line) => line.includes('personas'));
+    expect(dataLine).toContain('19:00');
+    expect(dataLine).toContain('4 personas');
+    expect(dataLine).toContain('M102');
+    expect(message).not.toContain('20 minutos');
   });
 
-  it('omits the 20-minute hold for an instant reservation with no scheduled time', async () => {
+  it('la reserva instantánea también sale en una línea, con la etiqueta del turno', async () => {
     await (RealtimeSyncService as any).handleWaitlistStatusChange({
       eventType: 'UPDATE',
       old: { ...baseEntry, status: 'WAITING' },
@@ -141,7 +147,8 @@ describe('RealtimeSyncService.handleWaitlistStatusChange', () => {
     });
 
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageMock.mock.calls[0][2]).not.toContain('20 minutos después');
+    expect(sendMessageMock.mock.calls[0][2]).toContain('4 personas');
+    expect(sendMessageMock.mock.calls[0][2]).not.toContain('20 minutos');
   });
 
   it('notifies the customer when the restaurant cancels the reservation', async () => {
@@ -237,11 +244,7 @@ describe('RealtimeSyncService.handleWaitlistStatusChange', () => {
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
-  it('does not message the customer when seating them, but still schedules M12', async () => {
-    const schedulePostVisitSpy = jest
-      .spyOn(PostVisitService, 'schedulePostVisit')
-      .mockResolvedValue(undefined);
-
+  it('does not message the customer when seating them', async () => {
     await (RealtimeSyncService as any).handleWaitlistStatusChange({
       eventType: 'UPDATE',
       old: { ...baseEntry, status: 'CONFIRMED' },
@@ -251,12 +254,9 @@ describe('RealtimeSyncService.handleWaitlistStatusChange', () => {
     // La persona ya está en el local: un WhatsApp de bienvenida sólo le suena
     // el teléfono en la mesa.
     expect(sendMessageMock).not.toHaveBeenCalled();
-    expect(schedulePostVisitSpy).toHaveBeenCalledWith('entry-1', 'business-1');
   });
 
   it('does not act again when the SEATED status is unchanged', async () => {
-    jest.spyOn(PostVisitService, 'schedulePostVisit').mockResolvedValue(undefined);
-
     await (RealtimeSyncService as any).handleWaitlistStatusChange({
       eventType: 'UPDATE',
       old: { ...baseEntry, status: 'SEATED' },

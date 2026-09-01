@@ -68,8 +68,8 @@ Definido en [`src/utils/log-events.ts`](../src/utils/log-events.ts).
 | Sesiones WhatsApp | `session.qr` `session.linked` `session.closed` `session.logout` `session.reconnecting` `session.recovered` `session.stopped` |
 | Mensajería | `msg.in` `msg.out` `msg.out_failed` |
 | IA | `ai.call` `ai.failed` `ai.degraded` `ai.fallback_model` |
-| Dominio | `reservation.draft_started` `reservation.created` `reservation.updated` `reservation.cancelled` `reservation.rejected` `turn.completed` |
-| Realtime / jobs | `realtime.subscribed` `realtime.lost` `realtime.notified` `realtime.recovered` `job.postvisit_sent` |
+| Dominio | `reservation.draft_started` `reservation.created` `reservation.updated` `reservation.cancelled` `reservation.rejected` `turn.completed` `turn.silenced` |
+| Realtime / jobs | `realtime.subscribed` `realtime.lost` `realtime.notified` `realtime.recovered` |
 | HTTP / seguridad | `http.error` `auth.rejected` `ratelimit.exceeded` |
 
 ### `turn.completed` — el índice del sistema
@@ -112,7 +112,6 @@ Se abre en cuatro lugares, y sólo ahí:
 | `src/index.ts` — middleware HTTP | `requestId` |
 | `whatsapp-handler.service.ts` — `runTurn()` | `businessId` `phone` `conversationId` |
 | `realtime-sync.service.ts` — handlers de evento | `businessId` `entryId` |
-| `post-visit.service.ts` — envío M12 | `businessId` `entryId` |
 
 ```ts
 await withLogContext({ businessId, entryId }, () => hacerAlgo());

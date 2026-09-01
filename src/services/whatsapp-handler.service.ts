@@ -491,6 +491,36 @@ export class WhatsAppHandler {
         // sigue normalmente en el idioma inferido.
       }
 
+      // Saludo de apertura con las dos cosas que el asistente sabe hacer.
+      //
+      // Es determinista y no del modelo porque es la carta de presentación del
+      // local: tiene que ser siempre igual. Sólo aplica a un "hola" pelado — si
+      // el primer mensaje ya trae el pedido ("hoy 21:30 para 4"), mostrarle un
+      // menú sería hacerle repetir lo que acaba de escribir.
+      //
+      // El menú no es un paso: se registra en el historial y ahí termina su
+      // trabajo. Si el cliente contesta cualquier otra cosa en vez de 1 o 2, el
+      // turno siguiente lo atiende el modelo como cualquier mensaje. No hay
+      // reintentos ni "opción inválida" — para este menú no existe.
+      if (!conversationStarted && this.isGreetingMessage(messageText)) {
+        const customer = await SupabaseService.getCustomerByPhone(phone, businessId);
+        // 'unknown' es el placeholder de las altas sin nombre real: saludar
+        // "¡Hola, unknown!" es peor que no saludar por nombre.
+        const knownName = customer?.name?.trim();
+        const menu = templates.welcomeMenu(
+          businessStatus.name || 'el local',
+          knownName && knownName.toLowerCase() !== 'unknown' ? knownName : null
+        );
+        await this.sendWhatsAppMessage(businessId, from, menu);
+        await appendAssistantMessage(conversationId, menu);
+
+        logger.debug('Agent v2: welcome menu sent on first contact', {
+          conversationId,
+          businessId,
+        });
+        return;
+      }
+
       const result = await handleTurn({
         businessId,
         conversationId,
@@ -3940,7 +3970,6 @@ export class WhatsAppHandler {
           ? this.describeReservationWhen(entry.scheduled_at)
           : templates.instantTurnLabel();
         const customerLabel = draft.customerName || 'Cliente';
-        const fullNameLabel = this.buildFullName(draft.customerName, draft.customerLastName) || customerLabel;
         const partySizeLabel = draft.partySize || entry.party_size;
 
         if (entry.status === 'CONFIRMED' || entry.status === 'NOTIFIED') {
@@ -3949,17 +3978,14 @@ export class WhatsAppHandler {
             partySizeLabel,
             whenLabel,
             entry.display_code,
-            fullNameLabel,
             draft.eventTitle ?? null
           );
         } else {
           // WAITING — el operador debe confirmar manualmente
           confirmationMessage = templates.reservationReceived(
-            customerLabel,
             partySizeLabel,
             whenLabel,
             entry.display_code,
-            fullNameLabel,
             draft.eventTitle ?? null
           );
         }

@@ -42,6 +42,14 @@ export function instantTurnLabel(): string {
 // M1 — Nueva reserva
 // ============================
 
+/**
+ * Saludo de primer contacto del agente v2, con las dos opciones del menú.
+ * Responder una opción es opcional: ver la nota del template en es.ts.
+ */
+export function welcomeMenu(businessName: string, customerName?: string | null): string {
+  return catalog().welcomeMenu(businessName, customerName);
+}
+
 export function welcomeMessage(businessName: string): string {
   return catalog().welcomeMessage(businessName);
 }
@@ -152,22 +160,19 @@ export function reservationConfirmed(
   partySize: number,
   whenLabel: string,
   displayCode: string,
-  fullName: string = name,
   eventTitle?: string | null
 ): string {
-  return catalog().reservationConfirmed(name, partySize, whenLabel, displayCode, fullName, eventTitle);
+  return catalog().reservationConfirmed(name, partySize, whenLabel, displayCode, eventTitle);
 }
 
 /** Reserva registrada pero pendiente de confirmación del local (fuera del manual). */
 export function reservationReceived(
-  name: string,
   partySize: number,
   whenLabel: string,
   displayCode: string,
-  fullName: string = name,
   eventTitle?: string | null
 ): string {
-  return catalog().reservationReceived(name, partySize, whenLabel, displayCode, fullName, eventTitle);
+  return catalog().reservationReceived(partySize, whenLabel, displayCode, eventTitle);
 }
 
 // ============================
@@ -394,28 +399,20 @@ export function reservationConfirmedNotice(
   name: string,
   partySize: number,
   displayCode: string,
-  leadMinutes: number,
-  eventTitle?: string | null,
-  isScheduled: boolean = false
+  whenLabel: string,
+  eventTitle?: string | null
 ): string {
-  return catalog().reservationConfirmedNotice(
-    name,
-    partySize,
-    displayCode,
-    leadMinutes,
-    eventTitle,
-    isScheduled
-  );
+  return catalog().reservationConfirmedNotice(name, partySize, displayCode, whenLabel, eventTitle);
 }
 
 /** La reserva quedó registrada, pendiente de confirmación del local. */
 export function reservationRegisteredNotice(
-  name: string,
   partySize: number,
   displayCode: string,
+  whenLabel: string,
   eventTitle?: string | null
 ): string {
-  return catalog().reservationRegisteredNotice(name, partySize, displayCode, eventTitle);
+  return catalog().reservationRegisteredNotice(partySize, displayCode, whenLabel, eventTitle);
 }
 
 /** El restaurante eliminó el evento y con él esta reserva. */
@@ -449,14 +446,6 @@ export function postReservationCourtesyReply(
   isGratitude: boolean
 ): string {
   return catalog().postReservationCourtesyReply(reservationRef, isPending, isGratitude);
-}
-
-// ============================
-// M12 — Mensaje posterior a la visita
-// ============================
-
-export function postVisitMessage(): string {
-  return catalog().postVisitMessage();
 }
 
 // ============================

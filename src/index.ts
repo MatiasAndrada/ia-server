@@ -14,7 +14,6 @@ import { SupabaseConfig } from './config/supabase.js';
 import { BaileysService } from './services/baileys.service.js';
 import { RealtimeSyncService } from './services/realtime-sync.service.js';
 import { ReservationService } from './services/reservation.service.js';
-import { PostVisitService } from './services/post-visit.service.js';
 import { ReservationReminderService } from './services/reservation-reminder.service.js';
 import { EnvConfig } from './types/index.js';
 import { logger, logEvent } from './utils/logger.js';
@@ -155,9 +154,6 @@ async function initializeApp() {
       // Initialize realtime synchronization
       logger.debug('Initializing realtime data synchronization');
       await RealtimeSyncService.initializeRealtimeSync();
-
-      // Start the post-visit (M12) scanner
-      PostVisitService.start();
 
       // Start the pre-reservation reminder (M10) scanner
       ReservationReminderService.start();
@@ -369,8 +365,7 @@ async function initializeApp() {
         logger.debug('HTTP server closed');
 
         try {
-          // Stop the background scanners
-          PostVisitService.stop();
+          // Stop the background scanner
           ReservationReminderService.stop();
 
           // Clean up realtime sync

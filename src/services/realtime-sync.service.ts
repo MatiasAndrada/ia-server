@@ -15,10 +15,8 @@ import {
   wasAlreadyNotified,
 } from '../utils/notification-dedup.js';
 import { BaileysService } from './baileys.service.js';
-import { PostVisitService } from './post-visit.service.js';
 import { SupabaseService } from './supabase.service.js';
 import { openRouterService } from './openrouter.service.js';
-import { ReservationReminderService } from './reservation-reminder.service.js';
 
 // Helper types for strict type safety
 type CustomersRow = Database['public']['Tables']['customers']['Row'];
@@ -311,26 +309,27 @@ export class RealtimeSyncService {
       let notificationMessage = '';
       const eventTitle = entry.event_id ? await SupabaseService.getEventTitle(entry.event_id) : null;
       await runWithLanguage(language, async () => {
+      const whenLabel = entry.scheduled_at
+        ? describeScheduledAtUtc(entry.scheduled_at, nowInBuenosAires())
+        : templates.instantTurnLabel();
+
       if (entry.status === 'SEATED') {
         // Sentado: no se le manda nada. La persona ya está en el local, así que
         // un WhatsApp de bienvenida sólo le suena el teléfono en la mesa.
-        // El mensaje post-visita (M12) sí se sigue programando.
-        await PostVisitService.schedulePostVisit(entry.id, entry.business_id);
       } else if (entry.status === 'CONFIRMED' || entry.status === 'NOTIFIED') {
         notificationMessage = templates.reservationConfirmedNotice(
           customer.name,
           entry.party_size,
           entry.display_code,
-          entry.scheduled_at ? ReservationReminderService.getUpcomingLeadMinutes() : 0,
-          eventTitle,
-          entry.scheduled_at != null
+          whenLabel,
+          eventTitle
         );
       } else {
         // WAITING — requiere confirmación manual del operador
         notificationMessage = templates.reservationRegisteredNotice(
-          customer.name,
           entry.party_size,
           entry.display_code,
+          whenLabel,
           eventTitle
         );
       }
@@ -701,9 +700,7 @@ export class RealtimeSyncService {
       let notificationMessage = '';
       await runWithLanguage(language, async () => {
       if (isSeated) {
-        // Sentado: no se le manda nada (ya está en el local). Sólo se programa
-        // el mensaje post-visita (M12).
-        await PostVisitService.schedulePostVisit(newEntry.id, newEntry.business_id);
+        // Sentado: no se le manda nada (ya está en el local).
       } else if (isNotified) {
         // AVISAR — "tu mesa está lista". Sólo tiene sentido para quien está
         // esperando una mesa: alguien que llegó sin reserva y quedó en la fila.
@@ -750,9 +747,10 @@ export class RealtimeSyncService {
           customer.name,
           newEntry.party_size,
           newEntry.display_code,
-          newEntry.scheduled_at ? ReservationReminderService.getUpcomingLeadMinutes() : 0,
-          eventTitle,
-          newEntry.scheduled_at != null
+          newEntry.scheduled_at
+            ? describeScheduledAtUtc(newEntry.scheduled_at, nowInBuenosAires())
+            : templates.instantTurnLabel(),
+          eventTitle
         );
       }
       });

@@ -34,6 +34,22 @@ function prefixBlock(reason?: string): string {
   return reason ? `${reason}\n\n` : '';
 }
 
+/** "hoje 31/08 às 21:30" → "Hoje 31/08 às 21:30": o label abre a linha. */
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** Os dados operacionais da reserva em uma única linha — ver a nota em es.ts. */
+function reservationLine(whenLabel: string, partySize: number, displayCode: string): string {
+  const people = `${partySize} ${partySize === 1 ? 'pessoa' : 'pessoas'}`;
+  return `📅 ${capitalize(whenLabel)} · 👥 ${people} · Código: *${displayCode}*`;
+}
+
+/** O evento vai em linha própria: o título é longo e quebraria a linha de dados. */
+function eventLine(eventTitle?: string | null): string {
+  return eventTitle ? `\n🎉 ${eventTitle}` : '';
+}
+
 export const ptCatalog: MessageCatalog = {
   // ============================
   // M0 — Seleção de idioma
@@ -63,6 +79,17 @@ export const ptCatalog: MessageCatalog = {
   // ============================
   // M1 — Nova reserva
   // ============================
+
+  welcomeMenu(businessName: string, customerName?: string | null): string {
+    const greeting = customerName ? `Olá, ${customerName}!` : `Olá!`;
+    return (
+      `${greeting} 👋 Tudo bem? Por aqui a gente te ajuda com suas reservas 😊 no ${businessName}.\n\n` +
+      `O que você precisa?\n` +
+      `${NUMBER_EMOJI[0]} Reservar uma mesa\n` +
+      `${NUMBER_EMOJI[1]} Alterar ou cancelar uma reserva\n\n` +
+      `Responda *1* ou *2*, ou simplesmente me conte o que você precisa.`
+    );
+  },
 
   welcomeMessage(businessName: string): string {
     return (
@@ -232,42 +259,25 @@ export const ptCatalog: MessageCatalog = {
     partySize: number,
     whenLabel: string,
     displayCode: string,
-    fullName: string = name,
     eventTitle?: string | null
   ): string {
-    const eventLine = eventTitle ? `🎉 Evento: ${eventTitle}\n` : '';
     return (
-      `✅ Reserva confirmada!\n\n` +
-      `Obrigado, *${name}*. Sua reserva foi registrada com sucesso.\n\n` +
-      `👤 Nome: ${fullName}\n` +
-      `👥 Pessoas: ${partySize}\n` +
-      `${eventLine}` +
-      `📅 Data e hora: ${whenLabel}\n` +
-      `📁 Código da reserva: *${displayCode}*\n\n` +
-      `✨ Esperamos por você!\n` +
-      `Sua reserva será mantida até *20 minutos após* o horário reservado.\n\n` +
-      `Se precisar cancelar, é só escrever: *CANCELAR*`
+      `✅ Reserva confirmada, ${name}!\n` +
+      `${reservationLine(whenLabel, partySize, displayCode)}${eventLine(eventTitle)}\n\n` +
+      `Esperamos por você 👋`
     );
   },
 
   reservationReceived(
-    name: string,
     partySize: number,
     whenLabel: string,
     displayCode: string,
-    fullName: string = name,
     eventTitle?: string | null
   ): string {
-    const eventLine = eventTitle ? `🎉 Evento: ${eventTitle}\n` : '';
     return (
-      `⏳ *Reserva RECEBIDA*\n\n` +
-      `👤 Nome: ${fullName}\n` +
-      `👥 Pessoas: ${partySize}\n` +
-      `${eventLine}` +
-      `📅 Data e hora: ${whenLabel}\n` +
-      `📁 Código: *${displayCode}*\n\n` +
-      `⏰ Avisaremos assim que o restaurante confirmar sua reserva.\n\n` +
-      `Se precisar cancelar, é só escrever: *CANCELAR*`
+      `Pronto ✅\n` +
+      `${reservationLine(whenLabel, partySize, displayCode)}${eventLine(eventTitle)}\n` +
+      `Aviso assim que o restaurante confirmar.`
     );
   },
 
@@ -703,42 +713,26 @@ export const ptCatalog: MessageCatalog = {
     name: string,
     partySize: number,
     displayCode: string,
-    leadMinutes: number,
-    eventTitle?: string | null,
-    /** La reserva tiene horario agendado: sólo entonces aplica la retención de 20 min. */
-    isScheduled: boolean = false
+    whenLabel: string,
+    eventTitle?: string | null
   ): string {
-    const reminderLine =
-      leadMinutes > 0
-        ? `✨ Avisaremos quando faltar ${countdownLabel(leadMinutes)} para sua reserva.\n`
-        : '';
-    const retentionLine = isScheduled
-      ? `Sua reserva será mantida até *20 minutos após* o horário reservado.\n`
-      : '';
-    const eventLine = eventTitle ? `🎉 Evento: ${eventTitle}\n` : '';
     return (
-      `✅ Sua reserva está CONFIRMADA!\n\n` +
-      `👤 Nome: ${name}\n` +
-      `👥 Pessoas: ${partySize}\n` +
-      `${eventLine}` +
-      `📁 Código da reserva: *${displayCode}*\n\n` +
-      reminderLine +
-      retentionLine +
-      `Agradecemos sua pontualidade.\n\n` +
-      `_Se precisar cancelar, responda *CANCELAR*._`
+      `✅ Reserva confirmada, ${name}!\n` +
+      `${reservationLine(whenLabel, partySize, displayCode)}${eventLine(eventTitle)}\n\n` +
+      `Esperamos por você 👋`
     );
   },
 
-  reservationRegisteredNotice(name: string, partySize: number, displayCode: string, eventTitle?: string | null): string {
-    const eventLine = eventTitle ? `🎉 Evento: ${eventTitle}\n` : '';
+  reservationRegisteredNotice(
+    partySize: number,
+    displayCode: string,
+    whenLabel: string,
+    eventTitle?: string | null
+  ): string {
     return (
-      `✅ Sua reserva foi registrada!\n\n` +
-      `👤 Nome: ${name}\n` +
-      `👥 Pessoas: ${partySize}\n` +
-      `${eventLine}` +
-      `📁 Código da reserva: *${displayCode}*\n\n` +
-      `⏰ Avisaremos assim que sua reserva for confirmada.\n\n` +
-      `_Se precisar cancelar, responda *CANCELAR*._`
+      `Pronto ✅\n` +
+      `${reservationLine(whenLabel, partySize, displayCode)}${eventLine(eventTitle)}\n` +
+      `Aviso assim que o restaurante confirmar.`
     );
   },
 
@@ -808,9 +802,9 @@ export const ptCatalog: MessageCatalog = {
 
   tableReadyNotice(): string {
     return (
-      `🚀 Chegou a sua vez!\n` +
-      `Sua mesa está disponível.\n` +
-      `Estamos à sua espera.`
+      `🍽️ Sua mesa está pronta!\n` +
+      `Você pode ocupá-la nos próximos 20 minutos.\n\n` +
+      `Depois desse tempo, a reserva pode ser liberada.`
     );
   },
 
@@ -828,19 +822,6 @@ export const ptCatalog: MessageCatalog = {
   // ============================
   // M11 — Boas-vindas no restaurante
   // ============================
-
-  // ============================
-  // M12 — Mensagem pós-visita
-  // ============================
-
-  postVisitMessage(): string {
-    return (
-      `Obrigado pela sua visita! 💛\n\n` +
-      `Esperamos que tenha aproveitado a experiência.\n\n` +
-      `Adoraríamos saber sua opinião.\n` +
-      `⭐⭐⭐⭐⭐ Deixe sua avaliação.`
-    );
-  },
 
   // ============================
   // Mensagens de fluxo / guards

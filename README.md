@@ -783,7 +783,6 @@ ia-server/
 │   │   ├── openrouter.service.ts           # OpenRouter API wrapper + runToolLoop (usado por v2)
 │   │   ├── conversation.service.ts         # Historial de conversación (v1)
 │   │   ├── intent.service.ts               # Análisis de intención (ruta legacy /api/chat y v1)
-│   │   ├── post-visit.service.ts           # Seguimiento post-visita — compartido
 │   │   └── supabase.service.ts             # Acceso a datos (negocios, clientes, reservas, mesas)
 │   ├── agent/                           # Orquestador v2: tool-calling, sin pasos (state.ts, system-prompt.ts, orchestrator.ts, tools/, feature-flag.ts)
 │   ├── agents/                          # Config del agente conversacional de respaldo "waitlist" (legacy, no confundir con agent/ de arriba)

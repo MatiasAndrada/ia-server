@@ -167,7 +167,6 @@ export const createReservationTool: AgentTool<CreateArgs> = {
       ? describeScheduledAtUtc(entry.scheduled_at, nowBA)
       : templates.instantTurnLabel();
 
-    const fullName = [customerName.trim(), customerLastName?.trim()].filter(Boolean).join(' ');
     // El evento ya se resolvió arriba, así que no hace falta volver a pedir el título.
     const eventTitle = event?.title ?? null;
 
@@ -188,17 +187,9 @@ export const createReservationTool: AgentTool<CreateArgs> = {
           partySize,
           whenLabel,
           entry.display_code ?? '',
-          fullName,
           eventTitle
         )
-      : templates.reservationReceived(
-          customerName.trim(),
-          partySize,
-          whenLabel,
-          entry.display_code ?? '',
-          fullName,
-          eventTitle
-        );
+      : templates.reservationReceived(partySize, whenLabel, entry.display_code ?? '', eventTitle);
 
     // Deduplicación con el suscriptor de realtime, que también reacciona al
     // alta y al cambio de estado. Sin estas marcas el cliente recibe el mensaje
