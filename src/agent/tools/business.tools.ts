@@ -49,7 +49,7 @@ export const listEventsTool: AgentTool<Record<string, never>> = {
       description:
         'Lista los eventos vigentes del local (cenas temáticas, shows, fechas especiales). ' +
         'Usala cuando el cliente pregunta por eventos o nombra algo que suena a uno. ' +
-        'Una reserva de evento siempre queda pendiente de aprobación del local.',
+        'Devuelve TODOS los vigentes: nunca informes disponibilidad ni cupo de un evento.',
       parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
     },
   },
@@ -119,6 +119,12 @@ export const showEventDetailsTool: AgentTool<ShowEventArgs> = {
 
     const nowBA = nowInBuenosAires();
 
+    // Si el local autoacepta este evento y todavía entra gente, la reserva va a
+    // nacer confirmada; si no, queda pendiente. Se expone el QUÉ, nunca el
+    // PORQUÉ: el cupo es información interna y al cliente no se le menciona.
+    const isFull = event.capacity !== null && event.occupiedGuests >= event.capacity;
+    const requiresApproval = !event.autoAccept || isFull;
+
     return {
       ok: true,
       data: {
@@ -126,9 +132,9 @@ export const showEventDetailsTool: AgentTool<ShowEventArgs> = {
         title: event.title,
         description: event.description,
         whenLabel: describeScheduledAtUtc(event.startsAt, nowBA),
-        // Reservar un evento siempre queda pendiente de aprobación del local:
-        // el modelo tiene que decirlo, no prometer una confirmación inmediata.
-        requiresApproval: true,
+        // El modelo no debe prometer una confirmación inmediata cuando esto es
+        // true. Nunca expliques el motivo: no se habla del cupo.
+        requiresApproval,
         // Instrucción explícita en el resultado, no sólo en el system prompt:
         // el modelo la tiene delante justo cuando va a decidir el próximo paso.
         howToReserve:

@@ -31,6 +31,13 @@ function phoneKey(phone: string): string {
 const RESERVATION_OVERLAP_MINUTES = 120;
 const RESERVATION_OVERLAP_MS = RESERVATION_OVERLAP_MINUTES * 60 * 1000;
 
+/**
+ * Reservas que OCUPAN el cupo de un evento. Deliberadamente sin WAITING: una
+ * reserva pendiente es un pedido que el comercio todavía puede rechazar, y
+ * contarla dejaría cupo fantasma. Espeja EVENT_OCCUPYING_STATUSES del panel.
+ */
+const EVENT_OCCUPYING_STATUSES = ['CONFIRMED', 'NOTIFIED', 'SEATED'] as const;
+
 // Helper types for strict type safety without explicit imports
 type WaitlistEntriesRow = Database['public']['Tables']['waitlist_entries']['Row'];
 type CustomersUpdate = Database['public']['Tables']['customers']['Update'];
@@ -585,10 +592,38 @@ export class SupabaseService {
       }
 
       // Create waitlist entry.
-      // Las reservas de evento siempre nacen WAITING: el comercio las aprueba
-      // una por una aunque tenga auto_accept_reservations encendido.
+      //
+      // En una reserva de evento el estado inicial NO lo decide
+      // business.auto_accept_reservations sino el propio evento
+      // (business_events.auto_accept), y sólo mientras quede cupo: si aceptarla
+      // excediera `capacity`, vuelve a nacer WAITING para que el comercio
+      // apruebe el sobrecupo a mano desde el panel.
+      //
+      // Llenarse NO impide reservar: el evento se sigue ofreciendo hasta que el
+      // comercio lo pause. Lo único que cambia para el cliente es que su
+      // reserva queda pendiente de confirmación — y eso es todo lo que se le
+      // dice, nunca que el cupo está lleno.
       const isEventReservation = Boolean(request.eventId);
-      const autoAcceptForThisEntry = autoAccept && !isEventReservation;
+      let autoAcceptForThisEntry = autoAccept && !isEventReservation;
+
+      if (isEventReservation && request.eventId) {
+        const eventState = await this.getEventBookingState(request.eventId);
+        const wouldExceedCapacity =
+          eventState?.capacity != null &&
+          eventState.occupiedGuests + request.partySize > eventState.capacity;
+
+        autoAcceptForThisEntry = Boolean(eventState?.autoAccept) && !wouldExceedCapacity;
+
+        logger.debug('Event reservation capacity check', {
+          eventId: request.eventId,
+          capacity: eventState?.capacity ?? null,
+          occupiedGuests: eventState?.occupiedGuests ?? 0,
+          partySize: request.partySize,
+          eventAutoAccept: eventState?.autoAccept ?? false,
+          wouldExceedCapacity,
+        });
+      }
+
       const initialStatus: WaitlistStatus = autoAcceptForThisEntry ? 'CONFIRMED' : 'WAITING';
       const confirmedAt = autoAcceptForThisEntry ? new Date().toISOString() : null;
       
@@ -940,7 +975,7 @@ export class SupabaseService {
       const client = this.getClient();
       const { data, error } = await client
         .from('business_events')
-        .select('id, title, description, starts_at, image_urls')
+        .select('id, title, description, starts_at, image_urls, capacity, auto_accept')
         .eq('business_id', businessId)
         .eq('is_active', true)
         .is('deleted_at', null)
@@ -951,18 +986,90 @@ export class SupabaseService {
         throw error;
       }
 
-      return (data ?? []).map((row) => ({
+      const rows = data ?? [];
+      const occupancy = await this.getEventOccupancy(rows.map((row) => row.id));
+
+      return rows.map((row) => ({
         id: row.id,
         title: row.title,
         description: row.description ?? null,
         startsAt: row.starts_at,
         imageUrls: row.image_urls ?? [],
+        capacity: row.capacity ?? null,
+        occupiedGuests: occupancy.get(row.id) ?? 0,
+        autoAccept: row.auto_accept ?? false,
       }));
     } catch (error) {
       // Un fallo acá no debe romper el flujo de reserva: sin eventos el menú
       // simplemente vuelve a ser "hoy / otra fecha", como antes.
       logger.error('Supabase: getActiveEvents failed', { error, businessId });
       return [];
+    }
+  }
+
+  /**
+   * Personas ya aceptadas por evento, para un lote de ids.
+   *
+   * Se resuelve en una sola consulta y se agrega en memoria: los eventos
+   * vigentes de un comercio son pocos. Ante un fallo devuelve el mapa vacío —
+   * quedarse sin el dato de cupo debe degradar a "hay lugar", nunca cortar el
+   * flujo de reserva ni esconder el evento.
+   */
+  private static async getEventOccupancy(eventIds: string[]): Promise<Map<string, number>> {
+    const occupancy = new Map<string, number>();
+    if (eventIds.length === 0) return occupancy;
+
+    try {
+      const { data, error } = await this.getClient()
+        .from('waitlist_entries')
+        .select('event_id, party_size')
+        .in('event_id', eventIds)
+        .in('status', [...EVENT_OCCUPYING_STATUSES]);
+
+      if (error) throw error;
+
+      for (const row of data ?? []) {
+        if (!row.event_id) continue;
+        occupancy.set(row.event_id, (occupancy.get(row.event_id) ?? 0) + (row.party_size ?? 0));
+      }
+    } catch (error) {
+      logger.error('Supabase: getEventOccupancy failed', { error, eventIds });
+    }
+
+    return occupancy;
+  }
+
+  /**
+   * Cupo y autoaceptar de UN evento, para decidir con qué estado nace una
+   * reserva. Consulta directa por id en vez de reusar getActiveEvents: acá
+   * interesa un solo evento y ya se validó que existe al resolverlo.
+   *
+   * Devuelve null si no se pudo leer. El llamador trata ese caso como "no
+   * autoaceptar": ante la duda, que decida el comercio.
+   */
+  private static async getEventBookingState(
+    eventId: string
+  ): Promise<{ capacity: number | null; occupiedGuests: number; autoAccept: boolean } | null> {
+    try {
+      const { data, error } = await this.getClient()
+        .from('business_events')
+        .select('capacity, auto_accept')
+        .eq('id', eventId)
+        .single();
+
+      if (error) throw error;
+      if (!data) return null;
+
+      const occupancy = await this.getEventOccupancy([eventId]);
+
+      return {
+        capacity: data.capacity ?? null,
+        occupiedGuests: occupancy.get(eventId) ?? 0,
+        autoAccept: data.auto_accept ?? false,
+      };
+    } catch (error) {
+      logger.error('Supabase: getEventBookingState failed', { error, eventId });
+      return null;
     }
   }
 
