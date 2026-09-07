@@ -417,6 +417,19 @@ export interface BusinessEvent {
   startsAt: string;
   /** URLs públicas, máximo 3. Se envían por WhatsApp al elegir el evento. */
   imageUrls: string[];
+  /**
+   * Cupo máximo en personas, null = sin límite.
+   *
+   * Es un tope BLANDO y de uso interno: llenarse no saca al evento de la lista
+   * ni impide reservar — sólo pausarlo lo saca. Al cliente NUNCA se le informa
+   * el estado del cupo (ver la sección "Eventos" del system prompt); lo único
+   * que cambia para él es que su reserva queda pendiente de confirmación.
+   */
+  capacity: number | null;
+  /** Personas ya aceptadas (CONFIRMED/NOTIFIED/SEATED). */
+  occupiedGuests: number;
+  /** Autoaceptar por evento. Sólo aplica mientras quede cupo. */
+  autoAccept: boolean;
 }
 
 // Reservation Flow Types

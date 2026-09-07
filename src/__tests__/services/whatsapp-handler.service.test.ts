@@ -1,5 +1,6 @@
 import { WhatsAppHandler } from '../../services/whatsapp-handler.service.js';
 import { SupabaseService } from '../../services/supabase.service.js';
+import { RedisConfig } from '../../config/redis.js';
 import * as orchestrator from '../../agent/orchestrator.js';
 import * as state from '../../agent/state.js';
 import { BaileysMessage } from '../../types/index.js';
@@ -363,6 +364,114 @@ describe('WhatsAppHandler — camino del agente', () => {
 
       expect(turnSpy).toHaveBeenCalled();
       expect(sent).toEqual(['Perfecto.']);
+    });
+  });
+
+  /**
+   * El cableado de la adaptación de número compartido (src/adaptations/de-la-fonte.ts).
+   * La lógica del interruptor se prueba en su propio archivo; lo que se verifica
+   * acá es que el handler la respete: que el silencio no llegue al orquestador y
+   * que el saludo del local reemplace al menú genérico.
+   */
+  describe('número compartido (De La Fonte)', () => {
+    let store: Map<string, string>;
+
+    beforeEach(() => {
+      store = new Map();
+      jest.spyOn(SupabaseService, 'getBusinessById').mockResolvedValue({
+        id: BUSINESS_ID,
+        name: 'De La Fonte',
+        whatsapp_session_id: 'session-active',
+        language: 'es',
+        weekly_hours: {},
+      } as any);
+      jest.spyOn(RedisConfig, 'isReady').mockReturnValue(true);
+      jest.spyOn(RedisConfig, 'getClient').mockReturnValue({
+        get: jest.fn(async (key: string) => store.get(key) ?? null),
+        setEx: jest.fn(async (key: string, _ttl: number, value: string) => {
+          store.set(key, value);
+          return 'OK';
+        }),
+        del: jest.fn(async (key: string) => (store.delete(key) ? 1 : 0)),
+        // El handler cachea el mapeo de JID en cada mensaje.
+        set: jest.fn(async () => 'OK'),
+      } as any);
+    });
+
+    it('a un cliente nuevo le muestra el saludo del local, no el menú de idiomas', async () => {
+      jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue(null);
+      const turnSpy = jest.spyOn(orchestrator, 'handleTurn');
+
+      await process('hola');
+
+      // Pedir por Simona no puede costar dos preguntas de formulario antes.
+      expect(sent).toHaveLength(1);
+      expect(sent[0].toLowerCase()).not.toContain('português');
+      expect(sent[0]).toContain('compartido');
+      expect(sent[0]).toContain('Simona');
+      expect(turnSpy).not.toHaveBeenCalled();
+    });
+
+    it('canaliza a Simona y deja de contestar, sin llegar al orquestador', async () => {
+      jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue(null);
+      const turnSpy = jest.spyOn(orchestrator, 'handleTurn').mockResolvedValue({
+        messages: ['no debería llegar acá'],
+        attachments: [],
+        toolsCalled: [],
+        iterations: 1,
+      });
+
+      await process('Simona');
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toContain('Simona');
+
+      // A partir de acá la conversación es de ella: el bot no dice nada más.
+      await process('hola? estás?');
+      await process('era para el sábado');
+
+      expect(sent).toHaveLength(1);
+      expect(turnSpy).not.toHaveBeenCalled();
+    });
+
+    it('una palabra de reserva lo reactiva y ese mismo mensaje lo atiende el modelo', async () => {
+      jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue(null);
+      const turnSpy = jest.spyOn(orchestrator, 'handleTurn').mockResolvedValue({
+        messages: ['Dale, ¿para cuántas personas?'],
+        attachments: [],
+        toolsCalled: [],
+        iterations: 1,
+      });
+
+      await process('Simona');
+      await process('quiero reservar una mesa');
+
+      expect(turnSpy).toHaveBeenCalled();
+      expect(sent[sent.length - 1]).toBe('Dale, ¿para cuántas personas?');
+    });
+
+    it('el traspaso queda en el historial para cuando el cliente vuelva', async () => {
+      jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue(null);
+      const appendSpy = jest.spyOn(state, 'appendExchange').mockResolvedValue();
+
+      await process('Simona');
+
+      expect(appendSpy).toHaveBeenCalledWith(
+        `${BUSINESS_ID}-${PHONE}`,
+        'Simona',
+        expect.stringContaining('Simona')
+      );
+    });
+
+    it('lo que se habla con Simona NO entra al historial del bot', async () => {
+      jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue(null);
+      await process('Simona');
+
+      // El traspaso mismo sí se registró; lo que sigue, no.
+      const appendSpy = jest.spyOn(state, 'appendExchange').mockResolvedValue();
+      appendSpy.mockClear();
+      await process('el sábado somos 12 personas');
+
+      expect(appendSpy).not.toHaveBeenCalled();
     });
   });
 

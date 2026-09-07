@@ -84,7 +84,9 @@ export type Database = {
       }
       business_events: {
         Row: {
+          auto_accept: boolean
           business_id: string
+          capacity: number | null
           created_at: string
           deleted_at: string | null
           description: string | null
@@ -96,7 +98,9 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          auto_accept?: boolean
           business_id: string
+          capacity?: number | null
           created_at?: string
           deleted_at?: string | null
           description?: string | null
@@ -108,7 +112,9 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          auto_accept?: boolean
           business_id?: string
+          capacity?: number | null
           created_at?: string
           deleted_at?: string | null
           description?: string | null

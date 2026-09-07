@@ -54,6 +54,10 @@ export type LogEvent =
   | 'turn.completed'
   | 'turn.silenced'
 
+  // ─── Traspaso a una persona (ver src/adaptations/) ───
+  | 'handoff.started'
+  | 'handoff.resumed'
+
   // ─── Realtime / jobs ───
   | 'realtime.subscribed'
   | 'realtime.lost'
@@ -107,6 +111,9 @@ export const EVENT_LABELS: Record<LogEvent, string> = {
   'reservation.rejected': 'Reservation rejected',
   'turn.completed': 'Conversation turn completed',
   'turn.silenced': 'Turn closed without replying',
+
+  'handoff.started': 'Conversation handed off to a human, bot muted',
+  'handoff.resumed': 'Bot resumed after a human handoff',
 
   'realtime.subscribed': 'Realtime channel subscribed',
   'realtime.lost': 'Realtime channel lost',

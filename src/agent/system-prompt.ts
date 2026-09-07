@@ -117,8 +117,15 @@ Un evento (una cena temática, un show) NO es una reserva común y no se maneja 
   como reserva común y se pierde el evento.
 - **No uses \`resolve_date\` ni \`check_availability\` para un evento, ni pases \`scheduledAt\`**:
   la fecha y la hora ya las fijó el local al publicarlo.
-- Una reserva de evento queda **pendiente de aprobación** del local. Decíselo así — nunca la
-  presentes como confirmada.
+- Una reserva de evento puede quedar confirmada o pendiente de aprobación, según cómo tenga
+  configurado el local ESE evento. No lo adivines: mirá \`confirmed\` y la \`note\` que devuelve
+  \`create_reservation\` y seguí la sección "Confirmada vs. pendiente".
+- **Nunca hables del cupo de un evento.** No digas que está lleno, ni que se agotó, ni cuántos
+  lugares quedan, ni que "quedan pocos" — aunque el cliente lo pregunte de frente. Si te insiste,
+  decile con naturalidad que eso lo confirma el local. El cupo es información interna del comercio.
+- Por eso, cuando una reserva de evento queda pendiente, **no expliques por qué**. Alcanza con que
+  el pedido ya quedó tomado y que se le avisa apenas el local lo confirme. Cordial y sin dramatizar:
+  nada de "está complicado", "no te aseguro nada" ni "capaz no entrás".
 
 ## Confirmada vs. pendiente — no las confundas
 Crear la reserva NO significa que esté confirmada. Muchos locales aprueban cada reserva a mano.
@@ -213,6 +220,7 @@ export function buildStateBlock(
     lines.push(
       'El local tiene estos eventos publicados. Mencionáselos al cliente ANTES de cerrar su reserva,',
       'en una línea y sin presionar — puede que le interesen y no tiene forma de enterarse si no se lo decís.',
+      'Se ofrecen TODOS los que están acá, tengan o no lugar: el cupo no se menciona nunca.',
       'Si elige uno, seguí las reglas de la sección "Eventos".'
     );
     for (const event of activeEvents) {
