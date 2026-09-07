@@ -52,6 +52,11 @@ import {
 } from '../utils/reservation-datetime.js';
 import * as templates from '../utils/message-templates.js';
 import { formatName } from '../utils/formatters.js';
+import {
+  interceptSharedNumberTurn,
+  isSharedNumberBusiness,
+  sharedNumberWelcome,
+} from '../adaptations/de-la-fonte.js';
 
 /** How long (ms) to wait for more messages before processing the batch. */
 const DEBOUNCE_MS = 1500;
@@ -368,6 +373,31 @@ export class WhatsAppHandler {
       return;
     }
 
+    // Comercios cuyo número de WhatsApp comparten el bot y una persona: antes
+    // de cualquier otra cosa hay que saber con cuál de los dos quiere hablar el
+    // cliente. Corre incluso antes del alta — pedir por la dueña no puede
+    // costar dos preguntas de formulario.
+    const sharedNumber = isSharedNumberBusiness(businessId, businessStatus.name);
+    if (sharedNumber) {
+      const outcome = await interceptSharedNumberTurn(conversationId, messageText);
+
+      if (outcome.action === 'silence') {
+        // Silencio deliberado: la conversación es de la dueña y el bot no
+        // aparece. Tampoco se persiste el mensaje en el historial del agente —
+        // lo que se hablan con ella no es contexto del bot.
+        logEvent('info', 'turn.silenced', { conversationId, businessId, via: 'handoff' });
+        return;
+      }
+
+      if (outcome.action === 'reply') {
+        await this.sendWhatsAppMessage(businessId, from, outcome.text);
+        // El traspaso SÍ va al historial: cuando el cliente vuelva con
+        // "reservar", el modelo tiene a la vista que estuvo hablando con Simona.
+        await appendExchange(conversationId, messageText, outcome.text);
+        return;
+      }
+    }
+
     try {
       // Elegir idioma es previo al flujo, así que corre antes del orquestador,
       // sin crear ningún draft.
@@ -379,9 +409,16 @@ export class WhatsAppHandler {
       const conversationStarted = (await loadHistory(conversationId)).length > 0;
       const onboardingStep = conversationStarted ? await loadOnboardingStep(conversationId) : null;
 
-      const languageAction = conversationStarted
-        ? 'none'
-        : await this.resolveFirstContactLanguageAction(businessId, phone, messageText);
+      // El número compartido se saltea el menú de idiomas: su primer mensaje ya
+      // tiene que resolver una bifurcación más urgente (persona o bot), y
+      // encimarle una segunda pregunta antes de eso convierte un "hola" en un
+      // trámite. El idioma igual se infiere del texto (ver
+      // resolveConversationLanguage), y el nombre lo pide el modelo cuando llega
+      // el momento de reservar.
+      const languageAction =
+        conversationStarted || sharedNumber
+          ? 'none'
+          : await this.resolveFirstContactLanguageAction(businessId, phone, messageText);
 
       if (languageAction === 'menu') {
         const menu = templates.languageWelcomeMenu(businessStatus.name || 'el local');
@@ -585,15 +622,18 @@ export class WhatsAppHandler {
   ): Promise<string> {
     const events = await SupabaseService.getActiveEvents(businessId);
     const nowBA = nowInBuenosAires();
+    const eventLines = events.map((event) => ({
+      title: event.title,
+      whenLabel: describeScheduledAtUtcCompact(event.startsAt, nowBA),
+    }));
 
-    return templates.welcomeMenu(
-      businessName || 'el local',
-      customerName,
-      events.map((event) => ({
-        title: event.title,
-        whenLabel: describeScheduledAtUtcCompact(event.startsAt, nowBA),
-      }))
-    );
+    // Los comercios de número compartido tienen su propia carta de presentación:
+    // la primera opción no es reservar, es elegir si te atiende una persona.
+    if (isSharedNumberBusiness(businessId, businessName)) {
+      return sharedNumberWelcome(customerName, eventLines);
+    }
+
+    return templates.welcomeMenu(businessName || 'el local', customerName, eventLines);
   }
 
   /**
