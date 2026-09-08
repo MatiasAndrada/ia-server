@@ -564,7 +564,18 @@ export class WhatsAppHandler {
       // cliente tiene a mano para responder. Secuencial a propósito: Baileys
       // serializa los envíos y en paralelo las fotos llegan desordenadas.
       for (const attachment of result.attachments) {
-        await this.sendWhatsAppImage(businessId, from, attachment.imageUrl, attachment.caption);
+        if (attachment.kind === 'document') {
+          await this.sendWhatsAppDocument(
+            businessId,
+            from,
+            attachment.url,
+            attachment.fileName,
+            attachment.mimetype,
+            attachment.caption
+          );
+        } else {
+          await this.sendWhatsAppImage(businessId, from, attachment.url, attachment.caption);
+        }
       }
 
       for (const text of result.messages) {
@@ -819,6 +830,38 @@ export class WhatsAppHandler {
       recordOutbound();
     } catch (error) {
       logger.error('Error sending WhatsApp image', { error, businessId, to, imageUrl });
+    }
+  }
+
+  /**
+   * Envía un documento por WhatsApp (hoy, el PDF de la carta). Mismo criterio
+   * que sendWhatsAppImage: fuera del dedupe de salientes, que compara texto y
+   * no distingue dos archivos con el mismo caption.
+   */
+  private async sendWhatsAppDocument(
+    businessId: string,
+    to: string,
+    documentUrl: string,
+    fileName: string,
+    mimetype: string,
+    caption?: string
+  ): Promise<void> {
+    try {
+      const success = await this.baileysService.sendDocumentMessage(
+        businessId,
+        to,
+        documentUrl,
+        fileName,
+        mimetype,
+        caption
+      );
+      if (!success) {
+        // BaileysService ya emitió msg.out_failed con la causa tipificada.
+        return;
+      }
+      recordOutbound();
+    } catch (error) {
+      logger.error('Error sending WhatsApp document', { error, businessId, to, documentUrl });
     }
   }
 

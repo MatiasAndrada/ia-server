@@ -269,7 +269,7 @@ describe('agent tool registry', () => {
 
       expect(result.ok).toBe(true);
       expect(result.attachments).toHaveLength(3);
-      expect(result.attachments?.[0].imageUrl).toBe('https://x/1.jpg');
+      expect(result.attachments?.[0]).toMatchObject({ url: 'https://x/1.jpg' });
       // El modelo tiene que avisar que la reserva de evento no queda confirmada sola.
       expect((result.data as any).requiresApproval).toBe(true);
     });
@@ -443,6 +443,95 @@ describe('agent tool registry', () => {
 
       expect(result).toMatchObject({ ok: false, error: { code: 'reservation_not_found' } });
       expect(statusSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('send_menu — la carta', () => {
+    /** El mock base del business no trae carta; esto la agrega. */
+    function withMenu(menu: { pdf?: string | null; images?: string[] | null }) {
+      jest.spyOn(SupabaseService, 'getBusinessById').mockResolvedValue({
+        id: BUSINESS_ID,
+        name: 'La Parrilla',
+        weekly_hours: OPEN_ALWAYS,
+        reservation_closing_margin_minutes: 15,
+        reservation_opening_margin_minutes: 0,
+        future_reservations_blocked_for_date: null,
+        address: 'Av. Corrientes 1234',
+        city: 'CABA',
+        description: null,
+        menu_pdf_url: menu.pdf ?? null,
+        menu_image_urls: menu.images ?? null,
+      } as any);
+    }
+
+    it('falla con un código propio si el local no cargó la carta', async () => {
+      const result = await run('send_menu');
+
+      // El código es superficie de métrica: dice cuántos comercios están
+      // perdiendo consultas por no haber cargado la carta.
+      expect(result).toMatchObject({ ok: false, error: { code: 'menu_not_available' } });
+      expect(result.attachments).toBeUndefined();
+    });
+
+    it('manda el PDF antes que las fotos', async () => {
+      withMenu({ pdf: 'https://x/carta.pdf', images: ['https://x/1.webp', 'https://x/2.webp'] });
+
+      const result = await run('send_menu');
+
+      expect(result.ok).toBe(true);
+      expect(result.attachments?.map((a) => a.kind)).toEqual(['document', 'image', 'image']);
+      expect(result.attachments?.[0]).toMatchObject({
+        url: 'https://x/carta.pdf',
+        mimetype: 'application/pdf',
+        fileName: 'Carta - La Parrilla.pdf',
+      });
+    });
+
+    it('pone el caption SÓLO en el primer archivo del bloque', async () => {
+      withMenu({ pdf: 'https://x/carta.pdf', images: ['https://x/1.webp'] });
+
+      const result = await run('send_menu');
+
+      expect(result.attachments?.[0].caption).toBe('📋 *La carta de La Parrilla*');
+      expect(result.attachments?.[1].caption).toBeUndefined();
+    });
+
+    it('sin PDF, el caption va en la primera foto', async () => {
+      withMenu({ images: ['https://x/1.webp', 'https://x/2.webp'] });
+
+      const result = await run('send_menu');
+
+      expect(result.attachments?.map((a) => a.kind)).toEqual(['image', 'image']);
+      expect(result.attachments?.[0].caption).toBe('📋 *La carta de La Parrilla*');
+      expect(result.attachments?.[1].caption).toBeUndefined();
+    });
+
+    it('funciona con el PDF solo', async () => {
+      withMenu({ pdf: 'https://x/carta.pdf' });
+
+      const result = await run('send_menu');
+
+      expect(result.attachments).toHaveLength(1);
+      expect(result.data).toMatchObject({ hasPdf: true, imageCount: 0 });
+    });
+
+    it('corta en 10 fotos aunque la columna traiga más', async () => {
+      withMenu({ images: Array.from({ length: 14 }, (_, i) => `https://x/${i}.webp`) });
+
+      const result = await run('send_menu');
+
+      expect(result.attachments).toHaveLength(10);
+      expect(result.data).toMatchObject({ imageCount: 10 });
+    });
+
+    it('acompaña los archivos con un texto que el modelo no puede reescribir', async () => {
+      withMenu({ pdf: 'https://x/carta.pdf' });
+
+      const result = await run('send_menu');
+
+      // El verbatim sale DESPUÉS de los adjuntos, por eso apunta hacia arriba.
+      expect(result.verbatim).toContain('👆');
+      expect(result.verbatim).toContain('precios');
     });
   });
 });

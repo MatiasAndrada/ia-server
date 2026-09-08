@@ -11,12 +11,17 @@ import {
   listMyReservationsTool,
   modifyReservationTool,
 } from './reservation.tools.js';
-import { getBusinessInfoTool, listEventsTool, showEventDetailsTool } from './business.tools.js';
+import {
+  getBusinessInfoTool,
+  listEventsTool,
+  sendMenuTool,
+  showEventDetailsTool,
+} from './business.tools.js';
 import { setLanguageTool, updateCustomerNameTool } from './customer.tools.js';
 import { LlmToolCall, LlmToolDefinition } from '../../types/index.js';
 import { logger } from '../../utils/logger.js';
 
-export type { ToolContext, ToolResult } from './types.js';
+export type { ToolAttachment, ToolContext, ToolResult } from './types.js';
 
 /**
  * Registro de herramientas del agente.
@@ -33,6 +38,7 @@ const TOOLS: readonly AgentTool<any>[] = [
   listEventsTool,
   showEventDetailsTool,
   listMyReservationsTool,
+  sendMenuTool,
   // Resolución — traducen lo que dijo el cliente a datos validados.
   resolveDateTool,
   checkAvailabilityTool,

@@ -1,5 +1,6 @@
 import { openRouterService } from '../services/openrouter.service.js';
 import { executeToolCall, getToolDefinitions, ToolContext, ToolResult } from './tools/index.js';
+import type { ToolAttachment } from './tools/types.js';
 import { buildStateBlock, buildStaticPrompt, NO_REPLY_SENTINEL } from './system-prompt.js';
 import {
   bumpUnproductiveStreak,
@@ -32,8 +33,8 @@ import type { SupportedLanguage } from '../i18n/index.js';
 export interface TurnResult {
   /** Mensajes a enviar, en orden. Los `verbatim` van primero. */
   messages: string[];
-  /** Imágenes a enviar después de los mensajes (fotos de un evento elegido). */
-  attachments: { imageUrl: string; caption?: string }[];
+  /** Archivos a enviar antes de los mensajes (fotos de un evento, la carta). */
+  attachments: ToolAttachment[];
   /** Herramientas ejecutadas — el harness de tests asierta sobre esto. */
   toolsCalled: string[];
   iterations: number;

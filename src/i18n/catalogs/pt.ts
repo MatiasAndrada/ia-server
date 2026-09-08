@@ -233,6 +233,25 @@ export const ptCatalog: MessageCatalog = {
     return `😔 *${title}* não está mais disponível. Escolha outra opção, por favor.`;
   },
 
+  // ============================
+  // O cardápio
+  // ============================
+
+  menuFileName(businessName: string): string {
+    return `Cardápio - ${businessName}.pdf`;
+  },
+
+  menuCaption(businessName: string): string {
+    return `📋 *O cardápio do ${businessName}*`;
+  },
+
+  menuSent(): string {
+    return (
+      'Aí vai o cardápio 👆\n\n' +
+      'Não tenho os pratos nem os preços do meu lado, então dá uma olhada aí no que você precisa.'
+    );
+  },
+
   /** Menu de edição do resumo quando a reserva é para um evento: o evento fixa data e horário. */
   summaryEditMenuEvent(): string {
     return (

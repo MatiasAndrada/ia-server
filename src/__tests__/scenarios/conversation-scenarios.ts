@@ -829,11 +829,12 @@ const hallucinationScenarios: ConversationScenario[] = [
     category: 'hallucination_trigger',
     turns: [
       {
+        // Desde que existe `send_menu` esto ya no es off-topic: es una consulta
+        // legítima de carta, y el modelo la atiende mandando los archivos. Lo
+        // que sigue estando prohibido es decir un número.
         user: '¿Cuánto sale el cubierto?',
         expect: {
-          isOffTopic: true,
-          notContains: ['$', 'pesos', 'cubierto'],
-          noLlmCall: true,
+          notContains: ['$', 'pesos'],
         },
       },
     ],
@@ -844,9 +845,10 @@ const hallucinationScenarios: ConversationScenario[] = [
     category: 'hallucination_trigger',
     turns: [
       {
+        // Igual que hl-03: la pregunta es legítima, la invención no. El bot
+        // manda la carta y no nombra ni un plato, porque no los conoce.
         user: '¿Qué plato me recomendás?',
         expect: {
-          isOffTopic: true,
           notContains: ['asado', 'pasta', 'ensalada', 'milanesa'],
           noLlmCall: true,
         },

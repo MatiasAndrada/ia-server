@@ -68,6 +68,20 @@ const stubBaileysService = {
     console.log(`\n🖼️  Bot → ${jid}: [imagen] ${imageUrl}${caption ? `\n   caption: ${caption}` : ''}\n`);
     return true;
   },
+  sendDocumentMessage: async (
+    _businessId: string,
+    jid: string,
+    documentUrl: string,
+    fileName: string,
+    mimetype: string,
+    caption?: string
+  ): Promise<boolean> => {
+    console.log(
+      `\n📄 Bot → ${jid}: [documento] ${fileName} (${mimetype})\n   ${documentUrl}` +
+        `${caption ? `\n   caption: ${caption}` : ''}\n`
+    );
+    return true;
+  },
   getSelfJid: (): string => '',
 };
 

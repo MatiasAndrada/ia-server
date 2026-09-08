@@ -20,6 +20,7 @@ const JID = `${PHONE}@s.whatsapp.net`;
 describe('WhatsAppHandler — camino del agente', () => {
   let sent: string[];
   let images: { url: string; caption?: string }[];
+  let documents: { url: string; fileName: string; mimetype: string; caption?: string }[];
   let handler: WhatsAppHandler;
 
   const stubBaileys = {
@@ -31,6 +32,19 @@ describe('WhatsAppHandler — camino del agente', () => {
       images.push({ url, caption });
       return true;
     }),
+    sendDocumentMessage: jest.fn(
+      async (
+        _b: string,
+        _to: string,
+        url: string,
+        fileName: string,
+        mimetype: string,
+        caption?: string
+      ) => {
+        documents.push({ url, fileName, mimetype, caption });
+        return true;
+      }
+    ),
     getSelfJid: jest.fn(() => ''),
   };
 
@@ -55,8 +69,10 @@ describe('WhatsAppHandler — camino del agente', () => {
     jest.restoreAllMocks();
     sent = [];
     images = [];
+    documents = [];
     stubBaileys.sendMessage.mockClear();
     stubBaileys.sendImageMessage.mockClear();
+    stubBaileys.sendDocumentMessage.mockClear();
 
     handler = new WhatsAppHandler(stubBaileys as any);
 
@@ -498,7 +514,7 @@ describe('WhatsAppHandler — camino del agente', () => {
       } as any);
       jest.spyOn(orchestrator, 'handleTurn').mockResolvedValue({
         messages: ['La noche de sushi es el sábado.'],
-        attachments: [{ imageUrl: 'https://x/1.jpg', caption: '🎉 *Noche de sushi*' }],
+        attachments: [{ kind: 'image', url: 'https://x/1.jpg', caption: '🎉 *Noche de sushi*' }],
         toolsCalled: ['show_event_details'],
         iterations: 2,
       });
@@ -518,7 +534,7 @@ describe('WhatsAppHandler — camino del agente', () => {
       } as any);
       jest.spyOn(orchestrator, 'handleTurn').mockResolvedValue({
         messages: ['La noche de sushi es el sábado.'],
-        attachments: [{ imageUrl: 'https://x/1.jpg' }, { imageUrl: 'https://x/2.jpg' }],
+        attachments: [{ kind: 'image', url: 'https://x/1.jpg' }, { kind: 'image', url: 'https://x/2.jpg' }],
         toolsCalled: ['show_event_details'],
         iterations: 2,
       });
@@ -527,6 +543,71 @@ describe('WhatsAppHandler — camino del agente', () => {
 
       expect(sent).toEqual(['La noche de sushi es el sábado.']);
       expect(images.map((i) => i.url)).toEqual(['https://x/1.jpg', 'https://x/2.jpg']);
+    });
+
+    it('manda el documento antes que las fotos, y las dos cosas antes del texto', async () => {
+      const order: string[] = [];
+      stubBaileys.sendMessage.mockImplementation(async (_b: string, _to: string, text: string) => {
+        order.push(`texto:${text}`);
+        sent.push(text);
+        return true;
+      });
+      stubBaileys.sendImageMessage.mockImplementation(
+        async (_b: string, _to: string, url: string, caption?: string) => {
+          order.push(`imagen:${url}`);
+          images.push({ url, caption });
+          return true;
+        }
+      );
+      stubBaileys.sendDocumentMessage.mockImplementation(
+        async (
+          _b: string,
+          _to: string,
+          url: string,
+          fileName: string,
+          mimetype: string,
+          caption?: string
+        ) => {
+          order.push(`documento:${url}`);
+          documents.push({ url, fileName, mimetype, caption });
+          return true;
+        }
+      );
+
+      jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue({
+        id: 'c1',
+        name: 'Matías',
+        preferred_language: 'es',
+      } as any);
+      jest.spyOn(orchestrator, 'handleTurn').mockResolvedValue({
+        messages: ['Ahí te paso la carta.'],
+        attachments: [
+          {
+            kind: 'document',
+            url: 'https://x/carta.pdf',
+            fileName: 'Carta - El Local.pdf',
+            mimetype: 'application/pdf',
+            caption: '📋 *La carta de El Local*',
+          },
+          { kind: 'image', url: 'https://x/1.webp' },
+        ],
+        toolsCalled: ['send_menu'],
+        iterations: 2,
+      });
+
+      await process('¿tienen opciones veganas?');
+
+      expect(order).toEqual([
+        'documento:https://x/carta.pdf',
+        'imagen:https://x/1.webp',
+        'texto:Ahí te paso la carta.',
+      ]);
+      // El nombre y el mimetype tienen que llegar hasta Baileys: sin ellos el
+      // cliente ve un adjunto sin título y WhatsApp rechaza el envío.
+      expect(documents[0]).toMatchObject({
+        fileName: 'Carta - El Local.pdf',
+        mimetype: 'application/pdf',
+      });
     });
   });
 });

@@ -281,6 +281,35 @@ export const esCatalog = {
     return `😔 *${title}* ya no está disponible. Elegí otra opción, por favor.`;
   },
 
+  // ============================
+  // La carta
+  // ============================
+
+  /**
+   * Nombre del PDF tal como lo ve el cliente en el chat. Se deriva del comercio
+   * y no del archivo que subió: los nombres originales suelen ser ilegibles
+   * ("scan_0001.pdf") y este texto es lo primero que se lee del adjunto.
+   */
+  menuFileName(businessName: string): string {
+    return `Carta - ${businessName}.pdf`;
+  },
+
+  /** Caption del primer adjunto de la carta. Llega antes que el texto. */
+  menuCaption(businessName: string): string {
+    return `📋 *La carta de ${businessName}*`;
+  },
+
+  /**
+   * Acompaña el envío de la carta. Sale DESPUÉS de los archivos —el handler
+   * entrega los adjuntos primero—, por eso apunta hacia arriba.
+   */
+  menuSent(): string {
+    return (
+      'Ahí te paso la carta 👆\n\n' +
+      'No tengo los platos ni los precios de mi lado, así que fijate ahí lo que necesites.'
+    );
+  },
+
   /** Menú de edición del resumen cuando la reserva es para un evento: la fecha y el horario los fija el evento. */
   summaryEditMenuEvent(): string {
     return (

@@ -156,6 +156,9 @@ export type Database = {
           listing_rejected_reason: string | null
           listing_status: Database["public"]["Enums"]["ListingStatus"]
           manual_table_occupancy_enabled: boolean
+          menu_image_urls: string[] | null
+          menu_pdf_name: string | null
+          menu_pdf_url: string | null
           name: string
           public_join_enabled: boolean
           public_screen_enabled: boolean
@@ -189,6 +192,9 @@ export type Database = {
           listing_rejected_reason?: string | null
           listing_status?: Database["public"]["Enums"]["ListingStatus"]
           manual_table_occupancy_enabled?: boolean
+          menu_image_urls?: string[] | null
+          menu_pdf_name?: string | null
+          menu_pdf_url?: string | null
           name: string
           public_join_enabled?: boolean
           public_screen_enabled?: boolean
@@ -222,6 +228,9 @@ export type Database = {
           listing_rejected_reason?: string | null
           listing_status?: Database["public"]["Enums"]["ListingStatus"]
           manual_table_occupancy_enabled?: boolean
+          menu_image_urls?: string[] | null
+          menu_pdf_name?: string | null
+          menu_pdf_url?: string | null
           name?: string
           public_join_enabled?: boolean
           public_screen_enabled?: boolean

@@ -234,6 +234,25 @@ export const enCatalog: MessageCatalog = {
     return `😔 *${title}* is no longer available. Please pick another option.`;
   },
 
+  // ============================
+  // The menu
+  // ============================
+
+  menuFileName(businessName: string): string {
+    return `Menu - ${businessName}.pdf`;
+  },
+
+  menuCaption(businessName: string): string {
+    return `📋 *${businessName}'s menu*`;
+  },
+
+  menuSent(): string {
+    return (
+      "Here's our menu 👆\n\n" +
+      "I don't have the dishes or the prices on my end, so take a look there for what you need."
+    );
+  },
+
   /** Summary edit menu for an event booking: the event fixes the date and time. */
   summaryEditMenuEvent(): string {
     return (

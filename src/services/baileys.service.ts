@@ -1127,6 +1127,88 @@ export class BaileysService {
   }
 
   /**
+   * Envía un documento por URL (hoy, el PDF de la carta).
+   *
+   * Hermano de sendImageMessage, con dos diferencias que importan:
+   *
+   *  - El timeout es de 60s y no de 30s. Baileys descarga el archivo y lo
+   *    re-sube a WhatsApp, y un PDF de varios MB no entra en el presupuesto de
+   *    una foto de 200 KB.
+   *  - Repite la guarda de destinatario inválido que sendMessage tiene y
+   *    sendImageMessage no: sin ella un `to` sin dígitos se come el minuto
+   *    entero de timeout antes de fallar.
+   *
+   * `fileName` es lo que el cliente ve como título del archivo en el chat, así
+   * que se arma para que se lea bien — no es el nombre con el que el comercio
+   * subió el archivo.
+   */
+  async sendDocumentMessage(
+    businessId: string,
+    to: string,
+    documentUrl: string,
+    fileName: string,
+    mimetype: string,
+    caption?: string
+  ): Promise<boolean> {
+    try {
+      await loadBaileys();
+
+      const sock = this.sessions.get(businessId);
+
+      if (!sock) {
+        this.logSendFailure(businessId, to, 'no_session');
+        return false;
+      }
+
+      if (!this.isSessionConnected(businessId)) {
+        this.logSendFailure(businessId, to, 'not_connected');
+        return false;
+      }
+
+      if (!to.includes('@') && phoneCandidates(to).length === 0) {
+        this.logSendFailure(businessId, to, 'invalid_recipient');
+        return false;
+      }
+
+      const jid = await this.resolveJid(businessId, to);
+      const normalizedCaption = caption ? normalizeWhatsAppBold(caption) : caption;
+
+      logger.debug('Sending document via Baileys', { businessId, to: jid, documentUrl, fileName });
+
+      const sendPromise = sock.sendMessage(jid, {
+        document: { url: documentUrl },
+        mimetype,
+        fileName,
+        ...(normalizedCaption ? { caption: normalizedCaption } : {}),
+      });
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('sendDocumentMessage timeout after 60s')), 60000)
+      );
+      const result = await Promise.race([sendPromise, timeoutPromise]);
+      this.rememberOutboundMessageId(businessId, result?.key?.id);
+
+      logEvent('info', 'msg.out', {
+        businessId,
+        to: jid,
+        messageLength: caption?.length ?? 0,
+        messageId: result?.key?.id,
+      });
+
+      const state = this.sessionStates.get(businessId);
+      if (state) {
+        state.lastActivity = Date.now();
+        this.sessionStates.set(businessId, state);
+      }
+
+      return true;
+    } catch (error) {
+      const isTimeout = error instanceof Error && error.message.includes('timeout');
+      this.logSendFailure(businessId, to, isTimeout ? 'timeout' : 'send_error', error);
+      return false;
+    }
+  }
+
+  /**
    * Un único punto para reportar un envío fallido, con la causa tipificada y
    * throttle por comercio: cuando una sesión se cae, cada mensaje pendiente
    * dispara este camino y sin throttle el log se vuelve ilegible.

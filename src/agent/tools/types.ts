@@ -27,12 +27,31 @@ export interface ToolResult<T = unknown> {
   /** Texto que se envía TAL CUAL, sin pasar por el modelo. */
   verbatim?: string;
   /**
-   * Imágenes a enviar en este turno. Mismo principio que `verbatim`: el modelo
-   * no puede producir una imagen, así que la herramienta la adjunta y el
-   * orquestador la entrega. Se usan para las fotos de un evento elegido.
+   * Archivos a enviar en este turno. Mismo principio que `verbatim`: el modelo
+   * no puede producir una imagen ni un PDF, así que la herramienta los adjunta
+   * y el orquestador los entrega. Se usan para las fotos de un evento elegido
+   * y para la carta del local.
    */
-  attachments?: { imageUrl: string; caption?: string }[];
+  attachments?: ToolAttachment[];
 }
+
+/**
+ * Un archivo que una herramienta manda al cliente.
+ *
+ * `kind` discrimina porque WhatsApp trata a una imagen y a un documento de
+ * forma distinta: la imagen se ve en el chat, el documento se descarga y
+ * necesita un nombre visible.
+ */
+export type ToolAttachment =
+  | { kind: 'image'; url: string; caption?: string }
+  | {
+      kind: 'document';
+      url: string;
+      /** Lo que el cliente ve como título del archivo en el chat. */
+      fileName: string;
+      mimetype: string;
+      caption?: string;
+    };
 
 export function ok<T>(data: T, verbatim?: string): ToolResult<T> {
   return verbatim ? { ok: true, data, verbatim } : { ok: true, data };
