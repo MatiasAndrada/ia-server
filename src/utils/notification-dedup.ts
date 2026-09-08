@@ -45,6 +45,22 @@ export function reminderNotificationKey(entryId: string, kind: string): string {
   return `wa:reminder:sent:${entryId}:${kind}`;
 }
 
+/**
+ * Envío de la carta a un cliente.
+ *
+ * A diferencia del resto de las claves de este módulo, esta no coordina dos
+ * emisores: acota el reenvío. La carta son hasta once archivos, y dos preguntas
+ * de comida seguidas ("¿tienen opciones veganas?", "¿y bebidas?") la mandarían
+ * dos veces. Se usa con MENU_TTL_SECONDS, no con el TTL de un día: pasado un
+ * rato, volver a pedirla es un pedido legítimo.
+ */
+export function menuSendKey(businessId: string, phone: string): string {
+  return `wa:menu:sent:${businessId}:${phone}`;
+}
+
+/** Ventana en la que no se reenvía la carta al mismo cliente. */
+export const MENU_TTL_SECONDS = 15 * 60;
+
 /** True si este aviso ya salió. Ante un Redis caído devuelve false (falla abierto). */
 export async function wasAlreadyNotified(key: string): Promise<boolean> {
   try {

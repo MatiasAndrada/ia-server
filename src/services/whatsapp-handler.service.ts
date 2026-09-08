@@ -53,10 +53,9 @@ import {
 import * as templates from '../utils/message-templates.js';
 import { formatName } from '../utils/formatters.js';
 import {
+  findSharedNumberAdaptation,
   interceptSharedNumberTurn,
-  isSharedNumberBusiness,
-  sharedNumberWelcome,
-} from '../adaptations/de-la-fonte.js';
+} from '../adaptations/index.js';
 
 /** How long (ms) to wait for more messages before processing the batch. */
 const DEBOUNCE_MS = 1500;
@@ -375,16 +374,16 @@ export class WhatsAppHandler {
 
     // Comercios cuyo número de WhatsApp comparten el bot y una persona: antes
     // de cualquier otra cosa hay que saber con cuál de los dos quiere hablar el
-    // cliente. Corre incluso antes del alta — pedir por la dueña no puede
+    // cliente. Corre incluso antes del alta — pedir por una persona no puede
     // costar dos preguntas de formulario.
-    const sharedNumber = isSharedNumberBusiness(businessId, businessStatus.name);
+    const sharedNumber = findSharedNumberAdaptation(businessId, businessStatus.name);
     if (sharedNumber) {
-      const outcome = await interceptSharedNumberTurn(conversationId, messageText);
+      const outcome = await interceptSharedNumberTurn(sharedNumber, conversationId, messageText);
 
       if (outcome.action === 'silence') {
-        // Silencio deliberado: la conversación es de la dueña y el bot no
+        // Silencio deliberado: la conversación es del local y el bot no
         // aparece. Tampoco se persiste el mensaje en el historial del agente —
-        // lo que se hablan con ella no es contexto del bot.
+        // lo que se hablen ahí no es contexto del bot.
         logEvent('info', 'turn.silenced', { conversationId, businessId, via: 'handoff' });
         return;
       }
@@ -392,7 +391,8 @@ export class WhatsAppHandler {
       if (outcome.action === 'reply') {
         await this.sendWhatsAppMessage(businessId, from, outcome.text);
         // El traspaso SÍ va al historial: cuando el cliente vuelva con
-        // "reservar", el modelo tiene a la vista que estuvo hablando con Simona.
+        // "reservar", el modelo tiene a la vista que estuvo hablando con una
+        // persona del local.
         await appendExchange(conversationId, messageText, outcome.text);
         return;
       }
@@ -416,7 +416,7 @@ export class WhatsAppHandler {
       // resolveConversationLanguage), y el nombre lo pide el modelo cuando llega
       // el momento de reservar.
       const languageAction =
-        conversationStarted || sharedNumber
+        conversationStarted || sharedNumber !== null
           ? 'none'
           : await this.resolveFirstContactLanguageAction(businessId, phone, messageText);
 
@@ -564,7 +564,18 @@ export class WhatsAppHandler {
       // cliente tiene a mano para responder. Secuencial a propósito: Baileys
       // serializa los envíos y en paralelo las fotos llegan desordenadas.
       for (const attachment of result.attachments) {
-        await this.sendWhatsAppImage(businessId, from, attachment.imageUrl, attachment.caption);
+        if (attachment.kind === 'document') {
+          await this.sendWhatsAppDocument(
+            businessId,
+            from,
+            attachment.url,
+            attachment.fileName,
+            attachment.mimetype,
+            attachment.caption
+          );
+        } else {
+          await this.sendWhatsAppImage(businessId, from, attachment.url, attachment.caption);
+        }
       }
 
       for (const text of result.messages) {
@@ -629,8 +640,9 @@ export class WhatsAppHandler {
 
     // Los comercios de número compartido tienen su propia carta de presentación:
     // la primera opción no es reservar, es elegir si te atiende una persona.
-    if (isSharedNumberBusiness(businessId, businessName)) {
-      return sharedNumberWelcome(customerName, eventLines);
+    const sharedNumber = findSharedNumberAdaptation(businessId, businessName);
+    if (sharedNumber) {
+      return sharedNumber.welcome(customerName, eventLines);
     }
 
     return templates.welcomeMenu(businessName || 'el local', customerName, eventLines);
@@ -819,6 +831,38 @@ export class WhatsAppHandler {
       recordOutbound();
     } catch (error) {
       logger.error('Error sending WhatsApp image', { error, businessId, to, imageUrl });
+    }
+  }
+
+  /**
+   * Envía un documento por WhatsApp (hoy, el PDF de la carta). Mismo criterio
+   * que sendWhatsAppImage: fuera del dedupe de salientes, que compara texto y
+   * no distingue dos archivos con el mismo caption.
+   */
+  private async sendWhatsAppDocument(
+    businessId: string,
+    to: string,
+    documentUrl: string,
+    fileName: string,
+    mimetype: string,
+    caption?: string
+  ): Promise<void> {
+    try {
+      const success = await this.baileysService.sendDocumentMessage(
+        businessId,
+        to,
+        documentUrl,
+        fileName,
+        mimetype,
+        caption
+      );
+      if (!success) {
+        // BaileysService ya emitió msg.out_failed con la causa tipificada.
+        return;
+      }
+      recordOutbound();
+    } catch (error) {
+      logger.error('Error sending WhatsApp document', { error, businessId, to, documentUrl });
     }
   }
 

@@ -1,8 +1,14 @@
-import { AgentTool, ToolResult, fail, ok } from './types.js';
+import { AgentTool, ToolAttachment, ToolResult, fail, ok } from './types.js';
 import { loadBusinessRules } from './business-rules.js';
 import { SupabaseService } from '../../services/supabase.service.js';
 import { describeScheduledAtUtc, nowInBuenosAires } from '../../utils/reservation-datetime.js';
 import { formatBusinessAddress, formatWeeklyHoursForPrompt } from '../../utils/prompts.js';
+import {
+  MENU_TTL_SECONDS,
+  markNotified,
+  menuSendKey,
+  wasAlreadyNotified,
+} from '../../utils/notification-dedup.js';
 import * as templates from '../../utils/message-templates.js';
 
 /**
@@ -153,10 +159,119 @@ export const showEventDetailsTool: AgentTool<ShowEventArgs> = {
       ),
       // Máximo 3: más que eso satura el chat. La primera lleva el título como
       // caption, porque llega antes que el texto.
-      attachments: event.imageUrls.slice(0, 3).map((imageUrl, index) => ({
-        imageUrl,
+      attachments: event.imageUrls.slice(0, 3).map((url, index) => ({
+        kind: 'image' as const,
+        url,
         ...(index === 0 ? { caption: `🎉 *${event.title}*` } : {}),
       })),
+    };
+  },
+};
+
+
+/**
+ * Tope defensivo del lado del bot. El panel corta en 10, pero la columna es un
+ * text[] sin restricción: si alguna vez entra más por otro camino, el chat del
+ * cliente no se llena de fotos.
+ */
+const MAX_MENU_IMAGES = 10;
+
+/**
+ * La carta.
+ *
+ * El bot no conoce su contenido: el comercio la carga como PDF y/o fotos, y acá
+ * se reenvían tal cual. Por eso ante "¿cuánto sale la milanesa?" la respuesta no
+ * es un precio inventado sino los archivos, más el texto que aclara que el
+ * detalle no lo tiene.
+ */
+export const sendMenuTool: AgentTool<Record<string, never>> = {
+  definition: {
+    type: 'function',
+    function: {
+      name: 'send_menu',
+      description:
+        'Le envía al cliente la carta del local por WhatsApp (el PDF y/o las fotos que cargó el comercio). ' +
+        'Usala ante CUALQUIER pregunta sobre lo que se come o se toma: un plato, un precio, las bebidas, ' +
+        'el tamaño de las porciones, si hay opciones veganas o sin TACC, o un pedido directo de la carta. ' +
+        'NO conocés el contenido de la carta: nunca afirmes ni niegues que un plato exista, ni digas un precio. ' +
+        'Esta herramienta manda los archivos; el cliente lee ahí.',
+      parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
+    },
+  },
+
+  async run(_args, ctx): Promise<ToolResult> {
+    const rules = await loadBusinessRules(ctx.businessId);
+    if (!rules) return fail('business_not_found', 'No se pudo leer la información del local.');
+
+    const { business } = rules;
+    const pdfUrl = business.menu_pdf_url;
+    const imageUrls = (business.menu_image_urls ?? []).slice(0, MAX_MENU_IMAGES);
+
+    if (!pdfUrl && imageUrls.length === 0) {
+      return fail(
+        'menu_not_available',
+        'El local no tiene la carta cargada. Decile que no tenés ese dato y que lo pueden confirmar ' +
+          'en el local. No inventes platos ni precios, y no prometas averiguarlo.'
+      );
+    }
+
+    // Reenvío acotado: son hasta once archivos, y dos preguntas de comida
+    // seguidas los mandarían dos veces. En dryRun no se consulta ni se marca —
+    // el eval corre así y no debe dejar rastro en Redis.
+    const dedupKey = menuSendKey(ctx.businessId, ctx.phone);
+    if (!ctx.dryRun && (await wasAlreadyNotified(dedupKey))) {
+      return ok({
+        alreadySent: true,
+        note:
+          'La carta ya se le envió hace un rato en esta conversación. No la vuelvas a mandar: ' +
+          'remitilo a los archivos que ya recibió. Seguís sin conocer su contenido.',
+      });
+    }
+
+    // El PDF primero: es el formato que se lee mejor, y su caption es lo que
+    // contextualiza todo el bloque. El handler entrega los adjuntos antes que
+    // los textos, así que este caption llega antes que el `verbatim`.
+    const caption = templates.menuCaption(business.name);
+    const attachments: ToolAttachment[] = [];
+
+    if (pdfUrl) {
+      attachments.push({
+        kind: 'document',
+        url: pdfUrl,
+        fileName: templates.menuFileName(business.name),
+        mimetype: 'application/pdf',
+        caption,
+      });
+    }
+
+    for (const url of imageUrls) {
+      attachments.push({
+        kind: 'image',
+        url,
+        // Sólo el primer archivo del bloque lleva caption, sea el PDF o la
+        // primera foto: repetirlo en cada imagen satura el chat.
+        ...(attachments.length === 0 ? { caption } : {}),
+      });
+    }
+
+    if (!ctx.dryRun) {
+      await markNotified(dedupKey, MENU_TTL_SECONDS);
+    }
+
+    return {
+      ok: true,
+      data: {
+        sent: true,
+        hasPdf: Boolean(pdfUrl),
+        imageCount: imageUrls.length,
+        // La instrucción viaja con el resultado y no sólo en el system prompt:
+        // el modelo la tiene delante justo cuando decide qué escribir.
+        note:
+          'La carta ya se le envió al cliente. NO describas su contenido: no lo conocés. ' +
+          'No listes platos ni precios, y no supongas qué hay adentro.',
+      },
+      verbatim: templates.menuSent(),
+      attachments,
     };
   },
 };

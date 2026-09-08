@@ -159,6 +159,25 @@ export function eventNoLongerAvailable(title: string): string {
   return catalog().eventNoLongerAvailable(title);
 }
 
+// ============================
+// La carta
+// ============================
+
+/** Nombre del PDF de la carta tal como lo ve el cliente en el chat. */
+export function menuFileName(businessName: string): string {
+  return catalog().menuFileName(businessName);
+}
+
+/** Caption del primer adjunto de la carta. */
+export function menuCaption(businessName: string): string {
+  return catalog().menuCaption(businessName);
+}
+
+/** Texto que acompaña el envío de la carta. Sale después de los archivos. */
+export function menuSent(): string {
+  return catalog().menuSent();
+}
+
 /** Confirmación final de reserva (M1 — "Reserva confirmada"). */
 export function reservationConfirmed(
   partySize: number,
