@@ -368,7 +368,7 @@ describe('WhatsAppHandler — camino del agente', () => {
   });
 
   /**
-   * El cableado de la adaptación de número compartido (src/adaptations/de-la-fonte.ts).
+   * El cableado de la adaptación de número compartido (src/adaptations/).
    * La lógica del interruptor se prueba en su propio archivo; lo que se verifica
    * acá es que el handler la respete: que el silencio no llegue al orquestador y
    * que el saludo del local reemplace al menú genérico.
@@ -472,6 +472,80 @@ describe('WhatsAppHandler — camino del agente', () => {
       await process('el sábado somos 12 personas');
 
       expect(appendSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * SKY usa el mismo cableado con otra configuración. Se prueba acá el extremo
+   * que lo distingue: su palabra de canalización es su propio nombre, y el
+   * handler no puede quedarse mudo con alguien que sólo quería reservar.
+   */
+  describe('número compartido (SKY)', () => {
+    let store: Map<string, string>;
+
+    beforeEach(() => {
+      store = new Map();
+      jest.spyOn(SupabaseService, 'getBusinessById').mockResolvedValue({
+        id: BUSINESS_ID,
+        name: 'SKY Restaurante and Bar',
+        whatsapp_session_id: 'session-active',
+        language: 'es',
+        weekly_hours: {},
+      } as any);
+      jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue(null);
+      jest.spyOn(RedisConfig, 'isReady').mockReturnValue(true);
+      jest.spyOn(RedisConfig, 'getClient').mockReturnValue({
+        get: jest.fn(async (key: string) => store.get(key) ?? null),
+        setEx: jest.fn(async (key: string, _ttl: number, value: string) => {
+          store.set(key, value);
+          return 'OK';
+        }),
+        del: jest.fn(async (key: string) => (store.delete(key) ? 1 : 0)),
+        set: jest.fn(async () => 'OK'),
+      } as any);
+    });
+
+    it('a un cliente nuevo le muestra el saludo del local, no el menú de idiomas', async () => {
+      const turnSpy = jest.spyOn(orchestrator, 'handleTurn');
+
+      await process('hola');
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0].toLowerCase()).not.toContain('português');
+      expect(sent[0]).toContain('SKY Restaurante and Bar');
+      expect(sent[0]).toContain('escribí *Reserva*');
+      expect(turnSpy).not.toHaveBeenCalled();
+    });
+
+    it('escribir SKY apaga el bot, sin llegar al orquestador', async () => {
+      const turnSpy = jest.spyOn(orchestrator, 'handleTurn').mockResolvedValue({
+        messages: ['no debería llegar acá'],
+        attachments: [],
+        toolsCalled: [],
+        iterations: 1,
+      });
+
+      await process('SKY');
+      expect(sent).toHaveLength(1);
+
+      await process('quería preguntar por un evento privado');
+
+      expect(sent).toHaveLength(1);
+      expect(turnSpy).not.toHaveBeenCalled();
+    });
+
+    it('pedir una reserva "en Sky" NO apaga el bot', async () => {
+      const turnSpy = jest.spyOn(orchestrator, 'handleTurn').mockResolvedValue({
+        messages: ['Dale, ¿para cuántas personas?'],
+        attachments: [],
+        toolsCalled: [],
+        iterations: 1,
+      });
+
+      await process('hola quiero reservar una mesa en Sky');
+
+      expect(turnSpy).toHaveBeenCalled();
+      expect(sent[sent.length - 1]).toBe('Dale, ¿para cuántas personas?');
     });
   });
 
