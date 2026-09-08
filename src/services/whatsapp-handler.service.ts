@@ -376,7 +376,7 @@ export class WhatsAppHandler {
     // de cualquier otra cosa hay que saber con cuál de los dos quiere hablar el
     // cliente. Corre incluso antes del alta — pedir por una persona no puede
     // costar dos preguntas de formulario.
-    const sharedNumber = findSharedNumberAdaptation(businessId, businessStatus.name);
+    const sharedNumber = findSharedNumberAdaptation(businessId);
     if (sharedNumber) {
       const outcome = await interceptSharedNumberTurn(sharedNumber, conversationId, messageText);
 
@@ -640,7 +640,7 @@ export class WhatsAppHandler {
 
     // Los comercios de número compartido tienen su propia carta de presentación:
     // la primera opción no es reservar, es elegir si te atiende una persona.
-    const sharedNumber = findSharedNumberAdaptation(businessId, businessName);
+    const sharedNumber = findSharedNumberAdaptation(businessId);
     if (sharedNumber) {
       return sharedNumber.welcome(customerName, eventLines);
     }

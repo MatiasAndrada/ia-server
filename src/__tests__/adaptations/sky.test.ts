@@ -8,9 +8,9 @@ jest.mock('../../utils/logger');
 /**
  * SKY comparte su número entre el bot de reservas y todo lo demás que le llega
  * al local. El mecanismo es el mismo que en De La Fonte y se prueba allá; lo
- * que importa acá es lo propio de este local, y sobre todo el riesgo que trae
- * su configuración: la palabra que canaliza es el NOMBRE del restaurante, así
- * que hay que asegurarse de que pedir una reserva "en Sky" no calle al bot.
+ * que importa acá es lo propio de este local: la palabra que canaliza es el
+ * NOMBRE del restaurante, así que hay que asegurarse de que pedir una reserva
+ * "en Sky" no calle al bot.
  */
 
 const BUSINESS_ID = '00000000-0000-0000-0000-000000000042';
@@ -40,27 +40,22 @@ describe('adaptación SKY', () => {
   });
 
   describe('a qué comercios aplica', () => {
-    it('reconoce el comercio por su nombre, sin configurar nada', () => {
-      expect(findSharedNumberAdaptation(BUSINESS_ID, 'SKY Restaurante and Bar')).toBe(skyAdaptation);
-      expect(findSharedNumberAdaptation(BUSINESS_ID, 'sky')).toBe(skyAdaptation);
-    });
-
-    it('lo reconoce por el id configurado, aunque el nombre no coincida', () => {
+    it('lo reconoce por el id configurado', () => {
       process.env.SKY_BUSINESS_ID = BUSINESS_ID;
 
-      expect(findSharedNumberAdaptation(BUSINESS_ID, 'Rooftop Sin Nombre')).toBe(skyAdaptation);
+      expect(findSharedNumberAdaptation(BUSINESS_ID)).toBe(skyAdaptation);
     });
 
-    it('"sky" se busca como palabra, no como pedazo de otra', () => {
-      // Tres letras sueltas dentro de un nombre ajeno silenciarían un bot que
-      // no tiene nada que ver con esto.
-      expect(findSharedNumberAdaptation('otro-id', 'Whiskey House')).toBeNull();
-      expect(findSharedNumberAdaptation('otro-id', 'Skyline Pizzas')).toBeNull();
+    it('sin el id configurado, NO se aplica', () => {
+      expect(findSharedNumberAdaptation(BUSINESS_ID)).toBeNull();
     });
 
     it('cada local cae en su propia adaptación', () => {
-      expect(findSharedNumberAdaptation(BUSINESS_ID, 'De La Fonte')).toBe(deLaFonteAdaptation);
-      expect(findSharedNumberAdaptation('otro-id', 'La Parrilla')).toBeNull();
+      process.env.SKY_BUSINESS_ID = BUSINESS_ID;
+      process.env.DE_LA_FONTE_BUSINESS_ID = 'otro-id';
+
+      expect(findSharedNumberAdaptation(BUSINESS_ID)).toBe(skyAdaptation);
+      expect(findSharedNumberAdaptation('otro-id')).toBe(deLaFonteAdaptation);
     });
   });
 

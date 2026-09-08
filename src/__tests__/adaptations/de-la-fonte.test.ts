@@ -38,26 +38,18 @@ describe('adaptación De La Fonte', () => {
   });
 
   describe('a qué comercios aplica', () => {
-    it('reconoce el comercio por su nombre, sin configurar nada', () => {
-      // El fallback por nombre es lo que permite desplegar esto sin tocar el
-      // .env del servidor.
-      expect(findSharedNumberAdaptation(BUSINESS_ID, 'De La Fonte')).toBe(deLaFonteAdaptation);
-      expect(findSharedNumberAdaptation(BUSINESS_ID, 'Restaurante De La Fonte')).toBe(
-        deLaFonteAdaptation
-      );
-    });
-
-    it('lo reconoce por el id configurado, aunque el nombre no coincida', () => {
+    it('lo reconoce por el id configurado', () => {
       process.env.DE_LA_FONTE_BUSINESS_ID = `otro-id, ${BUSINESS_ID}`;
 
-      expect(findSharedNumberAdaptation(BUSINESS_ID, 'Trattoria Sin Nombre')).toBe(
-        deLaFonteAdaptation
-      );
+      expect(findSharedNumberAdaptation(BUSINESS_ID)).toBe(deLaFonteAdaptation);
+    });
+
+    it('sin el id configurado, NO se aplica aunque el nombre coincida', () => {
+      expect(findSharedNumberAdaptation(BUSINESS_ID)).toBeNull();
     });
 
     it('NO se aplica a cualquier otro comercio', () => {
-      expect(findSharedNumberAdaptation('otro-id', 'La Parrilla')).toBeNull();
-      expect(findSharedNumberAdaptation('otro-id', null)).toBeNull();
+      expect(findSharedNumberAdaptation('otro-id')).toBeNull();
     });
   });
 

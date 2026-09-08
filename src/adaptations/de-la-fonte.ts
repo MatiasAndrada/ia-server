@@ -14,7 +14,6 @@ export const deLaFonteAdaptation: SharedNumberAdaptation = {
   // todos los traspasos activos.
   id: 'delafonte',
   businessIdEnvVar: 'DE_LA_FONTE_BUSINESS_ID',
-  businessNamePattern: buildKeywordPattern(['de la fonte']),
 
   /**
    * El menú anuncia "escribí Simona", pero nadie escribe sólo lo que se le

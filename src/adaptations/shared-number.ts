@@ -37,10 +37,11 @@ export interface WelcomeEvent {
 /**
  * Todo lo que distingue a un local de otro dentro de este mecanismo.
  *
- * Los patrones llegan ya construidos (y no como listas de palabras) porque la
- * FORMA de matchear también cambia entre locales: De La Fonte busca "simona" en
- * cualquier parte de la frase, mientras que SKY exige el mensaje exacto porque
- * su palabra de canalización es su propio nombre. Ver cada archivo.
+ * Los patrones de `handoffPattern` y `reactivationPattern` llegan ya
+ * construidos (y no como listas de palabras) porque la FORMA de matchear
+ * también cambia entre locales: De La Fonte busca "simona" en cualquier parte
+ * de la frase, mientras que SKY exige el mensaje exacto porque su palabra de
+ * canalización es su propio nombre. Ver cada archivo.
  */
 export interface SharedNumberAdaptation {
   /**
@@ -51,9 +52,6 @@ export interface SharedNumberAdaptation {
 
   /** Variable de entorno con el/los id de comercio, separados por coma. */
   businessIdEnvVar: string;
-
-  /** Cómo reconocer al comercio por su nombre cuando la variable no está. */
-  businessNamePattern: RegExp;
 
   /** Con qué pide el cliente que lo atienda una persona. */
   handoffPattern: RegExp;
@@ -86,21 +84,13 @@ function handoffKey(adaptation: SharedNumberAdaptation, conversationId: string):
 /**
  * ¿Este comercio usa esta adaptación?
  *
- * Se resuelve por la variable de entorno (uno o varios ids separados por coma)
- * y, si no está configurada, por el nombre del comercio. El fallback por nombre
- * es lo que hace que esto funcione sin tocar el `.env` del servidor, que es
- * justamente donde un despliegue de una sola línea se cae.
+ * Se resuelve únicamente por la variable de entorno (uno o varios ids
+ * separados por coma). Si no está configurada, la adaptación se trata como si
+ * no existiera: no hay fallback por nombre, porque matchear por nombre puede
+ * activar la adaptación en un comercio que no es el que se quiso configurar.
  */
-export function matchesBusiness(
-  adaptation: SharedNumberAdaptation,
-  businessId: string,
-  businessName?: string | null
-): boolean {
-  if (configuredBusinessIds(adaptation.businessIdEnvVar).has(businessId.trim().toLowerCase())) {
-    return true;
-  }
-
-  return adaptation.businessNamePattern.test(normalize(businessName ?? ''));
+export function matchesBusiness(adaptation: SharedNumberAdaptation, businessId: string): boolean {
+  return configuredBusinessIds(adaptation.businessIdEnvVar).has(businessId.trim().toLowerCase());
 }
 
 function configuredBusinessIds(envVar: string): Set<string> {

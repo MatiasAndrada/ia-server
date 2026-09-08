@@ -22,13 +22,9 @@ const SHARED_NUMBER_ADAPTATIONS: SharedNumberAdaptation[] = [deLaFonteAdaptation
  * La adaptación de este comercio, o `null` si atiende con el flujo normal —
  * que es el caso de todos menos dos.
  */
-export function findSharedNumberAdaptation(
-  businessId: string,
-  businessName?: string | null
-): SharedNumberAdaptation | null {
+export function findSharedNumberAdaptation(businessId: string): SharedNumberAdaptation | null {
   return (
-    SHARED_NUMBER_ADAPTATIONS.find((adaptation) =>
-      matchesBusiness(adaptation, businessId, businessName)
-    ) ?? null
+    SHARED_NUMBER_ADAPTATIONS.find((adaptation) => matchesBusiness(adaptation, businessId)) ??
+    null
   );
 }

@@ -17,9 +17,6 @@ import { capitalize, type SharedNumberAdaptation, type WelcomeEvent } from './sh
 export const skyAdaptation: SharedNumberAdaptation = {
   id: 'sky',
   businessIdEnvVar: 'SKY_BUSINESS_ID',
-  // Como palabra completa y no como subcadena: "sky" son tres letras y aparece
-  // dentro de demasiadas palabras como para buscarla suelta.
-  businessNamePattern: buildKeywordPattern(['sky']),
 
   /**
    * Acá está la diferencia importante con De La Fonte, y el motivo por el que
