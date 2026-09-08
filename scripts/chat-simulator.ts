@@ -13,7 +13,7 @@
  *
  * Uso: npm run chat:simulate
  * Comandos dentro de la sesión:
- *   /reset          borra draft, historial e idioma cacheado (nueva conversación)
+ *   /reset          borra draft, historial, idioma cacheado y el envío de la carta
  *   /phone <numero> cambia el número de teléfono simulado
  *   /exit           salir
  */
@@ -32,6 +32,7 @@ import { agentService } from '../src/services/agent.service';
 import { SupabaseService } from '../src/services/supabase.service';
 import { clearCachedLanguage } from '../src/i18n/language-store';
 import { resetConversation as resetAgentConversation } from '../src/agent/orchestrator';
+import { clearNotified, menuSendKey } from '../src/utils/notification-dedup';
 import { BaileysMessage, EnvConfig } from '../src/types';
 
 const BUSINESS_ID = process.env.TEST_BUSINESS_ID;
@@ -102,7 +103,11 @@ async function resetConversation(handler: WhatsAppHandler): Promise<void> {
   await agentService.clearConversationHistory(conversationId);
   await resetAgentConversation(conversationId);
   await clearCachedLanguage(BUSINESS_ID as string, phone);
-  console.log('🔄 Conversación reiniciada (draft, historial e idioma cacheado borrados).');
+  // Sin esto, la carta no se vuelve a enviar hasta 15 minutos después: el guard
+  // de reenvío vive fuera de la conversación, así que un /reset lo dejaba en pie
+  // y la siguiente prueba del menú salía sin adjuntos.
+  await clearNotified(menuSendKey(BUSINESS_ID as string, phone));
+  console.log('🔄 Conversación reiniciada (draft, historial, idioma cacheado y envío de carta borrados).');
   console.log('   El idioma guardado en customers.preferred_language NO se borra —');
   console.log('   así se comporta un cliente recurrente real. Para simular un cliente');
   console.log('   nunca visto, usá /phone con un número que no hayas usado antes.\n');
