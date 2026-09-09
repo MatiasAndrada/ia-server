@@ -132,7 +132,7 @@ describe('agent orchestrator', () => {
       expect(llmSpy.mock.calls[0][1]).toContain('SIN nombre utilizable');
     });
 
-    it('avisa al modelo de las reservas activas para que no cree una segunda', async () => {
+    it('avisa al modelo de las reservas activas para que ofrezca modificar en vez de duplicar', async () => {
       jest.spyOn(SupabaseService, 'getActiveReservationsByPhone').mockResolvedValue([
         { id: 'r1', status: 'CONFIRMED', party_size: 4, scheduled_at: null, display_code: 'AB12' },
       ] as any);
@@ -145,7 +145,7 @@ describe('agent orchestrator', () => {
 
       const systemPrompt = llmSpy.mock.calls[0][1];
       expect(systemPrompt).toContain('AB12');
-      expect(systemPrompt).toContain('no crees otra');
+      expect(systemPrompt).toContain('ofrecele modificarla en vez de crear una nueva');
     });
   });
 

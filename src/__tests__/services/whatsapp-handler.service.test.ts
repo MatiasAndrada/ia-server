@@ -394,6 +394,9 @@ describe('WhatsAppHandler — camino del agente', () => {
 
     beforeEach(() => {
       store = new Map();
+      // Desde que dejó de haber fallback por nombre, la adaptación sólo se
+      // activa con el id configurado (ver adaptations/index.ts).
+      globalThis.process.env.DE_LA_FONTE_BUSINESS_ID = BUSINESS_ID;
       jest.spyOn(SupabaseService, 'getBusinessById').mockResolvedValue({
         id: BUSINESS_ID,
         name: 'De La Fonte',
@@ -412,6 +415,10 @@ describe('WhatsAppHandler — camino del agente', () => {
         // El handler cachea el mapeo de JID en cada mensaje.
         set: jest.fn(async () => 'OK'),
       } as any);
+    });
+
+    afterEach(() => {
+      delete globalThis.process.env.DE_LA_FONTE_BUSINESS_ID;
     });
 
     it('a un cliente nuevo le muestra el saludo del local, no el menú de idiomas', async () => {
@@ -501,6 +508,9 @@ describe('WhatsAppHandler — camino del agente', () => {
 
     beforeEach(() => {
       store = new Map();
+      // Ídem: sin el id configurado la adaptación no se aplica (ver
+      // adaptations/index.ts).
+      globalThis.process.env.SKY_BUSINESS_ID = BUSINESS_ID;
       jest.spyOn(SupabaseService, 'getBusinessById').mockResolvedValue({
         id: BUSINESS_ID,
         name: 'SKY Restaurante and Bar',
@@ -519,6 +529,10 @@ describe('WhatsAppHandler — camino del agente', () => {
         del: jest.fn(async (key: string) => (store.delete(key) ? 1 : 0)),
         set: jest.fn(async () => 'OK'),
       } as any);
+    });
+
+    afterEach(() => {
+      delete globalThis.process.env.SKY_BUSINESS_ID;
     });
 
     it('a un cliente nuevo le muestra el saludo del local, no el menú de idiomas', async () => {
