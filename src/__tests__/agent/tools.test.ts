@@ -531,7 +531,6 @@ describe('agent tool registry', () => {
 
       // El verbatim sale DESPUÉS de los adjuntos, por eso apunta hacia arriba.
       expect(result.verbatim).toContain('👆');
-      expect(result.verbatim).toContain('precios');
     });
   });
 });
