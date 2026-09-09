@@ -247,10 +247,7 @@ export const enCatalog: MessageCatalog = {
   },
 
   menuSent(): string {
-    return (
-      "Here's our menu 👆\n\n" +
-      "I don't have the dishes or the prices on my end, so take a look there for what you need."
-    );
+    return "Here's our menu 👆";
   },
 
   /** Summary edit menu for an event booking: the event fixes the date and time. */

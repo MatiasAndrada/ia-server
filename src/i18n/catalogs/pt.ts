@@ -246,10 +246,7 @@ export const ptCatalog: MessageCatalog = {
   },
 
   menuSent(): string {
-    return (
-      'Aí vai o cardápio 👆\n\n' +
-      'Não tenho os pratos nem os preços do meu lado, então dá uma olhada aí no que você precisa.'
-    );
+    return 'Aí vai o cardápio 👆';
   },
 
   /** Menu de edição do resumo quando a reserva é para um evento: o evento fixa data e horário. */

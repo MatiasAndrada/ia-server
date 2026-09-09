@@ -304,10 +304,7 @@ export const esCatalog = {
    * entrega los adjuntos primero—, por eso apunta hacia arriba.
    */
   menuSent(): string {
-    return (
-      'Ahí te paso la carta 👆\n\n' +
-      'No tengo los platos ni los precios de mi lado, así que fijate ahí lo que necesites.'
-    );
+    return 'Ahí te paso la carta 👆';
   },
 
   /** Menú de edición del resumen cuando la reserva es para un evento: la fecha y el horario los fija el evento. */
