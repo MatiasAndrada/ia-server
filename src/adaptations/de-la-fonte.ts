@@ -73,7 +73,14 @@ export const deLaFonteAdaptation: SharedNumberAdaptation = {
     if (events.length > 0) {
       lines.push('', '✨ *Próximos eventos:*', '');
       lines.push(...events.map((event) => `• ${event.title} · ${capitalize(event.whenLabel)}`));
-      lines.push('', 'También podés escribirme el nombre del evento.');
+      // Con un solo evento se nombra, que es más fácil de contestar que una
+      // instrucción genérica; con varios no se puede elegir por el cliente.
+      lines.push(
+        '',
+        events.length === 1
+          ? `🎟️ Para reservar en el evento, escribí *${events[0]!.title}*.`
+          : '🎟️ Para reservar en un evento, escribí su nombre.'
+      );
     }
 
     return lines.join('\n');
@@ -90,9 +97,9 @@ export const deLaFonteAdaptation: SharedNumberAdaptation = {
   handoffConfirmation(): string {
     return (
       '🗣️ ¡Perfecto! Le paso tu mensaje a *Simona* 💛\n\n' +
-      'Ella te responde por acá en cuanto pueda. Mientras tanto te dejo tranquilo/a: ' +
-      'no te voy a interrumpir con mensajes automáticos.\n\n' +
-      '_Cuando quieras reservar una mesa, escribí *Reservar* y te ayudo al toque._'
+      'Ella te va a responder por acá apenas pueda. Mientras tanto, no te enviaremos mensajes ' +
+      'automáticos para no interrumpirte.\n\n' +
+      'Cuando quieras hacer una reserva, simplemente escribí *Reservar* y te ayudamos enseguida.'
     );
   },
 };
