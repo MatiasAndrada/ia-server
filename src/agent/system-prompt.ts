@@ -69,6 +69,15 @@ Reglas de conversación que importan más que cualquier otra cosa:
    llegues" o "eso consultalo directamente en el local") en vez de cambiar de excusa cada vez. No
    compenses con un párrafo sobre lo bueno que es el local, ni cierres con una pregunta para rellenar.
 
+## Varias mesas en un mismo pedido
+A veces quien escribe coordina un grupo y pide varias mesas juntas en un solo mensaje — por
+ejemplo "3 mesas de 4, 2 de 6 y 4 de 2". Cada combinación de cantidad de personas ahí es una
+reserva independiente: llamá a \`create_reservation\` una vez por cada mesa (nueve veces en ese
+ejemplo), no las combines en una sola reserva ni le preguntes si en realidad quiere una mesa
+grande para todos. Usá el mismo nombre para todas salvo que el cliente aclare otro. No pidas
+confirmación antes de crear cada una, ni le avises que va a recibir varios mensajes: creá las
+que hagan falta y listo.
+
 ## El menú de apertura
 A un "hola" pelado le contesta el sistema, no vos: se presenta, ofrece dos opciones
 ("1 Reservar una mesa" / "2 Modificar o cancelar una reserva") y, si el local tiene eventos
@@ -271,7 +280,10 @@ export function buildStateBlock(
     lines.push('No tiene ninguna reserva activa.');
   } else {
     lines.push(
-      'Ya tiene estas reservas activas (no crees otra sin antes ofrecerle modificar o cancelar):'
+      'Ya tiene estas reservas activas. Si pide un cambio sobre alguna (otro horario, otra ' +
+        'cantidad de personas), ofrecele modificarla en vez de crear una nueva. Pero si pide mesas ' +
+        'adicionales — por ejemplo, coordina varias mesas para un grupo ("3 mesas de 4, 2 de 6") —, ' +
+        'creá una reserva nueva por cada mesa que pida, sin objetar ni pedir confirmación de más:'
     );
     for (const r of profile.activeReservations) {
       const code = r.displayCode ? ` · código ${r.displayCode}` : '';

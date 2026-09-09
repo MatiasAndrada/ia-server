@@ -15,7 +15,7 @@ import {
 } from '../types/index.js';
 import { logger, logEvent } from '../utils/logger.js';
 import { openRouterService } from './openrouter.service.js';
-import { describeScheduledAtUtc, isInPast, nowInBuenosAires } from '../utils/reservation-datetime.js';
+import { isInPast } from '../utils/reservation-datetime.js';
 import * as templates from '../utils/message-templates.js';
 
 /**
@@ -27,9 +27,6 @@ import * as templates from '../utils/message-templates.js';
 function phoneKey(phone: string): string {
   return normalizePhone(phone) || phone;
 }
-
-const RESERVATION_OVERLAP_MINUTES = 120;
-const RESERVATION_OVERLAP_MS = RESERVATION_OVERLAP_MINUTES * 60 * 1000;
 
 /**
  * Reservas que OCUPAN el cupo de un evento. Deliberadamente sin WAITING: una
@@ -50,16 +47,6 @@ type BusinessBlockedDatesRow = Database['public']['Tables']['business_blocked_da
 export class SupabaseService {
   private static getClient() {
     return SupabaseConfig.getClient();
-  }
-
-  static reservationsOverlap(
-    newScheduledAt: string | null,
-    existingScheduledAt: string | null
-  ): boolean {
-    const now = Date.now();
-    const newTimestamp = newScheduledAt ? new Date(newScheduledAt).getTime() : now;
-    const existingTimestamp = existingScheduledAt ? new Date(existingScheduledAt).getTime() : now;
-    return Math.abs(newTimestamp - existingTimestamp) < RESERVATION_OVERLAP_MS;
   }
 
   private static async getActiveReservations(
@@ -475,58 +462,10 @@ export class SupabaseService {
       );
       logger.debug('Customer ready', { customerId: customer.id, name: customer.name });
 
-      const activeReservations = await this.getActiveReservations(customer.id, request.businessId);
-      const conflictingReservation = activeReservations.find((reservation) =>
-        this.reservationsOverlap(request.scheduledAt ?? null, reservation.scheduled_at ?? null)
-      );
-
-      if (conflictingReservation) {
-        const nowBA = nowInBuenosAires();
-        const requestedWhenLabel = request.scheduledAt
-          ? describeScheduledAtUtc(request.scheduledAt, nowBA)
-          : templates.instantTurnLabel();
-        const conflictingWhenLabel = conflictingReservation.scheduled_at
-          ? describeScheduledAtUtc(conflictingReservation.scheduled_at, nowBA)
-          : templates.instantTurnLabel();
-
-        const statusLabel = (() => {
-          switch (conflictingReservation.status) {
-            case 'WAITING':
-              return 'Pendiente';
-            case 'CONFIRMED':
-              return 'Confirmada';
-            case 'NOTIFIED':
-              return 'Notificada';
-            case 'SEATED':
-              return 'Finalizada';
-            case 'CANCELLED':
-              return 'Cancelada';
-            case 'NO_SHOW':
-              return 'No show';
-            default:
-              return conflictingReservation.status;
-          }
-        })();
-
-        logEvent('warn', 'reservation.rejected', {
-          reason: 'overlap_with_active_reservation',
-          customerId: customer.id,
-          conflictId: conflictingReservation.id,
-          requestedWhen: requestedWhenLabel,
-          conflictingWhen: conflictingWhenLabel,
-        });
-
-        return {
-          success: false,
-          error: 'Reservation overlaps with an active reservation',
-          blockedMessage: templates.reservationOverlapConflict(
-            requestedWhenLabel,
-            conflictingWhenLabel,
-            conflictingReservation.display_code,
-            statusLabel
-          ),
-        };
-      }
+      // Un mismo cliente puede pedir varias reservas superpuestas a propósito
+      // (el coordinador de un grupo que reserva "3 mesas de 4, 2 de 6, 4 de 2"
+      // en un solo mensaje): cada una se crea como reserva independiente, sin
+      // bloquear por solaparse en el tiempo con otra activa del mismo teléfono.
 
       // Generate display code based on customer initial and phone suffix
       const baseDisplayCode = this.generateDisplayCodeFromCustomer(
