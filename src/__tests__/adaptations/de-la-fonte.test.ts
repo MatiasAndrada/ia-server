@@ -136,10 +136,10 @@ describe('adaptación De La Fonte', () => {
     const welcome = (name: string | null, events: { title: string; whenLabel: string }[] = []) =>
       deLaFonteAdaptation.welcome(name, events);
 
-    it('anuncia que el número es compartido y los dos caminos', () => {
+    it('ofrece los dos caminos: hablar con Simona o reservar', () => {
       const menu = welcome(null);
 
-      expect(menu).toContain('compartido');
+      expect(menu).toContain('De La Fonte');
       expect(menu).toContain('Simona');
       expect(menu).toContain('Reservar');
     });
@@ -150,10 +150,11 @@ describe('adaptación De La Fonte', () => {
 
     it('lista los eventos vigentes, y sin eventos no muestra la sección', () => {
       const conEventos = welcome(null, [{ title: 'Noche de Jazz', whenLabel: 'el sábado' }]);
-      expect(conEventos).toContain('Próximos eventos');
+      expect(conEventos).toContain('nuestro próximo evento');
       expect(conEventos).toContain('Noche de Jazz');
+      expect(conEventos).toContain('→ Escribí *Noche de Jazz* para reservar tu lugar.');
 
-      expect(welcome(null)).not.toContain('Próximos eventos');
+      expect(welcome(null)).not.toContain('evento');
     });
   });
 });

@@ -430,7 +430,7 @@ describe('WhatsAppHandler — camino del agente', () => {
       // Pedir por Simona no puede costar dos preguntas de formulario antes.
       expect(sent).toHaveLength(1);
       expect(sent[0].toLowerCase()).not.toContain('português');
-      expect(sent[0]).toContain('compartido');
+      expect(sent[0]).toContain('De La Fonte');
       expect(sent[0]).toContain('Simona');
       expect(turnSpy).not.toHaveBeenCalled();
     });
