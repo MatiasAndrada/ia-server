@@ -59,27 +59,30 @@ export const deLaFonteAdaptation: SharedNumberAdaptation = {
   welcome(customerName: string | null, events: WelcomeEvent[] = []): string {
     const lines = [
       customerName ? `¡Hola, ${customerName}! 👋` : '¡Hola! 👋',
+      'Bienvenido/a a De La Fonte',
       '',
-      'Bienvenido/a a *De La Fonte* 🍝',
+      '¿Qué te gustaría hacer?',
       '',
-      '📱 Este número es compartido, así que decime qué necesitás:',
-      '',
+      '📅 *Reservar una mesa* → escribí *Reservar*',
       '🗣️ *Hablar con Simona* → escribí *Simona*',
-      '📅 *Reservar en De La Fonte* → escribí *Reservar*',
     ];
 
     // Sin eventos no va ni la sección ni la invitación a nombrar uno: ofrecer
     // algo que no existe deja al cliente escribiendo contra la nada.
     if (events.length > 0) {
-      lines.push('', '✨ *Próximos eventos:*', '');
-      lines.push(...events.map((event) => `• ${event.title} · ${capitalize(event.whenLabel)}`));
-      // Con un solo evento se nombra, que es más fácil de contestar que una
-      // instrucción genérica; con varios no se puede elegir por el cliente.
       lines.push(
         '',
         events.length === 1
-          ? `🎟️ Para reservar en el evento, escribí *${events[0]!.title}*.`
-          : '🎟️ Para reservar en un evento, escribí su nombre.'
+          ? '✨ También podés reservar para nuestro próximo evento:'
+          : '✨ También podés reservar para nuestros próximos eventos:'
+      );
+      lines.push(...events.map((event) => `🍝 ${event.title} · ${capitalize(event.whenLabel)}`));
+      // Con un solo evento se nombra, que es más fácil de contestar que una
+      // instrucción genérica; con varios no se puede elegir por el cliente.
+      lines.push(
+        events.length === 1
+          ? `→ Escribí *${events[0]!.title}* para reservar tu lugar.`
+          : '→ Escribí el nombre del evento para reservar tu lugar.'
       );
     }
 

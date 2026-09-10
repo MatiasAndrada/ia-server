@@ -61,7 +61,7 @@ export const skyAdaptation: SharedNumberAdaptation = {
   welcome(customerName: string | null, events: WelcomeEvent[] = []): string {
     const lines = [
       customerName ? `¡Hola, ${customerName}! 👋` : '¡Hola! 👋',
-      'Bienvenido/a a *SKY Restaurante and Bar* 🍸',
+      'Bienvenido/a a SKY Restaurante and Bar',
       '',
       '¿Qué te gustaría hacer?',
       '',
@@ -78,7 +78,7 @@ export const skyAdaptation: SharedNumberAdaptation = {
           ? '✨ También podés reservar para nuestro próximo evento:'
           : '✨ También podés reservar para nuestros próximos eventos:'
       );
-      lines.push(...events.map((event) => `🎉 ${event.title} · ${capitalize(event.whenLabel)}`));
+      lines.push(...events.map((event) => `🍝 ${event.title} · ${capitalize(event.whenLabel)}`));
       // Con un solo evento se nombra, que es más fácil de contestar que una
       // instrucción genérica; con varios no se puede elegir por el cliente.
       lines.push(
