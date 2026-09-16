@@ -46,7 +46,7 @@ coverage/
 auth_sessions/
 auth_sessions/
 auth_sessions-v2/
-auth_session_backup/
+auth_sessions_backup/
 
 # Overrides de la instancia de desarrollo (ver .env.dev.example)
 .env.dev
