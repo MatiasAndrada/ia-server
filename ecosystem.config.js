@@ -24,7 +24,11 @@ module.exports = {
       //   pm2 set pm2-logrotate:rotateInterval '0 0 * * *'
       merge_logs: true,
       autorestart: true,
-      max_restarts: 10,
+      // 10 dejó el proceso caído 18hs el 2026-09-15 (agotó los reintentos
+      // por un crash-loop y nadie lo notó hasta reiniciarlo a mano). Subido
+      // a 30 como red de seguridad además del fix del rmSync sin try/catch
+      // que causaba el crash.
+      max_restarts: 30,
       min_uptime: '10s',
       restart_delay: 4000,
       kill_timeout: 5000,
