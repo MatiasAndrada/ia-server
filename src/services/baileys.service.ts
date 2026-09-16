@@ -79,6 +79,34 @@ export class BaileysService {
   );
 
   /**
+   * Respaldo vivo de sesiones ya vinculadas (`creds.me.id` presente). Se
+   * actualiza al conectar y periódicamente mientras la sesión sigue activa.
+   * Existe para nunca depender de una única copia en disco de las
+   * credenciales: si `AUTH_DIR/<businessId>` se corrompe o se pierde por un
+   * bug (como el crash del 2026-09-15, que dejó un `creds.json` de 0 bytes),
+   * `startSession`/`recoverSessions` restauran desde acá antes de rendirse y
+   * pedir un QR nuevo.
+   */
+  private readonly BACKUP_DIR = path.join(
+    process.cwd(),
+    process.env.WHATSAPP_AUTH_BACKUP_DIR?.trim() || 'auth_sessions_backup'
+  );
+
+  /**
+   * Destino de los `archiveSessionFiles()`: ninguna ruta automática del
+   * código vuelve a hacer `rm` directo sobre `AUTH_DIR/<businessId>` — ver
+   * historial de este archivo, 2026-09-16. En su lugar, la carpeta se mueve
+   * (atómico, sin el riesgo de ENOTEMPTY de un `rmSync` recursivo) para acá y
+   * se poda pasado `ARCHIVE_RETENTION_MS`.
+   */
+  private readonly ARCHIVE_DIR = path.join(
+    process.cwd(),
+    process.env.WHATSAPP_AUTH_ARCHIVE_DIR?.trim() || 'auth_sessions_archive'
+  );
+
+  private readonly ARCHIVE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+  /**
    * Si está seteada, SOLO estos negocios pueden abrir una sesión de WhatsApp.
    *
    * Un directorio de credenciales separado evita el conflicto por la misma
@@ -126,9 +154,11 @@ export class BaileysService {
    * Ensure auth directory exists
    */
   private ensureAuthDir(): void {
-    if (!fs.existsSync(this.AUTH_DIR)) {
-      fs.mkdirSync(this.AUTH_DIR, { recursive: true });
-      logger.debug('Created auth_sessions directory', { path: this.AUTH_DIR });
+    for (const dir of [this.AUTH_DIR, this.BACKUP_DIR, this.ARCHIVE_DIR]) {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+        logger.debug('Created WhatsApp session directory', { path: dir });
+      }
     }
   }
 
@@ -163,6 +193,111 @@ export class BaileysService {
         error,
       });
       return false;
+    }
+  }
+
+  /**
+   * Copia el estado actual de una sesión vinculada a `BACKUP_DIR`. No hace
+   * nada si la sesión todavía no completó el vinculado (evita acumular
+   * respaldos de QRs nunca escaneados). Escribe a un directorio temporal y
+   * recién al final hace `rename` sobre el respaldo previo, así un fallo a
+   * mitad de camino (disco lleno, proceso matado) nunca deja ni el respaldo
+   * viejo a medio borrar ni uno nuevo a medio escribir.
+   */
+  private backupSessionFiles(businessId: string): void {
+    const sessionPath = this.getSessionPath(businessId);
+    if (!this.hasPersistedCredentials(sessionPath)) {
+      return;
+    }
+
+    const backupPath = path.join(this.BACKUP_DIR, businessId);
+    const tmpPath = `${backupPath}.tmp-${process.pid}-${Date.now()}`;
+
+    try {
+      fs.cpSync(sessionPath, tmpPath, { recursive: true });
+      fs.rmSync(backupPath, { recursive: true, force: true });
+      fs.renameSync(tmpPath, backupPath);
+      logger.debug('Session credentials backed up', { businessId });
+    } catch (error) {
+      fs.rmSync(tmpPath, { recursive: true, force: true, maxRetries: 1 });
+      logger.warn('Failed to back up session credentials', { businessId, error });
+    }
+  }
+
+  /**
+   * Si `AUTH_DIR/<businessId>` no tiene credenciales válidas (falta,
+   * corrupta, vacía) pero hay un respaldo válido en `BACKUP_DIR`, lo
+   * restaura antes de intentar levantar la sesión. Es lo que evita que un
+   * problema puramente local (el bug del 2026-09-15: `creds.json` truncado a
+   * 0 bytes) fuerce un re-vinculado por QR — sólo un logout real desde el
+   * lado de WhatsApp debería pedir eso.
+   */
+  private restoreSessionFromBackupIfNeeded(businessId: string): void {
+    const sessionPath = this.getSessionPath(businessId);
+    if (this.hasPersistedCredentials(sessionPath)) {
+      return;
+    }
+
+    const backupPath = path.join(this.BACKUP_DIR, businessId);
+    if (!this.hasPersistedCredentials(backupPath)) {
+      return;
+    }
+
+    try {
+      fs.rmSync(sessionPath, { recursive: true, force: true });
+      fs.cpSync(backupPath, sessionPath, { recursive: true });
+      logEvent('warn', 'session.restoredFromBackup', { businessId });
+    } catch (error) {
+      logger.error('Failed to restore session from backup', { businessId, error });
+    }
+  }
+
+  /**
+   * Mueve (nunca borra) los archivos de una sesión a `ARCHIVE_DIR` en vez de
+   * `rm`earlos. `rename` es una única syscall atómica — a diferencia de un
+   * `rmSync` recursivo, no puede fallar con ENOTEMPTY si Baileys está
+   * escribiendo un archivo de claves en el mismo directorio en ese instante,
+   * que fue la causa concreta de la caída de 18hs del 2026-09-15. Ninguna
+   * ruta automática de este servicio debe volver a hacer un `rm` directo
+   * sobre `AUTH_DIR/<businessId>` — usar siempre este método.
+   */
+  private archiveSessionFiles(businessId: string, reason: string): void {
+    const sessionPath = this.getSessionPath(businessId);
+    try {
+      if (!fs.existsSync(sessionPath)) {
+        return;
+      }
+
+      const archivePath = path.join(this.ARCHIVE_DIR, `${businessId}-${Date.now()}`);
+      fs.renameSync(sessionPath, archivePath);
+      logger.debug('Session files archived (not deleted)', { businessId, reason, archivePath });
+    } catch (error) {
+      logger.warn('Failed to archive session files', { businessId, reason, error });
+    }
+  }
+
+  /**
+   * Poda sesiones archivadas más viejas que `ARCHIVE_RETENTION_MS`. Sólo
+   * corre sobre `ARCHIVE_DIR` (sesiones ya desvinculadas/reemplazadas), nunca
+   * sobre `AUTH_DIR` ni `BACKUP_DIR`.
+   */
+  private pruneOldArchives(): void {
+    try {
+      if (!fs.existsSync(this.ARCHIVE_DIR)) {
+        return;
+      }
+
+      const cutoff = Date.now() - this.ARCHIVE_RETENTION_MS;
+      for (const dirent of fs.readdirSync(this.ARCHIVE_DIR, { withFileTypes: true })) {
+        if (!dirent.isDirectory()) continue;
+        const entryPath = path.join(this.ARCHIVE_DIR, dirent.name);
+        if (fs.statSync(entryPath).mtimeMs < cutoff) {
+          fs.rmSync(entryPath, { recursive: true, force: true });
+          logger.debug('Pruned old archived session', { dirName: dirent.name });
+        }
+      }
+    } catch (error) {
+      logger.warn('Failed to prune old archived sessions', { error });
     }
   }
 
@@ -419,6 +554,12 @@ export class BaileysService {
       }
 
       const sessionPath = this.getSessionPath(businessId);
+
+      // Auto-sana antes de levantar el socket: si el archivo local quedó
+      // corrupto/vacío pero hay respaldo válido, lo restaura para no forzar
+      // un re-vinculado por QR por un problema puramente local.
+      this.restoreSessionFromBackupIfNeeded(businessId);
+
       // El ciclo de vida detallado del socket es traza: en el log anterior
       // había 2577 "Starting WhatsApp session" contra 481 conexiones logradas,
       // todo en `info`. Lo que importa es el resultado — `session.linked` o
@@ -491,8 +632,16 @@ export class BaileysService {
       
       logger.debug('Socket created and stored', { businessId });
 
-      // Handle credentials update
-      sock.ev.on('creds.update', saveCreds);
+      // Handle credentials update. El respaldo va después de guardar y sólo
+      // corre una vez cada 5 minutos por negocio (creds.update puede disparar
+      // seguido por rotación de claves) — no vale la pena copiar el directorio
+      // en cada evento.
+      sock.ev.on('creds.update', async (...args: unknown[]) => {
+        await saveCreds(...(args as Parameters<typeof saveCreds>));
+        if (throttle(`session.backup:${businessId}`, 5 * 60_000).allowed) {
+          this.backupSessionFiles(businessId);
+        }
+      });
 
       // Handle connection updates
       sock.ev.on('connection.update', async (update: any) => {
@@ -706,12 +855,13 @@ export class BaileysService {
             : `Session rejected by WhatsApp (statusCode ${statusCode}), cleared for re-linking`;
         await this.updateSessionStatus(businessId, 'error', reason);
 
-        // Delete session files from disk
-        const sessionPath = this.getSessionPath(businessId);
-        if (fs.existsSync(sessionPath)) {
-          fs.rmSync(sessionPath, { recursive: true, force: true });
-          logger.debug('Session files deleted from disk after unrecoverable disconnect', { businessId, statusCode });
-        }
+        // Archiva (no borra) los archivos de la sesión: ver
+        // `archiveSessionFiles`. La próxima vez que se pida un `start` para
+        // este negocio, `AUTH_DIR/<businessId>` no existe, Baileys arranca de
+        // cero y emite un QR real en vez de chocar contra el mismo rechazo —
+        // pero la copia vieja queda recuperable en `ARCHIVE_DIR` por si este
+        // rechazo terminó siendo un falso positivo.
+        this.archiveSessionFiles(businessId, `unrecoverable disconnect (statusCode ${statusCode})`);
       }
     } else if (connection === 'open') {
       const previousAttempts = this.reconnectAttempts.get(businessId) || 0;
@@ -745,6 +895,10 @@ export class BaileysService {
       });
 
       await this.updateSessionStatus(businessId, 'connected');
+
+      // Respaldo inmediato: es el momento con más certeza de que las
+      // credenciales en disco son válidas y están completas.
+      this.backupSessionFiles(businessId);
     }
   }
 
@@ -1257,51 +1411,58 @@ export class BaileysService {
   async recoverSessions(): Promise<void> {
     try {
       logger.debug('Recovering existing sessions');
+      this.pruneOldArchives();
 
-      if (!fs.existsSync(this.AUTH_DIR)) {
-        logger.debug('No auth directory found, skipping recovery');
-        return;
-      }
+      const listDirNames = (dir: string): string[] =>
+        fs.existsSync(dir)
+          ? fs
+              .readdirSync(dir, { withFileTypes: true })
+              .filter((d) => d.isDirectory() && !d.name.includes('.tmp-'))
+              .map((d) => d.name)
+          : [];
 
-      const directories = fs.readdirSync(this.AUTH_DIR, { withFileTypes: true });
-      const sessionDirs = directories.filter((dirent: fs.Dirent) => dirent.isDirectory());
+      // Unión con BACKUP_DIR: un negocio cuyo `AUTH_DIR/<businessId>` ya no
+      // existe (por ejemplo, archivado antes de este fix) pero que tiene un
+      // respaldo válido también debe recuperarse, no sólo los que siguen
+      // teniendo carpeta primaria.
+      const businessIds = Array.from(
+        new Set([...listDirNames(this.AUTH_DIR), ...listDirNames(this.BACKUP_DIR)])
+      );
 
-      logger.debug('Found session directories', { count: sessionDirs.length });
+      logger.debug('Found session directories', { count: businessIds.length });
 
-      for (const dirent of sessionDirs) {
+      for (const businessId of businessIds) {
         try {
-          const sessionPath = path.join(this.AUTH_DIR, dirent.name);
+          this.restoreSessionFromBackupIfNeeded(businessId);
 
+          const sessionPath = this.getSessionPath(businessId);
           if (!this.hasPersistedCredentials(sessionPath)) {
             logger.debug('Skipping recovery, no persisted credentials (never fully linked)', {
-              dirName: dirent.name,
+              dirName: businessId,
             });
             continue;
           }
 
           // Try to get businessId from metadata file
-          const businessId = await this.getBusinessIdFromSession(sessionPath);
+          const metadataBusinessId = await this.getBusinessIdFromSession(sessionPath);
 
-          if (!businessId) {
+          if (!metadataBusinessId) {
             // Fallback: use directory name as businessId (for backward compatibility)
             logger.warn('No business metadata found, using directory name as businessId', {
-              dirName: dirent.name,
+              dirName: businessId,
             });
-            const fallbackBusinessId = dirent.name;
 
-            // Start session with fallback businessId
-            await this.startSession(fallbackBusinessId);
+            await this.startSession(businessId);
             logEvent('info', 'session.recovered', {
-              businessId: fallbackBusinessId,
+              businessId,
               source: 'directory-name',
             });
           } else {
-            // Start session with businessId from metadata
-            await this.startSession(businessId);
-            logEvent('info', 'session.recovered', { businessId, source: 'metadata' });
+            await this.startSession(metadataBusinessId);
+            logEvent('info', 'session.recovered', { businessId: metadataBusinessId, source: 'metadata' });
           }
         } catch (error) {
-          logger.error('Failed to recover session', { error, dirName: dirent.name });
+          logger.error('Failed to recover session', { error, dirName: businessId });
         }
       }
     } catch (error) {
@@ -1310,19 +1471,20 @@ export class BaileysService {
   }
 
   /**
-   * Delete session from disk
+   * Delete session from disk.
+   *
+   * "Delete" es el contrato de la API (desvincula el negocio de WhatsApp),
+   * pero el archivo nunca se destruye de verdad — `stopSession` ya dispara
+   * un logout real, que a su vez archiva la carpeta vía
+   * `handleConnectionUpdate`; esto es sólo un respaldo idempotente por si esa
+   * ruta async no llegó a correr a tiempo. Ver `archiveSessionFiles`.
    */
   async deleteSession(businessId: string): Promise<void> {
     try {
       // Stop session first
       await this.stopSession(businessId);
 
-      // Delete from disk
-      const sessionPath = this.getSessionPath(businessId);
-      if (fs.existsSync(sessionPath)) {
-        fs.rmSync(sessionPath, { recursive: true, force: true });
-        logger.debug('Session deleted from disk', { businessId });
-      }
+      this.archiveSessionFiles(businessId, 'explicit deleteSession call');
     } catch (error) {
       logger.error('Error deleting session', { error, businessId });
     }

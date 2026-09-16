@@ -28,6 +28,7 @@ export type LogEvent =
   | 'session.unrecoverable'
   | 'session.reconnecting'
   | 'session.recovered'
+  | 'session.restoredFromBackup'
   | 'session.stopped'
 
   // ─── Mensajería ───
@@ -91,6 +92,7 @@ export const EVENT_LABELS: Record<LogEvent, string> = {
   'session.unrecoverable': 'WhatsApp session rejected by server, cleared for re-linking',
   'session.reconnecting': 'WhatsApp session reconnecting',
   'session.recovered': 'WhatsApp session recovered',
+  'session.restoredFromBackup': 'WhatsApp session credentials restored from backup',
   'session.stopped': 'WhatsApp session stopped',
 
   'msg.in': 'Message received',
