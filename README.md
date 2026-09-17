@@ -67,6 +67,14 @@ El orquestador no necesita reprocesar reglas de negocio en el prompt: viven en e
 
 > `POST /api/chat` y las rutas bajo `/api/agents` se mantienen por compatibilidad para integraciones externas que ya reciben el mensaje por otro canal — no pasan por el orquestador de arriba, solo por el agente `waitlist` legacy. Ver [docs/ENDPOINTS.md](docs/ENDPOINTS.md) para el detalle de ambos caminos (WhatsApp directo y HTTP).
 
+### Persistencia de sesiones de WhatsApp
+
+Las credenciales de cada sesión (`auth_sessions/<businessId>`) viven en tres carpetas con roles distintos (`src/services/baileys.service.ts`):
+
+- **`auth_sessions/`** — credenciales activas que usa Baileys para la sesión en curso.
+- **`auth_sessions_backup/`** — respaldo *vivo* de una sesión ya vinculada, actualizado periódicamente mientras sigue conectada. Si `auth_sessions/<businessId>` se corrompe o se pierde, se restaura desde acá antes de pedir un QR nuevo (evita re-vincular por un problema puramente local).
+- **`auth_sessions_archive/`** — destino de sesiones descartadas (desvinculadas, reemplazadas, o respaldos ya inválidos). Las carpetas se mueven acá con `rename` (atómico) en vez de borrarse con `rm`, y recién se podan a los 30 días. Ningún path del servicio hace `rm` directo sobre una sesión activa.
+
 ## 📦 Requisitos Previos
 
 - **Node.js** 22+ y npm 10+
