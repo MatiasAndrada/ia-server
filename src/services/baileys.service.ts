@@ -277,6 +277,31 @@ export class BaileysService {
   }
 
   /**
+   * Mueve (nunca borra) `BACKUP_DIR/<businessId>` a `ARCHIVE_DIR` cuando una
+   * sesión queda irrecuperable. Sin esto, `restoreSessionFromBackupIfNeeded`
+   * seguía encontrando el respaldo viejo en cada `start` posterior (el
+   * recovery automático al reiniciar el proceso, o un click de "vincular" del
+   * frontend) y resucitaba las credenciales ya revocadas por WhatsApp en vez
+   * de dejar que Baileys arrancara de cero y emitiera un QR real — el negocio
+   * quedaba pedaleando en el mismo rechazo para siempre y el QR nunca se
+   * llegaba a generar.
+   */
+  private invalidateBackupFiles(businessId: string, reason: string): void {
+    const backupPath = path.join(this.BACKUP_DIR, businessId);
+    try {
+      if (!fs.existsSync(backupPath)) {
+        return;
+      }
+
+      const archivePath = path.join(this.ARCHIVE_DIR, `${businessId}-backup-${Date.now()}`);
+      fs.renameSync(backupPath, archivePath);
+      logger.debug('Stale session backup archived (not deleted)', { businessId, reason, archivePath });
+    } catch (error) {
+      logger.warn('Failed to archive stale session backup', { businessId, reason, error });
+    }
+  }
+
+  /**
    * Poda sesiones archivadas más viejas que `ARCHIVE_RETENTION_MS`. Sólo
    * corre sobre `ARCHIVE_DIR` (sesiones ya desvinculadas/reemplazadas), nunca
    * sobre `AUTH_DIR` ni `BACKUP_DIR`.
@@ -860,8 +885,13 @@ export class BaileysService {
         // este negocio, `AUTH_DIR/<businessId>` no existe, Baileys arranca de
         // cero y emite un QR real en vez de chocar contra el mismo rechazo —
         // pero la copia vieja queda recuperable en `ARCHIVE_DIR` por si este
-        // rechazo terminó siendo un falso positivo.
-        this.archiveSessionFiles(businessId, `unrecoverable disconnect (statusCode ${statusCode})`);
+        // rechazo terminó siendo un falso positivo. También hay que invalidar
+        // `BACKUP_DIR`: si no, `restoreSessionFromBackupIfNeeded` la vuelve a
+        // traer en el próximo `start` y el QR nunca se genera (ver
+        // `invalidateBackupFiles`).
+        const archiveReason = `unrecoverable disconnect (statusCode ${statusCode})`;
+        this.archiveSessionFiles(businessId, archiveReason);
+        this.invalidateBackupFiles(businessId, archiveReason);
       }
     } else if (connection === 'open') {
       const previousAttempts = this.reconnectAttempts.get(businessId) || 0;
@@ -1485,6 +1515,7 @@ export class BaileysService {
       await this.stopSession(businessId);
 
       this.archiveSessionFiles(businessId, 'explicit deleteSession call');
+      this.invalidateBackupFiles(businessId, 'explicit deleteSession call');
     } catch (error) {
       logger.error('Error deleting session', { error, businessId });
     }
