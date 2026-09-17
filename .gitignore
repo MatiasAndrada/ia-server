@@ -47,6 +47,7 @@ auth_sessions/
 auth_sessions/
 auth_sessions-v2/
 auth_sessions_backup/
+auth_sessions_archive/
 
 # Overrides de la instancia de desarrollo (ver .env.dev.example)
 .env.dev
