@@ -92,9 +92,10 @@ export const esCatalog = {
   languageWelcomeMenu(businessName: string): string {
     return (
       `🌎 ¡Bienvenido a *${businessName}*!\n\n` +
-      `¿En qué idioma te acompañamos con tu reserva?\n\n` +
+      `¿En qué idioma preferís hacer tu reserva?\n\n` +
       `${buildLanguageMenuLines()}\n\n` +
-      `Respondé con el *número* del idioma que preferís, o seguí escribiendo y te atiendo en tu idioma.`
+      `Respondé con el número que prefieras.\n\n` +
+      `💬 ¿Elegiste mal? No pasa nada. Escribime en tu idioma en cualquier momento y continuaré la conversación en ese idioma.`
     );
   },
 

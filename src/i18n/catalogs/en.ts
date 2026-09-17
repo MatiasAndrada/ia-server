@@ -66,9 +66,10 @@ export const enCatalog: MessageCatalog = {
   languageWelcomeMenu(businessName: string): string {
     return (
       `🌎 Welcome to *${businessName}*!\n\n` +
-      `Which language would you like us to use for your booking?\n\n` +
+      `Which language would you like to use for your booking?\n\n` +
       `${buildLanguageMenuLines()}\n\n` +
-      `Reply with the *number* of your preferred language, or just keep writing and I'll follow your lead.`
+      `Reply with the number you prefer.\n\n` +
+      `💬 Picked the wrong one? No worries. Write to me in your language at any time and I'll continue the conversation in that language.`
     );
   },
 
