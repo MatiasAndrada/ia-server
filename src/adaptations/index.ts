@@ -1,9 +1,11 @@
 import { deLaFonteAdaptation } from './de-la-fonte.js';
+import { laMisionAdaptation } from './la-mision.js';
 import { skyAdaptation } from './sky.js';
 import { matchesBusiness, type SharedNumberAdaptation } from './shared-number.js';
 
 export {
   interceptSharedNumberTurn,
+  markWelcomeMenuShown,
   type SharedNumberAdaptation,
   type SharedNumberOutcome,
   type WelcomeEvent,
@@ -16,7 +18,11 @@ export {
  * orden importa sólo si dos adaptaciones pudieran matchear el mismo comercio,
  * cosa que hoy no pasa: gana la primera.
  */
-const SHARED_NUMBER_ADAPTATIONS: SharedNumberAdaptation[] = [deLaFonteAdaptation, skyAdaptation];
+const SHARED_NUMBER_ADAPTATIONS: SharedNumberAdaptation[] = [
+  deLaFonteAdaptation,
+  skyAdaptation,
+  laMisionAdaptation,
+];
 
 /**
  * La adaptación de este comercio, o `null` si atiende con el flujo normal —

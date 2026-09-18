@@ -59,6 +59,22 @@ export interface SharedNumberAdaptation {
   /** Con qué vuelve el bot a hablar. */
   reactivationPattern: RegExp;
 
+  /**
+   * Sólo para locales cuyo saludo ofrece elegir por número además de por
+   * palabra (ver `la-mision.ts`). Si está seteado, vale exactamente lo mismo
+   * que `handoffPattern` — pero únicamente en la respuesta INMEDIATA al
+   * saludo, la que llega justo después de mostrarlo (ver `markWelcomeMenuShown`
+   * más abajo).
+   *
+   * Pasado ese único turno, el dígito vuelve a ser un mensaje cualquiera: si
+   * más adelante el flujo de reserva pregunta algo que se contesta con un
+   * número ("¿para cuántos? 1"), esa respuesta no tiene que poder canalizar
+   * por accidente. Y un traspaso ya activo tampoco se reactiva con el dígito
+   * nunca — de eso se ocupan sólo las palabras de `reactivationPattern`, así
+   * que ni siquiera se consulta acá dentro del branch de `isHandedOff`.
+   */
+  handoffMenuDigit?: string;
+
   /** Saludo de apertura, en reemplazo del menú genérico. */
   welcome(customerName: string | null, events: WelcomeEvent[]): string;
 
@@ -79,6 +95,78 @@ const HANDOFF_TTL_SECONDS = 12 * 60 * 60;
 
 function handoffKey(adaptation: SharedNumberAdaptation, conversationId: string): string {
   return `adaptation:${adaptation.id}:handoff:${conversationId}`;
+}
+
+/**
+ * Cuánto dura la ventana en la que el dígito de `handoffMenuDigit` vale como
+ * respuesta al saludo. Media hora es tiempo de sobra para contestar un menú
+ * que se acaba de leer; pasado eso, un "1" suelto no tiene por qué seguir
+ * significando "consultas" — es más probable que sea la respuesta a otra
+ * pregunta que ya se le hizo al cliente.
+ */
+const MENU_REPLY_TTL_SECONDS = 30 * 60;
+
+function menuReplyKey(adaptation: SharedNumberAdaptation, conversationId: string): string {
+  return `adaptation:${adaptation.id}:menu-reply:${conversationId}`;
+}
+
+/**
+ * Marca que se acaba de mostrar el saludo de este local, así el próximo turno
+ * sabe que un dígito suelto puede ser la respuesta a ese menú.
+ *
+ * No hace nada si el local no ofrece elegir por número: guardar la marca para
+ * un local que nunca la va a consultar es trabajo de más contra Redis.
+ */
+export async function markWelcomeMenuShown(
+  adaptation: SharedNumberAdaptation,
+  conversationId: string
+): Promise<void> {
+  if (adaptation.handoffMenuDigit === undefined) return;
+
+  try {
+    if (!RedisConfig.isReady()) return;
+    await RedisConfig.getClient().setEx(
+      menuReplyKey(adaptation, conversationId),
+      MENU_REPLY_TTL_SECONDS,
+      '1'
+    );
+  } catch (error) {
+    logger.warn('Failed to persist the welcome-menu-reply flag', {
+      conversationId,
+      adaptation: adaptation.id,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+}
+
+/**
+ * Consume la marca de `markWelcomeMenuShown`: la lee y la borra en el mismo
+ * paso, para que sólo pueda valer una vez. Se llama en CADA turno sin
+ * traspaso activo (no sólo cuando el mensaje es el dígito) — si no se
+ * consumiera siempre, un primer "hola" la dejaría viva y un "1" varios
+ * mensajes después la heredaría sin ser realmente la respuesta al saludo.
+ */
+async function consumeMenuReplyFlag(
+  adaptation: SharedNumberAdaptation,
+  conversationId: string
+): Promise<boolean> {
+  if (adaptation.handoffMenuDigit === undefined) return false;
+
+  try {
+    if (!RedisConfig.isReady()) return false;
+    const client = RedisConfig.getClient();
+    const key = menuReplyKey(adaptation, conversationId);
+    const raw = await client.get(key);
+    if (raw !== null) await client.del(key);
+    return raw !== null;
+  } catch (error) {
+    logger.warn('Failed to read the welcome-menu-reply flag, the digit is ignored', {
+      conversationId,
+      adaptation: adaptation.id,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+    return false;
+  }
 }
 
 /**
@@ -146,12 +234,22 @@ export async function interceptSharedNumberTurn(
     return { action: 'silence' };
   }
 
-  if (adaptation.handoffPattern.test(normalized)) {
+  // Se consume en CADA turno sin traspaso activo, no sólo cuando el mensaje
+  // matchea el dígito: es la única forma de que la marca sirva nada más que
+  // para la respuesta inmediata al saludo (ver `consumeMenuReplyFlag`).
+  const repliedToMenu = await consumeMenuReplyFlag(adaptation, conversationId);
+  const isMenuDigit =
+    repliedToMenu &&
+    adaptation.handoffMenuDigit !== undefined &&
+    normalized === adaptation.handoffMenuDigit;
+
+  if (adaptation.handoffPattern.test(normalized) || isMenuDigit) {
     await handOffToHuman(adaptation, conversationId);
     logEvent('info', 'handoff.started', {
       conversationId,
       adaptation: adaptation.id,
       ttlSeconds: HANDOFF_TTL_SECONDS,
+      via: isMenuDigit ? 'menu-digit' : 'keyword',
     });
     return { action: 'reply', text: adaptation.handoffConfirmation() };
   }
