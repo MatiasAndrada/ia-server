@@ -55,6 +55,7 @@ import { formatName } from '../utils/formatters.js';
 import {
   findSharedNumberAdaptation,
   interceptSharedNumberTurn,
+  markWelcomeMenuShown,
 } from '../adaptations/index.js';
 
 /** How long (ms) to wait for more messages before processing the batch. */
@@ -499,7 +500,12 @@ export class WhatsAppHandler {
             });
           }
 
-          const menu = await this.buildWelcomeMenu(businessId, businessStatus.name, parsedName.name);
+          const menu = await this.buildWelcomeMenu(
+            businessId,
+            businessStatus.name,
+            parsedName.name,
+            conversationId
+          );
           await this.sendWhatsAppMessage(businessId, from, menu);
           await appendExchange(conversationId, messageText, menu);
 
@@ -537,7 +543,8 @@ export class WhatsAppHandler {
         const menu = await this.buildWelcomeMenu(
           businessId,
           businessStatus.name,
-          knownName && knownName.toLowerCase() !== 'unknown' ? knownName : null
+          knownName && knownName.toLowerCase() !== 'unknown' ? knownName : null,
+          conversationId
         );
         await this.sendWhatsAppMessage(businessId, from, menu);
         await appendExchange(conversationId, messageText, menu);
@@ -629,7 +636,8 @@ export class WhatsAppHandler {
   private async buildWelcomeMenu(
     businessId: string,
     businessName: string | null | undefined,
-    customerName: string | null
+    customerName: string | null,
+    conversationId: string
   ): Promise<string> {
     const events = await SupabaseService.getActiveEvents(businessId);
     const nowBA = nowInBuenosAires();
@@ -642,6 +650,10 @@ export class WhatsAppHandler {
     // la primera opción no es reservar, es elegir si te atiende una persona.
     const sharedNumber = findSharedNumberAdaptation(businessId);
     if (sharedNumber) {
+      // Habilita, sólo para el próximo turno, que un dígito del menú (ver
+      // `handoffMenuDigit`) valga como respuesta — no hace nada en los locales
+      // que no ofrecen elegir por número.
+      await markWelcomeMenuShown(sharedNumber, conversationId);
       return sharedNumber.welcome(customerName, eventLines);
     }
 
