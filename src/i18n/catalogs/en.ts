@@ -69,7 +69,7 @@ export const enCatalog: MessageCatalog = {
       `Which language would you like to use for your booking?\n\n` +
       `${buildLanguageMenuLines()}\n\n` +
       `Reply with the number you prefer.\n\n` +
-      `💬 Picked the wrong one? No worries. Write to me in your language at any time and I'll continue the conversation in that language.`
+      `💬 Picked the wrong one? No worries, write to me in your language at any time and I'll continue the conversation in that language.`
     );
   },
 

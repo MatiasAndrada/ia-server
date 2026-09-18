@@ -64,11 +64,11 @@ export const ptCatalog: MessageCatalog = {
 
   languageWelcomeMenu(businessName: string): string {
     return (
-      `🌎 Bem-vindo ao *${businessName}*!\n\n` +
+      `🌎 Bem-vindos ao *${businessName}*!\n\n` +
       `Em qual idioma você prefere fazer sua reserva?\n\n` +
       `${buildLanguageMenuLines()}\n\n` +
       `Responda com o número que preferir.\n\n` +
-      `💬 Escolheu errado? Sem problemas. Escreva para mim no seu idioma a qualquer momento e eu continuarei a conversa nesse idioma.`
+      `💬 Escolheu errado? Sem problemas, escreva para mim no seu idioma a qualquer momento e eu continuarei a conversa nesse idioma.`
     );
   },
 
