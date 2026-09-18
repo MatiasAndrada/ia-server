@@ -68,14 +68,13 @@ class AgentService {
           currentStep: context?.currentStep,
         });
 
-        // Hard-block only prompt-injection attempts and the out-of-window date
-        // rule (both deterministic, non-negotiable). A generic 'off_topic'
-        // classification (message just didn't match any known reservation
-        // pattern — e.g. "¿para qué servís?") falls through to the LLM below
-        // instead of the canned bounce, so genuine questions get a real answer.
+        // Hard-block only prompt-injection attempts (deterministic,
+        // non-negotiable). A generic 'off_topic' classification (message just
+        // didn't match any known reservation pattern — e.g. "¿para qué
+        // servís?") falls through to the LLM below instead of the canned
+        // bounce, so genuine questions get a real answer.
         const mustHardBlock =
-          scopeEvaluation.decision === 'out_of_window' ||
-          (scopeEvaluation.decision === 'off_topic' && scopeEvaluation.reason === 'prompt_injection');
+          scopeEvaluation.decision === 'off_topic' && scopeEvaluation.reason === 'prompt_injection';
 
         if (mustHardBlock && scopeEvaluation.message) {
           if (conversationId) {

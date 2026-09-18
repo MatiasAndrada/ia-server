@@ -12,9 +12,13 @@ import type { WeeklyHours, WeeklyHoursDayKey, WeeklyHoursShift } from '../types/
 export const BA_OFFSET_MS = 3 * 60 * 60 * 1000;
 
 const WEEKDAY_KEYS = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
-const REQUESTED_DAY_WINDOW = 60; // today + next 59 days
-/** Same value, exported for callers outside this module (e.g. reservation-scope.ts). */
-export const BOOKING_WINDOW_DAYS = REQUESTED_DAY_WINDOW;
+/**
+ * No es un límite de negocio — no hay máximo de anticipación para reservar.
+ * Es sólo el horizonte de escaneo día a día que usan `findNextOpenSlot`,
+ * `findSoonestBookableSlot` y la resolución de "jueves 17" para no iterar
+ * para siempre si el comercio no abre nunca / está bloqueado muy adelante.
+ */
+const REQUESTED_DAY_WINDOW = 60;
 
 /**
  * Narrower window used only by the weekday-NAME listing helpers
@@ -104,9 +108,7 @@ const SLASH_DATE_PATTERN = /\b(\d{1,2})\/(\d{1,2})(?:\/\d{2,4})?\b/;
  * 17/07"). Builds the date in the current BA year; if that date already
  * passed, rolls it to next year (handles the December→January edge). Returns
  * `null` only for a syntactically-impossible calendar date (e.g. 31/04,
- * 30/02) — a date outside the booking window is still returned, so the
- * caller's `isWithinBookingWindow` check can give the specific "out of
- * window" message instead of a generic "didn't understand".
+ * 30/02) — any real calendar date is accepted, however far in the future.
  */
 function parseExplicitSlashDate(normalized: string, todayStart: Date): Date | null {
   const match = normalized.match(SLASH_DATE_PATTERN);
@@ -168,8 +170,8 @@ function hasNextOccurrenceModifier(normalized: string, weekdayKey: string): bool
  * name — optionally qualified as "que viene"/"próximo" (next occurrence
  * instead of the nearest) or paired with an explicit day-of-month ("jueves
  * 17", resolved directly when that's a real occurrence of that weekday
- * within the booking window). A bare weekday name with neither qualifier
- * still resolves to its NEAREST occurrence (today included).
+ * within the day-scanning horizon). A bare weekday name with neither
+ * qualifier still resolves to its NEAREST occurrence (today included).
  */
 export function parseRelativeDay(text: string, nowBA: Date): ParsedDay | null {
   const normalized = normalizeReservationScopeText(text);
@@ -203,11 +205,11 @@ export function parseRelativeDay(text: string, nowBA: Date): ParsedDay | null {
     const nearestDiff = (i - todayDow + 7) % 7;
 
     // "jueves 17": if the day-of-month actually falls on this weekday
-    // somewhere in the booking window, resolve directly to it instead of the
-    // nearest occurrence. If it doesn't match any in-window occurrence, fall
-    // through to the nearest-occurrence result below — the caller's
-    // findWeekdayDayNumberMismatch will flag the mismatch and offer that
-    // nearest date as an alternative.
+    // somewhere within the day-scanning horizon, resolve directly to it
+    // instead of the nearest occurrence. If it doesn't match any occurrence
+    // in that horizon, fall through to the nearest-occurrence result below —
+    // the caller's findWeekdayDayNumberMismatch will flag the mismatch and
+    // offer that nearest date as an alternative.
     const requestedDayNumber = extractAdjacentDayNumber(normalized, weekdayKey);
     if (requestedDayNumber !== null) {
       for (let d = 0; d < REQUESTED_DAY_WINDOW; d += 1) {
@@ -240,11 +242,11 @@ export interface WeekdayDayNumberMismatch {
 /**
  * Detects when the customer named a weekday together with an explicit
  * day-of-month number that does NOT match any occurrence of that weekday
- * within the booking window (e.g. "jueves 17" when no Thursday in the next
- * `BOOKING_WINDOW_DAYS` days falls on the 17th) — `parseRelativeDay` already
- * tries to resolve that exact combination directly (see its weekday loop);
- * this only fires when that lookup failed and it fell back to the nearest
- * occurrence instead, ignoring the requested day-of-month.
+ * within the day-scanning horizon (e.g. "jueves 17" when no Thursday in the
+ * next `REQUESTED_DAY_WINDOW` days falls on the 17th) — `parseRelativeDay`
+ * already tries to resolve that exact combination directly (see its weekday
+ * loop); this only fires when that lookup failed and it fell back to the
+ * nearest occurrence instead, ignoring the requested day-of-month.
  *
  * Only matches a number immediately adjacent to the weekday token (in either
  * order) so that time-of-day mentions in the same message ("jueves a las 17",
@@ -265,13 +267,6 @@ export function findWeekdayDayNumberMismatch(
     requestedDayNumber,
     weekdayLabel: weekdayName(parsedDay.baDate.getUTCDay()),
   };
-}
-
-/** True when `baDate` falls within [today, today + 59 days] in Buenos Aires time. */
-export function isWithinBookingWindow(baDate: Date, nowBA: Date): boolean {
-  const start = startOfBaDay(nowBA);
-  const end = addBaDays(start, REQUESTED_DAY_WINDOW - 1);
-  return baDate.getTime() >= start.getTime() && baDate.getTime() <= end.getTime();
 }
 
 function clampTime(hour: number, minute: number): ParsedTime | null {
@@ -480,10 +475,10 @@ export function formatOpenDays(weeklyHours: WeeklyHours): string {
  * a 7-day window, so a blocked occurrence removes that weekday from the list.
  *
  * Deliberately scoped to `NEAR_TERM_WEEKDAY_WINDOW` rather than the full
- * `BOOKING_WINDOW_DAYS`: a bare weekday-name reply always resolves to its
- * NEAREST occurrence (see `parseRelativeDay`), so listing a weekday whose
- * only open occurrence is further out would offer something the customer's
- * plain-name reply couldn't actually reach.
+ * day-scanning horizon (`REQUESTED_DAY_WINDOW`): a bare weekday-name reply
+ * always resolves to its NEAREST occurrence (see `parseRelativeDay`), so
+ * listing a weekday whose only open occurrence is further out would offer
+ * something the customer's plain-name reply couldn't actually reach.
  */
 export function formatBookableDays(
   weeklyHours: WeeklyHours,
@@ -782,18 +777,18 @@ export function findNextSlotOnDay(
 }
 
 /**
- * Finds the soonest bookable slot within the booking window, honoring business
- * hours, an optional per-date "blocked" predicate, an optional preferred start
- * day, and an optional "never today" constraint. Powers the proactive
- * suggestion offered when the customer enters an unavailable day or time so
- * they can accept it with "sí" (or type another day/time to override).
+ * Finds the soonest bookable slot within the day-scanning horizon, honoring
+ * business hours, an optional per-date "blocked" predicate, an optional
+ * preferred start day, and an optional "never today" constraint. Powers the
+ * proactive suggestion offered when the customer enters an unavailable day or
+ * time so they can accept it with "sí" (or type another day/time to override).
  *
  * - `skipToday`: never propose today's date — used once the customer has
  *   committed to picking a specific (non-today) day, so the suggestion respects
  *   that intent ("no del día actual si es que se seleccionó otro día").
  * - `preferDate`: start scanning on this day before rolling forward (e.g. the
  *   day the customer already chose). Earlier days — and, with `skipToday`,
- *   today — are skipped. Still bounded by the same booking window.
+ *   today — are skipped. Still bounded by the same scanning horizon.
  * - `isDateBlocked`: returns true for business-blocked date keys, which are
  *   skipped like closed days.
  *

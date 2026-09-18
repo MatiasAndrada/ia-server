@@ -3,7 +3,7 @@ import { isMultilingualGreeting } from '../i18n/keywords.js';
 import { catalog } from '../i18n/catalogs/index.js';
 import { normalizeTemporalTokens } from '../i18n/date-normalization.js';
 
-export type ReservationScopeDecision = 'allow' | 'off_topic' | 'out_of_window';
+export type ReservationScopeDecision = 'allow' | 'off_topic';
 
 export interface ReservationScopeContext {
   businessName?: string;
@@ -49,10 +49,6 @@ export function buildReservationOffTopicMessage(businessName?: string): string {
   return catalog().reservationOffTopic(resolveBusinessName(businessName));
 }
 
-export function buildReservationOutOfWindowMessage(businessName?: string): string {
-  return catalog().reservationOutOfWindow(resolveBusinessName(businessName));
-}
-
 /**
  * Whether the message names one of the events currently on offer. Mirrors the
  * matching `WhatsAppHandler.matchScheduleChoiceEvent` does, so a title this
@@ -96,16 +92,8 @@ export function evaluateReservationScope(
   }
 
   const currentStep = context.currentStep ?? null;
-  const hasActiveDraft = currentStep !== null && currentStep !== 'completed';
   const reservationRelated = isReservationRelatedMessage(normalizedMessage);
   const reservationOptIn = isReservationOptInMessage(normalizedMessage);
-
-  if (isOutOfWindowDateIntent(normalizedMessage, hasActiveDraft, reservationRelated)) {
-    return {
-      decision: 'out_of_window',
-      message: buildReservationOutOfWindowMessage(context.businessName),
-    };
-  }
 
   if (currentStep === 'name' || currentStep === 'last_name' || currentStep === 'edit_customer_name') {
     // Also allow messages that start with an affirmative word — the user is likely
@@ -637,60 +625,4 @@ export function isAskingOtherDaysScheduleMessage(normalizedMessage: string): boo
  */
 export function isInstantChoiceMessage(normalizedMessage: string): boolean {
   return /\b(ahora|hoy\s+mismo|turno\s+actual|ya\s+mismo)\b/.test(normalizedMessage);
-}
-
-/**
- * Day-count threshold above which a date reference is clearly outside the
- * booking window. Mirrors `BOOKING_WINDOW_DAYS` in `reservation-datetime.ts`
- * (not imported directly — that module already imports FROM this one, so
- * importing back would create a cycle; keep the two in sync by hand).
- */
-const OUT_OF_WINDOW_DAY_THRESHOLD = 60;
-
-/**
- * Detects references to dates clearly OUTSIDE the booking window
- * (`OUT_OF_WINDOW_DAY_THRESHOLD` days), e.g. "el mes que viene", "en 65 días".
- * Near-term references (mañana, el viernes, la semana que viene, en 20 días,
- * etc.) are NOT flagged here — those are valid and handled by the
- * `schedule_choice`/`date`/`time` step branches instead (including, for a
- * named weekday, "que viene"/"próximo" qualifiers resolved directly by
- * `parseRelativeDay`).
- */
-function isOutOfWindowDateIntent(
-  normalizedMessage: string,
-  hasActiveDraft: boolean,
-  reservationRelated: boolean
-): boolean {
-  // No precise day count available for these — "next month"/"next year" is,
-  // in practice, essentially always beyond the window regardless of when in
-  // the current month it's said.
-  const alwaysOutOfWindowPatterns = [
-    /\bel\s+mes\s+que\s+viene\b/,
-    /\bmes\s+que\s+viene\b/,
-    /\bproximo\s+mes\b/,
-    /\bel\s+ano\s+que\s+viene\b/,
-  ];
-
-  const hasAlwaysOutOfWindowSignal = alwaysOutOfWindowPatterns.some((pattern) =>
-    pattern.test(normalizedMessage)
-  );
-
-  // "en N semanas" / "dentro de N semanas" and "en N días" / "dentro de N
-  // días" DO give a precise count — only flag them once that count reaches
-  // or exceeds the actual window, instead of hard-blocking every mention of
-  // a week/day count the way the old 7-day window had to.
-  const weeksMatch = normalizedMessage.match(/\b(?:en|dentro\s+de)\s+(\d+)\s+semanas?\b/);
-  const daysMatch = normalizedMessage.match(/\b(?:en|dentro\s+de)\s+(\d+)\s+dias?\b/);
-  const requestedDayCount = weeksMatch
-    ? parseInt(weeksMatch[1], 10) * 7
-    : daysMatch
-      ? parseInt(daysMatch[1], 10)
-      : null;
-  const hasFarFutureDayCount = requestedDayCount !== null && requestedDayCount >= OUT_OF_WINDOW_DAY_THRESHOLD;
-
-  if (!hasAlwaysOutOfWindowSignal && !hasFarFutureDayCount) {
-    return false;
-  }
-
-  return hasActiveDraft || reservationRelated;
 }

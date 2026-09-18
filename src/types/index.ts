@@ -405,9 +405,9 @@ export type BlockedDateEntry = {
  * Evento publicado por el comercio. El agente los ofrece como opción extra en
  * el paso `schedule_choice`, además de "hoy" y "otra fecha".
  *
- * A diferencia de una reserva normal, un evento puede caer fuera de la ventana
- * de 60 días y su fecha se considera habilitada aunque el comercio no abra ese
- * día o lo tenga bloqueado: publicarlo ES la habilitación.
+ * A diferencia de una reserva normal, la fecha de un evento se considera
+ * habilitada aunque el comercio no abra ese día o lo tenga bloqueado:
+ * publicarlo ES la habilitación.
  */
 export interface BusinessEvent {
   id: string;

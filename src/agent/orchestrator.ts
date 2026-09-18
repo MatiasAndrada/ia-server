@@ -25,9 +25,9 @@ import type { SupportedLanguage } from '../i18n/index.js';
  * decida qué herramientas usar → devolver lo que haya que enviar.
  *
  * No hay pasos, ni draft, ni gates compitiendo por consumir el mensaje. Lo
- * único que corre ANTES del modelo son los dos guards deterministas que no son
- * negociables (inyección de prompt y ventana de 30 días); todo lo demás es
- * decisión del modelo, acotada por lo que las herramientas le dejan hacer.
+ * único que corre ANTES del modelo es el guard determinista que no es
+ * negociable (inyección de prompt); todo lo demás es decisión del modelo,
+ * acotada por lo que las herramientas le dejan hacer.
  */
 
 export interface TurnResult {
@@ -73,9 +73,9 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
   const { businessId, conversationId, phone, jid, messageText, language, businessName } = input;
   const dryRun = input.dryRun ?? false;
 
-  // --- Guards deterministas: nunca llegan al modelo ---
+  // --- Guard determinista: nunca llega al modelo ---
   const scope = evaluateReservationScope(messageText, { businessName });
-  if (scope.decision === 'out_of_window' || scope.reason === 'prompt_injection') {
+  if (scope.reason === 'prompt_injection') {
     logger.debug('Agent: blocked by deterministic scope guard', {
       conversationId,
       decision: scope.decision,

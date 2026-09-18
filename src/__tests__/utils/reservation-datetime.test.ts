@@ -4,7 +4,6 @@ import {
   parseBaDateKey,
   describeBaDateKey,
   parseRelativeDay,
-  isWithinBookingWindow,
   findWeekdayDayNumberMismatch,
   parseTimeOfDay,
   combineToUtcISO,
@@ -92,17 +91,16 @@ describe('reservation-datetime', () => {
     });
 
     describe('explicit "dd/mm" dates', () => {
-      it('parses a valid date within the booking window', () => {
+      it('parses a valid near-term date', () => {
         const result = parseRelativeDay('20/07', NOW_BA);
         expect(result?.matchedWeekdayName).toBe(false);
         expect(result && formatBaDateKey(result.baDate)).toBe('2026-07-20');
       });
 
-      it('returns a date even when it falls outside the booking window, so the caller can reject it with the specific message', () => {
+      it('parses a far-future explicit date — there is no maximum booking horizon', () => {
         const result = parseRelativeDay('15/09', NOW_BA);
         expect(result).not.toBeNull();
         expect(result && formatBaDateKey(result.baDate)).toBe('2026-09-15');
-        expect(result && isWithinBookingWindow(result.baDate, NOW_BA)).toBe(false);
       });
 
       it('returns null for a calendar-impossible date (April has 30 days)', () => {
@@ -134,7 +132,7 @@ describe('reservation-datetime', () => {
 
     describe('weekday + explicit day-of-month', () => {
       it('resolves directly when the day-of-month is a real occurrence of that weekday in the window', () => {
-        // Thursdays close to 2026-07-02: 2, 9, 16, 23, 30 — all well within the 60-day window.
+        // Thursdays close to 2026-07-02: 2, 9, 16, 23, 30 — all well within the day-scanning horizon.
         const result = parseRelativeDay('jueves 16', NOW_BA);
         expect(result?.matchedWeekdayName).toBe(true);
         expect(result?.isToday).toBe(false);
@@ -147,18 +145,6 @@ describe('reservation-datetime', () => {
         expect(result?.matchedWeekdayName).toBe(true);
         expect(result && formatBaDateKey(result.baDate)).toBe('2026-07-02'); // nearest Thursday = today
       });
-    });
-  });
-
-  describe('isWithinBookingWindow', () => {
-    it('accepts today through today+59', () => {
-      expect(isWithinBookingWindow(startOfBaDay(NOW_BA), NOW_BA)).toBe(true);
-      expect(isWithinBookingWindow(parseBaDateKey('2026-08-30'), NOW_BA)).toBe(true);
-    });
-
-    it('rejects days outside the 60-day window', () => {
-      expect(isWithinBookingWindow(parseBaDateKey('2026-08-31'), NOW_BA)).toBe(false);
-      expect(isWithinBookingWindow(parseBaDateKey('2026-07-01'), NOW_BA)).toBe(false);
     });
   });
 

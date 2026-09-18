@@ -19,7 +19,7 @@ export interface ToolResult<T = unknown> {
   ok: boolean;
   data?: T;
   error?: {
-    /** Código estable, apto para métricas (`date_blocked`, `out_of_window`...). */
+    /** Código estable, apto para métricas (`date_blocked`, `outside_hours`...). */
     code: string;
     /** Qué explicarle al cliente. El modelo lo reformula en su idioma y su tono. */
     hint: string;
