@@ -518,10 +518,6 @@ export function reservationOffTopic(businessName: string): string {
   return catalog().reservationOffTopic(businessName);
 }
 
-export function reservationOutOfWindow(businessName: string): string {
-  return catalog().reservationOutOfWindow(businessName);
-}
-
 /** Servicio de WhatsApp desactivado para el negocio. */
 export function inactiveFallback(): string {
   return catalog().inactiveFallback();

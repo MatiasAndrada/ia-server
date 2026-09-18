@@ -907,10 +907,6 @@ export const ptCatalog: MessageCatalog = {
     return `Olá 😊 Só posso ajudar com perguntas relacionadas a reservas do “${businessName}” para o turno atual. Você quer fazer uma reserva?`;
   },
 
-  reservationOutOfWindow(businessName: string): string {
-    return `Olá 😊 No “${businessName}” por enquanto só posso aceitar reservas dentro dos próximos 60 dias. Você quer escolher um dia mais próximo?`;
-  },
-
   inactiveFallback(): string {
     return `Desculpe, nosso serviço de WhatsApp não está disponível no momento. Por favor tente mais tarde.`;
   },

@@ -127,7 +127,6 @@ const ARGS: Record<keyof MessageCatalog, unknown[]> = {
   confirmSummaryInvalidChoice: [],
   reservationIntro: ['__BIZ__'],
   reservationOffTopic: ['__BIZ__'],
-  reservationOutOfWindow: ['__BIZ__'],
   inactiveFallback: [],
   genericError: [],
   firstContactNoReservations: ['__BIZ__'],

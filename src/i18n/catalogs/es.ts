@@ -1018,10 +1018,6 @@ export const esCatalog = {
     return `Hola 😊 Solo puedo ayudarte con consultas relacionadas a reservas para “${businessName}” en el turno actual. ¿Querés hacer una reserva?`;
   },
 
-  reservationOutOfWindow(businessName: string): string {
-    return `Hola 😊 En “${businessName}” por ahora solo puedo tomar reservas dentro de los próximos 60 días. ¿Querés elegir un día más cercano?`;
-  },
-
   inactiveFallback(): string {
     return `Lo siento, nuestro servicio de WhatsApp no está disponible en este momento. Por favor intenta más tarde.`;
   },

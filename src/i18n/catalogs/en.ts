@@ -908,10 +908,6 @@ export const enCatalog: MessageCatalog = {
     return `Hello 😊 I can only help with booking-related questions for “${businessName}” for the current service. Would you like to make a booking?`;
   },
 
-  reservationOutOfWindow(businessName: string): string {
-    return `Hello 😊 At “${businessName}” I can currently only take bookings within the next 60 days. Would you like to choose a closer day?`;
-  },
-
   inactiveFallback(): string {
     return `Sorry, our WhatsApp service is unavailable right now. Please try again later.`;
   },
