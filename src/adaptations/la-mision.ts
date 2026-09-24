@@ -79,10 +79,10 @@ export const laMisionAdaptation: SharedNumberAdaptation = {
         const event = events[0]!;
         // Con un solo evento se ofrece también por número, que es más fácil de
         // contestar; con varios no se puede elegir "3" por el cliente.
-        lines.push(`🍣 ${event.title}`, `📅 ${capitalize(event.whenLabel)}`, '');
+        lines.push(event.title, `📅 ${capitalize(event.whenLabel)}`, '');
         lines.push(`Escribí ${event.title.toUpperCase()} o respondé 3 para reservar tu lugar.`);
       } else {
-        lines.push(...events.map((event) => `🍣 ${event.title} · ${capitalize(event.whenLabel)}`));
+        lines.push(...events.map((event) => `${event.title} · ${capitalize(event.whenLabel)}`));
         lines.push('', 'Escribí el nombre del evento para reservar tu lugar.');
       }
     }

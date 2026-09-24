@@ -176,22 +176,46 @@ describe('adaptación La Misión', () => {
     });
 
     it('con un solo evento lo ofrece también por número', () => {
-      const menu = welcome([{ title: 'Noche de Sushi', whenLabel: 'viernes 25/09 · 20:30 h' }]);
+      const menu = welcome([{ title: 'Noche de Sushi', whenLabel: 'viernes 25/09 · 20:30' }]);
 
       expect(menu).toContain('3️⃣ Próximos eventos');
-      expect(menu).toContain('🍣 Noche de Sushi');
-      expect(menu).toContain('📅 Viernes 25/09 · 20:30 h');
+      expect(menu).toContain('Noche de Sushi');
+      expect(menu).toContain('📅 Viernes 25/09 · 20:30');
       expect(menu).toContain('Escribí NOCHE DE SUSHI o respondé 3 para reservar tu lugar.');
+    });
+
+    it('reproduce el template acordado con un evento', () => {
+      const menu = welcome([{ title: 'Noche de Sushi', whenLabel: 'viernes 25/09 · 20:30' }]);
+
+      expect(menu).toBe(
+        [
+          '✨ Bienvenidos al Gran Amérian Portal del Iguazú',
+          '',
+          'Será un placer acompañarte. ¿Qué te gustaría hacer?',
+          '',
+          '1️⃣ Consultas sobre el hotel',
+          'Escribí CONSULTAS o respondé 1',
+          '',
+          '2️⃣ Reservar en Restaurante La Misión 🍽️',
+          'Escribí LA MISIÓN o respondé 2',
+          '',
+          '3️⃣ Próximos eventos ✨',
+          'Noche de Sushi',
+          '📅 Viernes 25/09 · 20:30',
+          '',
+          'Escribí NOCHE DE SUSHI o respondé 3 para reservar tu lugar.',
+        ].join('\n')
+      );
     });
 
     it('con varios eventos pide el nombre, sin número: no se puede elegir por el cliente', () => {
       const menu = welcome([
-        { title: 'Noche de Sushi', whenLabel: 'viernes 25/09 · 20:30 h' },
-        { title: 'Cata de vinos', whenLabel: 'sábado 26/09 · 21:00 h' },
+        { title: 'Noche de Sushi', whenLabel: 'viernes 25/09 · 20:30' },
+        { title: 'Cata de vinos', whenLabel: 'sábado 26/09 · 21:00' },
       ]);
 
-      expect(menu).toContain('Noche de Sushi');
-      expect(menu).toContain('Cata de vinos');
+      expect(menu).toContain('Noche de Sushi · Viernes 25/09 · 20:30');
+      expect(menu).toContain('Cata de vinos · Sábado 26/09 · 21:00');
       expect(menu).toContain('Escribí el nombre del evento para reservar tu lugar.');
       expect(menu).not.toContain('respondé 3');
     });
