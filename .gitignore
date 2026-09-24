@@ -51,3 +51,6 @@ auth_sessions_archive/
 
 # Overrides de la instancia de desarrollo (ver .env.dev.example)
 .env.dev
+
+# Estado local del servidor (traspasos permanentes de número compartido)
+data/

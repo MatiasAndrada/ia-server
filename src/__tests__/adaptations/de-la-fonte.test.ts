@@ -1,6 +1,10 @@
 import { RedisConfig } from '../../config/redis.js';
 import { deLaFonteAdaptation } from '../../adaptations/de-la-fonte.js';
 import { findSharedNumberAdaptation, interceptSharedNumberTurn } from '../../adaptations/index.js';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { removePermanentHandoff, resetHandoffStoreForTests } from '../../adaptations/handoff-store.js';
 
 jest.mock('../../utils/logger');
 
@@ -17,20 +21,37 @@ const intercept = (conversationId: string, text: string) =>
   interceptSharedNumberTurn(deLaFonteAdaptation, conversationId, text);
 
 describe('adaptación De La Fonte', () => {
-  /** Redis simulado con un Map: el traspaso es una key con TTL y nada más. */
+  /** Redis simulado con un Map: el traspaso es una key y nada más. */
   let store: Map<string, string>;
+  /** Vencimientos pedidos por key; una key sin entrada acá no vence nunca. */
+  let ttls: Map<string, number>;
+  /** Archivo real de traspasos, en un directorio temporal por test. */
+  let handoffFile: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     jest.restoreAllMocks();
     store = new Map();
+    ttls = new Map();
+    resetHandoffStoreForTests();
+    handoffFile = path.join(
+      await fs.mkdtemp(path.join(os.tmpdir(), 'handoffs-')),
+      'nested',
+      'handoffs.jsonl'
+    );
+    process.env.SHARED_NUMBER_HANDOFF_FILE = handoffFile;
     delete process.env.DE_LA_FONTE_BUSINESS_ID;
     delete process.env.SKY_BUSINESS_ID;
 
     jest.spyOn(RedisConfig, 'isReady').mockReturnValue(true);
     jest.spyOn(RedisConfig, 'getClient').mockReturnValue({
       get: jest.fn(async (key: string) => store.get(key) ?? null),
-      setEx: jest.fn(async (key: string, _ttl: number, value: string) => {
+      set: jest.fn(async (key: string, value: string) => {
         store.set(key, value);
+        return 'OK';
+      }),
+      setEx: jest.fn(async (key: string, ttl: number, value: string) => {
+        store.set(key, value);
+        ttls.set(key, ttl);
         return 'OK';
       }),
       del: jest.fn(async (key: string) => (store.delete(key) ? 1 : 0)),
@@ -59,9 +80,8 @@ describe('adaptación De La Fonte', () => {
 
       expect(outcome.action).toBe('reply');
       expect(outcome.action === 'reply' && outcome.text).toContain('Simona');
-      // El mensaje tiene que decir cuál es la palabra que trae al bot de vuelta,
-      // o el cliente queda sin salida del silencio.
-      expect(outcome.action === 'reply' && outcome.text).toContain('Reservar');
+      // No hay salida del silencio, así que el mensaje no la promete.
+      expect(outcome.action === 'reply' && outcome.text).not.toContain('Reservar');
     });
 
     it('entiende el pedido en una frase, no sólo la palabra suelta', async () => {
@@ -92,33 +112,106 @@ describe('adaptación De La Fonte', () => {
     });
   });
 
-  describe('volver al bot', () => {
+  describe('el bot nunca vuelve a activarse en ese chat', () => {
     beforeEach(async () => {
       await intercept(CONVERSATION_ID, 'Simona');
     });
 
-    it.each(['reservar', 'quiero reservar una mesa', 'necesito una mesa para 4', 'cancelar mi reserva'])(
-      'reactiva con "%s" y ese mismo mensaje ya lo atiende el bot',
-      async (text) => {
-        const outcome = await intercept(CONVERSATION_ID, text);
-
-        // 'continue', no 'reply': el mensaje que reactiva sigue al flujo normal,
-        // que es lo que espera alguien que acaba de pedir una mesa.
-        expect(outcome.action).toBe('continue');
-      }
-    );
-
-    it('una vez reactivado sigue atendiendo normalmente', async () => {
-      await intercept(CONVERSATION_ID, 'reservar');
-
-      expect((await intercept(CONVERSATION_ID, 'para el viernes')).action).toBe('continue');
+    it.each([
+      'reservar',
+      'quiero reservar una mesa',
+      'necesito una mesa para 4',
+      'cancelar mi reserva',
+      'turno',
+      'hola',
+    ])('"%s" no lo reactiva', async (text) => {
+      expect((await intercept(CONVERSATION_ID, text)).action).toBe('silence');
     });
 
-    it('pedir de nuevo por Simona lo vuelve a silenciar', async () => {
-      await intercept(CONVERSATION_ID, 'reservar');
+    it('pedir de nuevo por Simona tampoco genera otra respuesta del bot', async () => {
+      expect((await intercept(CONVERSATION_ID, 'mejor hablo con Simona')).action).toBe('silence');
+    });
 
-      expect((await intercept(CONVERSATION_ID, 'mejor hablo con Simona')).action).toBe('reply');
+    it('sigue en silencio aunque el cliente insista varias veces', async () => {
+      for (const text of ['reservar', 'reservar', 'quiero una mesa', 'hola??']) {
+        expect((await intercept(CONVERSATION_ID, text)).action).toBe('silence');
+      }
+    });
+  });
+
+  describe('sobrevive a un reinicio de Redis o del proceso', () => {
+    beforeEach(async () => {
+      await intercept(CONVERSATION_ID, 'Simona');
+    });
+
+    it('el traspaso queda escrito en el archivo local', async () => {
+      const lines = (await fs.readFile(handoffFile, 'utf8')).trim().split('\n');
+
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0]!)).toMatchObject({ a: 'delafonte', c: CONVERSATION_ID });
+    });
+
+    it('no usa Redis para guardarlo', () => {
+      expect(store.size).toBe(0);
+      expect(ttls.size).toBe(0);
+    });
+
+    it('con Redis vaciado el bot sigue en silencio', async () => {
+      store.clear();
+
+      expect((await intercept(CONVERSATION_ID, 'quiero reservar una mesa')).action).toBe('silence');
+    });
+
+    it('con Redis caído sigue en silencio', async () => {
+      jest.spyOn(RedisConfig, 'isReady').mockReturnValue(false);
+
+      expect((await intercept(CONVERSATION_ID, 'reservar')).action).toBe('silence');
+    });
+
+    it('tras reiniciar el proceso (memoria vacía) lo recuerda desde el archivo', async () => {
+      resetHandoffStoreForTests();
+
+      expect((await intercept(CONVERSATION_ID, 'reservar')).action).toBe('silence');
+    });
+
+    it('pedir Simona dos veces no duplica la línea', async () => {
+      await intercept(CONVERSATION_ID, 'Simona');
+      resetHandoffStoreForTests();
+      await intercept(CONVERSATION_ID, 'Simona');
+
+      const lines = (await fs.readFile(handoffFile, 'utf8')).trim().split('\n');
+      expect(lines).toHaveLength(1);
+    });
+
+    it('el silencio sigue siendo de esa conversación', async () => {
+      resetHandoffStoreForTests();
+
+      const otraConversacion = `${BUSINESS_ID}-5491199998888`;
+      expect((await intercept(otraConversacion, 'hola')).action).toBe('continue');
+    });
+
+    it('si el archivo no se puede escribir, igual queda en silencio hasta el reinicio', async () => {
+      // Un archivo donde debería haber un directorio hace fallar mkdir/append.
+      const blocker = path.join(path.dirname(handoffFile), '..', 'blocker');
+      await fs.writeFile(blocker, 'x');
+      process.env.SHARED_NUMBER_HANDOFF_FILE = path.join(blocker, 'handoffs.jsonl');
+      resetHandoffStoreForTests();
+      const otra = `${BUSINESS_ID}-5491100000000`;
+
+      await intercept(otra, 'Simona');
+
+      expect((await intercept(otra, 'reservar')).action).toBe('silence');
+    });
+  });
+
+  describe('levantar el silencio de un chat', () => {
+    it('sin reiniciar: tras la baja el siguiente mensaje ya lo atiende el bot', async () => {
+      await intercept(CONVERSATION_ID, 'Simona');
       expect((await intercept(CONVERSATION_ID, 'hola')).action).toBe('silence');
+
+      await removePermanentHandoff('delafonte', CONVERSATION_ID);
+
+      expect((await intercept(CONVERSATION_ID, 'hola')).action).toBe('continue');
     });
   });
 

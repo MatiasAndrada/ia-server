@@ -1,5 +1,6 @@
 import { RedisConfig } from '../config/redis.js';
 import { logEvent, logger } from '../utils/logger.js';
+import { hasPermanentHandoff, savePermanentHandoff } from './handoff-store.js';
 
 /**
  * Motor de las adaptaciones de "número compartido".
@@ -56,8 +57,18 @@ export interface SharedNumberAdaptation {
   /** Con qué pide el cliente que lo atienda una persona. */
   handoffPattern: RegExp;
 
-  /** Con qué vuelve el bot a hablar. */
+  /** Con qué vuelve el bot a hablar. Se ignora si `permanentHandoff` está activo. */
   reactivationPattern: RegExp;
+
+  /**
+   * Si es `true`, canalizar a la persona es definitivo para esa conversación:
+   * el traspaso se guarda sin vencimiento en un archivo local (ver
+   * `handoff-store.ts`, no en Redis) y NADA reactiva al bot — ni
+   * `reactivationPattern`, ni el paso del tiempo, ni un saludo al día siguiente.
+   * Sin esto rige el comportamiento por defecto (silencio de doce horas con
+   * salida por palabra de reserva).
+   */
+  permanentHandoff?: boolean;
 
   /**
    * Sólo para locales cuyo saludo ofrece elegir por número además de por
@@ -226,7 +237,7 @@ export async function interceptSharedNumberTurn(
   const normalized = normalize(messageText);
 
   if (await isHandedOff(adaptation, conversationId)) {
-    if (adaptation.reactivationPattern.test(normalized)) {
+    if (!adaptation.permanentHandoff && adaptation.reactivationPattern.test(normalized)) {
       await resumeBot(adaptation, conversationId);
       logEvent('info', 'handoff.resumed', { conversationId, adaptation: adaptation.id });
       return { action: 'continue' };
@@ -248,7 +259,7 @@ export async function interceptSharedNumberTurn(
     logEvent('info', 'handoff.started', {
       conversationId,
       adaptation: adaptation.id,
-      ttlSeconds: HANDOFF_TTL_SECONDS,
+      ttlSeconds: adaptation.permanentHandoff ? null : HANDOFF_TTL_SECONDS,
       via: isMenuDigit ? 'menu-digit' : 'keyword',
     });
     return { action: 'reply', text: adaptation.handoffConfirmation() };
@@ -261,6 +272,12 @@ async function isHandedOff(
   adaptation: SharedNumberAdaptation,
   conversationId: string
 ): Promise<boolean> {
+  // Los traspasos permanentes viven en el archivo local (ver `handoff-store.ts`)
+  // y no dependen de Redis: es lo que los hace sobrevivir a un reinicio suyo.
+  if (adaptation.permanentHandoff) {
+    return hasPermanentHandoff(adaptation.id, conversationId);
+  }
+
   try {
     if (!RedisConfig.isReady()) return false;
     const raw = await RedisConfig.getClient().get(handoffKey(adaptation, conversationId));
@@ -279,6 +296,13 @@ async function handOffToHuman(
   adaptation: SharedNumberAdaptation,
   conversationId: string
 ): Promise<void> {
+  if (adaptation.permanentHandoff) {
+    // Sin vencimiento y sin Redis. Si el disco falla, `savePermanentHandoff`
+    // deja el error en el log y el silencio rige hasta el próximo reinicio.
+    await savePermanentHandoff(adaptation.id, conversationId);
+    return;
+  }
+
   try {
     if (!RedisConfig.isReady()) return;
     await RedisConfig.getClient().setEx(

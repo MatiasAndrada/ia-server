@@ -4,6 +4,10 @@ import { RedisConfig } from '../../config/redis.js';
 import * as orchestrator from '../../agent/orchestrator.js';
 import * as state from '../../agent/state.js';
 import { BaileysMessage } from '../../types/index.js';
+import { resetHandoffStoreForTests } from '../../adaptations/handoff-store.js';
+import { mkdtempSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 jest.mock('../../utils/logger');
 
@@ -394,6 +398,13 @@ describe('WhatsAppHandler — camino del agente', () => {
 
     beforeEach(() => {
       store = new Map();
+      // El traspaso a Simona es permanente y vive en un archivo local: cada
+      // test arranca con uno vacío, o el silencio de uno contaminaría al otro.
+      globalThis.process.env.SHARED_NUMBER_HANDOFF_FILE = path.join(
+        mkdtempSync(path.join(os.tmpdir(), 'handoffs-')),
+        'handoffs.jsonl'
+      );
+      resetHandoffStoreForTests();
       // Desde que dejó de haber fallback por nombre, la adaptación sólo se
       // activa con el id configurado (ver adaptations/index.ts).
       globalThis.process.env.DE_LA_FONTE_BUSINESS_ID = BUSINESS_ID;
@@ -418,6 +429,7 @@ describe('WhatsAppHandler — camino del agente', () => {
     });
 
     afterEach(() => {
+      delete globalThis.process.env.SHARED_NUMBER_HANDOFF_FILE;
       delete globalThis.process.env.DE_LA_FONTE_BUSINESS_ID;
     });
 
@@ -456,20 +468,22 @@ describe('WhatsAppHandler — camino del agente', () => {
       expect(turnSpy).not.toHaveBeenCalled();
     });
 
-    it('una palabra de reserva lo reactiva y ese mismo mensaje lo atiende el modelo', async () => {
+    it('ninguna palabra de reserva reactiva al bot: el chat con Simona queda en silencio', async () => {
       jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue(null);
       const turnSpy = jest.spyOn(orchestrator, 'handleTurn').mockResolvedValue({
-        messages: ['Dale, ¿para cuántas personas?'],
+        messages: ['no debería llegar acá'],
         attachments: [],
         toolsCalled: [],
         iterations: 1,
       });
 
       await process('Simona');
+      const sentAfterHandoff = sent.length;
       await process('quiero reservar una mesa');
+      await process('reservar');
 
-      expect(turnSpy).toHaveBeenCalled();
-      expect(sent[sent.length - 1]).toBe('Dale, ¿para cuántas personas?');
+      expect(turnSpy).not.toHaveBeenCalled();
+      expect(sent).toHaveLength(sentAfterHandoff);
     });
 
     it('el traspaso queda en el historial para cuando el cliente vuelva', async () => {

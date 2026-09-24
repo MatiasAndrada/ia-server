@@ -24,15 +24,14 @@ export const deLaFonteAdaptation: SharedNumberAdaptation = {
   handoffPattern: buildKeywordPattern(['simona', 'duena', 'dueno', 'encargada', 'propietaria']),
 
   /**
-   * Palabras que traen al bot de vuelta.
-   *
-   * Deliberadamente cortas y todas del mundo de la reserva: una reactivación de
-   * más es peor que una de menos. Si el bot se mete en medio de la charla con
-   * Simona porque el cliente escribió "evento", arruina la conversación que
-   * justamente vinimos a proteger; en cambio, si no reactiva cuando debía, el
-   * cliente escribe "reservar" — que es lo que el propio mensaje de traspaso le
-   * dejó dicho — y listo.
+   * Una vez que el cliente elige Simona, el bot no vuelve a activarse en ese
+   * chat, de ninguna manera: sin vencimiento y sin palabra de salida. Por eso
+   * `reactivationPattern` queda definido sólo por requisito de la interfaz y
+   * el motor no lo consulta.
    */
+  permanentHandoff: true,
+
+  /** No se usa mientras `permanentHandoff` esté activo (ver arriba). */
   reactivationPattern: buildKeywordPattern([
     ...BOOK_KEYWORDS,
     ...CANCEL_KEYWORDS,
@@ -90,19 +89,17 @@ export const deLaFonteAdaptation: SharedNumberAdaptation = {
   },
 
   /**
-   * Lo último que dice el bot antes de callarse.
+   * Lo último que dice el bot antes de callarse para siempre en este chat.
    *
-   * Tiene que dejar dos cosas claras, porque son las dos preguntas que se hace
-   * quien queda del otro lado: que a partir de acá contesta una persona (y por
-   * eso el silencio no es una falla), y cuál es la palabra exacta que trae al
-   * bot de vuelta.
+   * Tiene que dejar clara la pregunta de quien queda del otro lado: que a
+   * partir de acá contesta una persona y por eso el silencio no es una falla.
+   * No ofrece salida — no la hay.
    */
   handoffConfirmation(): string {
     return (
       '🗣️ ¡Perfecto! Le paso tu mensaje a *Simona* 💛\n\n' +
-      'Ella te va a responder por acá apenas pueda. Mientras tanto, no te enviaremos mensajes ' +
-      'automáticos para no interrumpirte.\n\n' +
-      'Cuando quieras hacer una reserva, simplemente escribí *Reservar* y te ayudamos enseguida.'
+      'Ella te va a responder por acá apenas pueda. No te enviaremos mensajes automáticos ' +
+      'para no interrumpirte.'
     );
   },
 };
