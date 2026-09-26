@@ -1,3 +1,4 @@
+import { antigalAdaptation } from './antigal.js';
 import { deLaFonteAdaptation } from './de-la-fonte.js';
 import { laMisionAdaptation } from './la-mision.js';
 import { skyAdaptation } from './sky.js';
@@ -22,6 +23,7 @@ const SHARED_NUMBER_ADAPTATIONS: SharedNumberAdaptation[] = [
   deLaFonteAdaptation,
   skyAdaptation,
   laMisionAdaptation,
+  antigalAdaptation,
 ];
 
 /**
