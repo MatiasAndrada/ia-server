@@ -22,7 +22,7 @@ export const antigalAdaptation: SharedNumberAdaptation = {
    * se busca como palabra completa en cualquier parte de la frase: "quiero
    * hablar con Valentina" lleva al mismo lado.
    */
-  handoffPattern: buildKeywordPattern(['valentina']),
+  handoffPattern: buildKeywordPattern(['valentina, vale']),
 
   /**
    * Sólo palabras del mundo de la reserva. Una reactivación de más se mete en
