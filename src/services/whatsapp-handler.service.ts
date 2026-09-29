@@ -64,6 +64,27 @@ const DUPLICATE_OUTBOUND_WINDOW_MS = 10000;
 const INACTIVE_FALLBACK_TTL_SECONDS = 120;
 
 /**
+ * Freno de emergencia contra loops bot-contra-bot (dos números automáticos
+ * contestándose entre sí sin que ningún humano participe).
+ *
+ * El dedupe de `lastSentByChat` de más abajo sólo frena el mismo texto exacto
+ * repetido en una ventana de 10 segundos; un intercambio con otro bot alterna
+ * mensajes (no son idénticos consecutivos) y con minutos de por medio, así que
+ * lo esquiva sin problema y el LLM sigue generando una respuesta por turno para
+ * siempre. Esto es la red de seguridad genérica: no importa el contenido ni si
+ * el texto varía turno a turno, sólo el VOLUMEN de mensajes salientes hacia el
+ * mismo número en poco tiempo — algo que una conversación real de reserva casi
+ * nunca alcanza, pero que un loop automático supera en minutos.
+ *
+ * Vive en Redis (no en memoria) para sobrevivir un restart del proceso a mitad
+ * de un loop. Si Redis no está disponible, se deja pasar el mensaje (ver
+ * `isOutboundLoopSuspected`): ante la duda, el criterio del resto del sistema
+ * es no dejar a un cliente real sin respuesta.
+ */
+const LOOP_GUARD_MAX_MESSAGES = 12;
+const LOOP_GUARD_WINDOW_SECONDS = 30 * 60;
+
+/**
  * Silencio a partir del cual un "hola" deja de ser un mensaje más de la charla
  * en curso y pasa a abrir una conversación nueva (y por lo tanto le toca el
  * menú de apertura). Diez minutos: lo suficiente para no cortar a alguien que
@@ -805,6 +826,16 @@ export class WhatsAppHandler {
         return;
       }
 
+      if (await this.isOutboundLoopSuspected(businessId, to)) {
+        logEvent('warn', 'loop.suspected', {
+          businessId,
+          to,
+          maxMessages: LOOP_GUARD_MAX_MESSAGES,
+          windowSeconds: LOOP_GUARD_WINDOW_SECONDS,
+        });
+        return;
+      }
+
       const success = await this.baileysService.sendMessage(businessId, to, message);
 
       if (!success) {
@@ -820,6 +851,37 @@ export class WhatsAppHandler {
       });
     } catch (error) {
       logger.error('Error sending WhatsApp message', { error, businessId, to });
+    }
+  }
+
+  /**
+   * ¿Ya se mandaron demasiados mensajes a este número en poco tiempo?
+   *
+   * Contador de ventana fija en Redis: el primer envío de la ventana crea la
+   * key en 1 y le pone TTL; los siguientes sólo incrementan. Cuando el TTL
+   * vence, la ventana arranca de cero sola — no hace falta limpieza manual.
+   *
+   * Nunca lanza. Sin Redis no hay forma de saber el conteo real, y frenar a un
+   * cliente real por no poder confirmar un loop es el peor de los dos errores
+   * (mismo criterio que el resto de los guards de este archivo).
+   */
+  private async isOutboundLoopSuspected(businessId: string, to: string): Promise<boolean> {
+    try {
+      if (!RedisConfig.isReady()) return false;
+      const client = RedisConfig.getClient();
+      const key = `loopguard:${businessId}:${to}`;
+      const count = await client.incr(key);
+      if (count === 1) {
+        await client.expire(key, LOOP_GUARD_WINDOW_SECONDS);
+      }
+      return count > LOOP_GUARD_MAX_MESSAGES;
+    } catch (error) {
+      logger.warn('Failed to check the outbound loop guard, the message is sent anyway', {
+        businessId,
+        to,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+      return false;
     }
   }
 

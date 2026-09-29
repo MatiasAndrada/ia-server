@@ -74,14 +74,21 @@ describe('adaptación De La Fonte', () => {
     });
   });
 
-  describe('canalizar a Simona', () => {
+  describe('canalizar a atención personalizada', () => {
     it('confirma el traspaso cuando el cliente escribe la palabra del menú', async () => {
+      const outcome = await intercept(CONVERSATION_ID, 'PERSONAL');
+
+      expect(outcome.action).toBe('reply');
+      expect(outcome.action === 'reply' && outcome.text).toContain('De La Fonte');
+      expect(outcome.action === 'reply' && outcome.text).not.toContain('Simona');
+      // No hay salida del silencio, así que el mensaje no la promete.
+      expect(outcome.action === 'reply' && outcome.text).not.toContain('Reservar');
+    });
+
+    it('la palabra vieja del menú ("Simona") sigue canalizando, para no romper hábitos', async () => {
       const outcome = await intercept(CONVERSATION_ID, 'Simona');
 
       expect(outcome.action).toBe('reply');
-      expect(outcome.action === 'reply' && outcome.text).toContain('Simona');
-      // No hay salida del silencio, así que el mensaje no la promete.
-      expect(outcome.action === 'reply' && outcome.text).not.toContain('Reservar');
     });
 
     it('entiende el pedido en una frase, no sólo la palabra suelta', async () => {
@@ -229,12 +236,13 @@ describe('adaptación De La Fonte', () => {
     const welcome = (name: string | null, events: { title: string; whenLabel: string }[] = []) =>
       deLaFonteAdaptation.welcome(name, events);
 
-    it('ofrece los dos caminos: hablar con Simona o reservar', () => {
+    it('ofrece los dos caminos: atención personalizada o reservar', () => {
       const menu = welcome(null);
 
       expect(menu).toContain('De La Fonte');
-      expect(menu).toContain('Simona');
-      expect(menu).toContain('Reservar');
+      expect(menu).toContain('PERSONAL');
+      expect(menu).toContain('RESERVAR');
+      expect(menu).not.toContain('Simona');
     });
 
     it('saluda por su nombre al cliente conocido', () => {

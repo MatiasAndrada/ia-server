@@ -59,6 +59,11 @@ export type LogEvent =
   | 'handoff.started'
   | 'handoff.resumed'
 
+  // ─── Protecciones de salida ───
+  // Demasiados mensajes salientes al mismo número en poco tiempo: probable
+  // loop contra otro bot (ver LOOP_GUARD_* en whatsapp-handler.service.ts).
+  | 'loop.suspected'
+
   // ─── Realtime / jobs ───
   | 'realtime.subscribed'
   | 'realtime.lost'
@@ -116,6 +121,8 @@ export const EVENT_LABELS: Record<LogEvent, string> = {
 
   'handoff.started': 'Conversation handed off to a human, bot muted',
   'handoff.resumed': 'Bot resumed after a human handoff',
+
+  'loop.suspected': 'Outbound message suppressed, suspected loop with another bot',
 
   'realtime.subscribed': 'Realtime channel subscribed',
   'realtime.lost': 'Realtime channel lost',

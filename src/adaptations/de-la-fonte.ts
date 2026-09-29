@@ -2,8 +2,8 @@ import { BOOK_KEYWORDS, CANCEL_KEYWORDS, buildKeywordPattern } from '../i18n/key
 import { capitalize, type SharedNumberAdaptation, type WelcomeEvent } from './shared-number.js';
 
 /**
- * De La Fonte: el mismo número lo comparten el bot de reservas y Simona, la
- * dueña del lugar.
+ * De La Fonte: el mismo número lo comparten el bot de reservas y una persona
+ * del local que atiende lo que no es reserva.
  *
  * Acá vive sólo lo que es propio de este local — a quién se pide, con qué
  * palabras y qué se le dice. El mecanismo (el silencio, su TTL, la vuelta) es
@@ -16,12 +16,22 @@ export const deLaFonteAdaptation: SharedNumberAdaptation = {
   businessIdEnvVar: 'DE_LA_FONTE_BUSINESS_ID',
 
   /**
-   * El menú anuncia "escribí Simona", pero nadie escribe sólo lo que se le
+   * El menú anuncia "escribí PERSONAL", pero nadie escribe sólo lo que se le
    * pide: "quiero hablar con la dueña" tiene que llevar al mismo lado. Se
    * matchean como palabra completa en cualquier parte de la frase, así que
-   * "encargada" no se dispara con "encargar".
+   * "encargada" no se dispara con "encargar". Los sinónimos previos ("simona",
+   * el nombre que usaba el menú viejo) se mantienen para no romper el traspaso
+   * de quien todavía escribe por costumbre.
    */
-  handoffPattern: buildKeywordPattern(['simona', 'duena', 'dueno', 'encargada', 'propietaria']),
+  handoffPattern: buildKeywordPattern([
+    'personal',
+    'duena',
+    'dueña',
+    'dueño',
+    'dueno',
+    'encargada',
+    'propietaria',
+  ]),
 
   /**
    * Igual que en `antigal.ts`: un pedido ajeno a las reservas no siempre trae
@@ -31,14 +41,14 @@ export const deLaFonteAdaptation: SharedNumberAdaptation = {
   outOfScopeHint:
     'Si quien te escribe no es cliente de reservas — un proveedor, un trámite ajeno al local — ' +
     'o pide explícitamente hablar con una persona o atención personalizada, no lo mandes a ' +
-    '"contactar al local": decile que escriba *Simona* (en negrita) y ese mismo chat sigue ' +
-    'con ella.',
+    '"contactar al local": decile que escriba *PERSONAL* (en negrita) y ese mismo chat sigue ' +
+    'con alguien del local.',
 
   /**
-   * Una vez que el cliente elige Simona, el bot no vuelve a activarse en ese
-   * chat, de ninguna manera: sin vencimiento y sin palabra de salida. Por eso
-   * `reactivationPattern` queda definido sólo por requisito de la interfaz y
-   * el motor no lo consulta.
+   * Una vez que el cliente elige atención personalizada, el bot no vuelve a
+   * activarse en ese chat, de ninguna manera: sin vencimiento y sin palabra de
+   * salida. Por eso `reactivationPattern` queda definido sólo por requisito de
+   * la interfaz y el motor no lo consulta.
    */
   permanentHandoff: true,
 
@@ -64,7 +74,7 @@ export const deLaFonteAdaptation: SharedNumberAdaptation = {
    *
    * Las opciones se eligen por palabra y no por número: el "1" y el "2" ya
    * significan otra cosa en el resto de los menús del sistema, y un cliente que
-   * arrastra ese hábito terminaría pidiendo hablar con Simona sin querer.
+   * arrastra ese hábito terminaría pidiendo atención personalizada sin querer.
    */
   welcome(customerName: string | null, events: WelcomeEvent[] = []): string {
     const lines = [
@@ -73,8 +83,8 @@ export const deLaFonteAdaptation: SharedNumberAdaptation = {
       '',
       '¿Qué te gustaría hacer?',
       '',
-      '📅 *Reservar una mesa* → escribí *Reservar*',
-      '🗣️ *Hablar con Simona* → escribí *Simona*',
+      '📅 *Reservar una mesa* → escribí *RESERVAR*',
+      '🗣️ *Atención personalizada* → escribí *PERSONAL*',
     ];
 
     // Sin eventos no va ni la sección ni la invitación a nombrar uno: ofrecer
@@ -108,8 +118,8 @@ export const deLaFonteAdaptation: SharedNumberAdaptation = {
    */
   handoffConfirmation(): string {
     return (
-      '🗣️ ¡Perfecto! Le paso tu mensaje a *Simona* 💛\n\n' +
-      'Ella te va a responder por acá apenas pueda. No te enviaremos mensajes automáticos ' +
+      '🗣️ ¡Perfecto! Le paso tu mensaje al equipo de *De La Fonte* 💛\n\n' +
+      'Te van a responder por acá apenas puedan. No te enviaremos mensajes automáticos ' +
       'para no interrumpirte.'
     );
   },

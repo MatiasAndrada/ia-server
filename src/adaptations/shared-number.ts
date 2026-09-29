@@ -40,9 +40,9 @@ export interface WelcomeEvent {
  *
  * Los patrones de `handoffPattern` y `reactivationPattern` llegan ya
  * construidos (y no como listas de palabras) porque la FORMA de matchear
- * también cambia entre locales: De La Fonte busca "simona" en cualquier parte
- * de la frase, mientras que SKY exige el mensaje exacto porque su palabra de
- * canalización es su propio nombre. Ver cada archivo.
+ * también cambia entre locales: De La Fonte busca "personal" en cualquier
+ * parte de la frase, mientras que SKY exige el mensaje exacto porque su
+ * palabra de canalización es su propio nombre. Ver cada archivo.
  */
 export interface SharedNumberAdaptation {
   /**

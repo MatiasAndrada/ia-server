@@ -398,7 +398,7 @@ describe('WhatsAppHandler — camino del agente', () => {
 
     beforeEach(() => {
       store = new Map();
-      // El traspaso a Simona es permanente y vive en un archivo local: cada
+      // El traspaso a atención personal es permanente y vive en un archivo local: cada
       // test arranca con uno vacío, o el silencio de uno contaminaría al otro.
       globalThis.process.env.SHARED_NUMBER_HANDOFF_FILE = path.join(
         mkdtempSync(path.join(os.tmpdir(), 'handoffs-')),
@@ -439,15 +439,16 @@ describe('WhatsAppHandler — camino del agente', () => {
 
       await process('hola');
 
-      // Pedir por Simona no puede costar dos preguntas de formulario antes.
+      // Pedir por atención personal no puede costar dos preguntas de formulario antes.
       expect(sent).toHaveLength(1);
       expect(sent[0].toLowerCase()).not.toContain('português');
       expect(sent[0]).toContain('De La Fonte');
-      expect(sent[0]).toContain('Simona');
+      expect(sent[0]).toContain('PERSONAL');
+      expect(sent[0]).not.toContain('Simona');
       expect(turnSpy).not.toHaveBeenCalled();
     });
 
-    it('canaliza a Simona y deja de contestar, sin llegar al orquestador', async () => {
+    it('canaliza a atención personal y deja de contestar, sin llegar al orquestador', async () => {
       jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue(null);
       const turnSpy = jest.spyOn(orchestrator, 'handleTurn').mockResolvedValue({
         messages: ['no debería llegar acá'],
@@ -456,11 +457,12 @@ describe('WhatsAppHandler — camino del agente', () => {
         iterations: 1,
       });
 
-      await process('Simona');
+      await process('PERSONAL');
       expect(sent).toHaveLength(1);
-      expect(sent[0]).toContain('Simona');
+      expect(sent[0]).toContain('De La Fonte');
+      expect(sent[0]).not.toContain('Simona');
 
-      // A partir de acá la conversación es de ella: el bot no dice nada más.
+      // A partir de acá la conversación es de la persona: el bot no dice nada más.
       await process('hola? estás?');
       await process('era para el sábado');
 
@@ -468,7 +470,7 @@ describe('WhatsAppHandler — camino del agente', () => {
       expect(turnSpy).not.toHaveBeenCalled();
     });
 
-    it('ninguna palabra de reserva reactiva al bot: el chat con Simona queda en silencio', async () => {
+    it('ninguna palabra de reserva reactiva al bot: el chat con atención personal queda en silencio', async () => {
       jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue(null);
       const turnSpy = jest.spyOn(orchestrator, 'handleTurn').mockResolvedValue({
         messages: ['no debería llegar acá'],
@@ -477,7 +479,7 @@ describe('WhatsAppHandler — camino del agente', () => {
         iterations: 1,
       });
 
-      await process('Simona');
+      await process('PERSONAL');
       const sentAfterHandoff = sent.length;
       await process('quiero reservar una mesa');
       await process('reservar');
@@ -490,18 +492,18 @@ describe('WhatsAppHandler — camino del agente', () => {
       jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue(null);
       const appendSpy = jest.spyOn(state, 'appendExchange').mockResolvedValue();
 
-      await process('Simona');
+      await process('PERSONAL');
 
       expect(appendSpy).toHaveBeenCalledWith(
         `${BUSINESS_ID}-${PHONE}`,
-        'Simona',
-        expect.stringContaining('Simona')
+        'PERSONAL',
+        expect.stringContaining('De La Fonte')
       );
     });
 
-    it('lo que se habla con Simona NO entra al historial del bot', async () => {
+    it('lo que se habla con atención personal NO entra al historial del bot', async () => {
       jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue(null);
-      await process('Simona');
+      await process('PERSONAL');
 
       // El traspaso mismo sí se registró; lo que sigue, no.
       const appendSpy = jest.spyOn(state, 'appendExchange').mockResolvedValue();
@@ -710,6 +712,67 @@ describe('WhatsAppHandler — camino del agente', () => {
         fileName: 'Carta - El Local.pdf',
         mimetype: 'application/pdf',
       });
+    });
+  });
+
+  /**
+   * Freno contra un loop bot-contra-bot: dos números automáticos
+   * contestándose entre sí sin ningún humano de por medio (ver
+   * LOOP_GUARD_MAX_MESSAGES en whatsapp-handler.service.ts). El contador vive
+   * en Redis, así que estos tests lo mockean con un Map en memoria.
+   */
+  describe('freno de loop contra otro bot', () => {
+    let counters: Map<string, number>;
+
+    beforeEach(() => {
+      counters = new Map();
+      jest.spyOn(SupabaseService, 'getCustomerByPhone').mockResolvedValue(null);
+      jest.spyOn(state, 'loadHistory').mockResolvedValue([
+        { role: 'assistant', content: 'algo ya se habló' },
+      ]);
+      jest.spyOn(RedisConfig, 'isReady').mockReturnValue(true);
+      jest.spyOn(RedisConfig, 'getClient').mockReturnValue({
+        incr: jest.fn(async (key: string) => {
+          const next = (counters.get(key) ?? 0) + 1;
+          counters.set(key, next);
+          return next;
+        }),
+        expire: jest.fn(async () => 1),
+      } as any);
+    });
+
+    it('deja de mandar mensajes al superar el tope en la ventana', async () => {
+      const turnSpy = jest.spyOn(orchestrator, 'handleTurn');
+
+      // Texto distinto en cada turno: lo que se quiere probar acá es el freno
+      // por VOLUMEN (Redis), no el dedupe de texto idéntico que ya existe en
+      // memoria y que de otro modo taparía al primero desde el segundo envío.
+      for (let i = 0; i < 20; i++) {
+        turnSpy.mockResolvedValueOnce({
+          messages: [`la misma verdad de siempre, turno ${i}`],
+          attachments: [],
+          toolsCalled: [],
+          iterations: 1,
+        });
+        await process(`mensaje automático ${i}`);
+      }
+
+      expect(sent).toHaveLength(12);
+    });
+
+    it('no frena una conversación real por debajo del tope', async () => {
+      const turnSpy = jest.spyOn(orchestrator, 'handleTurn');
+      for (let i = 0; i < 5; i++) {
+        turnSpy.mockResolvedValueOnce({
+          messages: [`respuesta ${i}`],
+          attachments: [],
+          toolsCalled: [],
+          iterations: 1,
+        });
+        await process(`mensaje ${i}`);
+      }
+
+      expect(sent).toHaveLength(5);
     });
   });
 });
