@@ -7,8 +7,8 @@ import { capitalize, type SharedNumberAdaptation, type WelcomeEvent } from './sh
  *
  * Como en De La Fonte el otro camino es una persona con nombre, pero acá el
  * traspaso NO es permanente: rige el comportamiento por defecto del motor
- * (`shared-number.ts`) — silencio de doce horas, con salida antes de tiempo si
- * el cliente escribe una palabra de reserva.
+ * (`shared-number.ts`) — silencio de veinticuatro horas, con salida antes de
+ * tiempo si el cliente escribe una palabra de reserva.
  */
 export const antigalAdaptation: SharedNumberAdaptation = {
   // Parte de la key de Redis desde el primer despliegue: cambiarlo soltaría

@@ -65,8 +65,8 @@ export interface SharedNumberAdaptation {
    * el traspaso se guarda sin vencimiento en un archivo local (ver
    * `handoff-store.ts`, no en Redis) y NADA reactiva al bot — ni
    * `reactivationPattern`, ni el paso del tiempo, ni un saludo al día siguiente.
-   * Sin esto rige el comportamiento por defecto (silencio de doce horas con
-   * salida por palabra de reserva).
+   * Sin esto rige el comportamiento por defecto (silencio de veinticuatro
+   * horas con salida por palabra de reserva).
    */
   permanentHandoff?: boolean;
 
