@@ -31,6 +31,7 @@ export const deLaFonteAdaptation: SharedNumberAdaptation = {
     'dueno',
     'encargada',
     'propietaria',
+    'simona',
   ]),
 
   /**

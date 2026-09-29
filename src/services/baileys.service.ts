@@ -1005,6 +1005,7 @@ export class BaileysService {
           businessId,
           from,
           messageId,
+          message: messageContent,
           messageLength: messageContent.length,
         });
 
@@ -1224,6 +1225,7 @@ export class BaileysService {
       logEvent('info', 'msg.out', {
         businessId,
         to: jid,
+        message: normalizedMessage,
         messageLength: message.length,
         messageId: result?.key?.id,
       });
@@ -1292,6 +1294,8 @@ export class BaileysService {
       logEvent('info', 'msg.out', {
         businessId,
         to: jid,
+        imageUrl,
+        message: normalizedCaption,
         messageLength: caption?.length ?? 0,
         messageId: result?.key?.id,
       });
@@ -1374,6 +1378,9 @@ export class BaileysService {
       logEvent('info', 'msg.out', {
         businessId,
         to: jid,
+        documentUrl,
+        fileName,
+        message: normalizedCaption,
         messageLength: caption?.length ?? 0,
         messageId: result?.key?.id,
       });
