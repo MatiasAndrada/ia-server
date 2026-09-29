@@ -63,6 +63,11 @@ export interface TurnInput {
    * y la respuesta no se envía. Usa su propio historial (ver state.historyKey).
    */
   dryRun?: boolean;
+  /**
+   * Sólo para comercios de número compartido (ver `adaptations/shared-number.ts`):
+   * cómo redirigir a alguien cuyo pedido no es del mundo de las reservas.
+   */
+  outOfScopeHint?: string;
 }
 
 /**
@@ -72,6 +77,7 @@ export interface TurnInput {
 export async function handleTurn(input: TurnInput): Promise<TurnResult> {
   const { businessId, conversationId, phone, jid, messageText, language, businessName } = input;
   const dryRun = input.dryRun ?? false;
+  const outOfScopeHint = input.outOfScopeHint;
 
   // --- Guard determinista: nunca llega al modelo ---
   const scope = evaluateReservationScope(messageText, { businessName });
@@ -102,7 +108,7 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
   }
 
   // Estable primero, volátil después — ver la nota de caching en system-prompt.ts.
-  const systemPrompt = `${buildStaticPrompt(businessName)}\n\n${buildStateBlock(
+  const systemPrompt = `${buildStaticPrompt(businessName, outOfScopeHint)}\n\n${buildStateBlock(
     rules.business,
     profile,
     rules.weeklyHours,

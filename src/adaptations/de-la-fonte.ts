@@ -24,6 +24,17 @@ export const deLaFonteAdaptation: SharedNumberAdaptation = {
   handoffPattern: buildKeywordPattern(['simona', 'duena', 'dueno', 'encargada', 'propietaria']),
 
   /**
+   * Igual que en `antigal.ts`: un pedido ajeno a las reservas no siempre trae
+   * una de las palabras de `handoffPattern`, y sin este hint el modelo caía
+   * en su fallback genérico en vez de nombrar la vía real de contacto.
+   */
+  outOfScopeHint:
+    'Si quien te escribe no es cliente de reservas — un proveedor, un trámite ajeno al local — ' +
+    'o pide explícitamente hablar con una persona o atención personalizada, no lo mandes a ' +
+    '"contactar al local": decile que escriba *Simona* (en negrita) y ese mismo chat sigue ' +
+    'con ella.',
+
+  /**
    * Una vez que el cliente elige Simona, el bot no vuelve a activarse en ese
    * chat, de ninguna manera: sin vencimiento y sin palabra de salida. Por eso
    * `reactivationPattern` queda definido sólo por requisito de la interfaz y

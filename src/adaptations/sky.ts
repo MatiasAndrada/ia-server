@@ -45,6 +45,18 @@ export const skyAdaptation: SharedNumberAdaptation = {
   ]),
 
   /**
+   * Igual que en `antigal.ts`: un pedido ajeno a las reservas no siempre trae
+   * una de las palabras de `handoffPattern` ("hola, quería preguntar por un
+   * evento privado" no dice "SKY" ni "consulta"), y sin este hint el modelo
+   * caía en su fallback genérico en vez de nombrar la vía real de contacto.
+   */
+  outOfScopeHint:
+    'Si quien te escribe no es cliente de reservas — un proveedor, un trámite ajeno al local — ' +
+    'o pide explícitamente hablar con una persona o atención personalizada, no lo mandes a ' +
+    '"contactar al local": decile que escriba *SKY* (en negrita) y ese mismo chat sigue con el ' +
+    'equipo del local.',
+
+  /**
    * Igual que en De La Fonte: sólo palabras del mundo de la reserva. Una
    * reactivación de más se mete en medio de una conversación real; una de menos
    * se arregla con el "escribí *Reserva*" que dejó el mensaje de traspaso.

@@ -564,6 +564,7 @@ export class WhatsAppHandler {
         messageText,
         language,
         businessName: businessStatus.name,
+        outOfScopeHint: sharedNumber?.outOfScopeHint,
       });
 
       // Las imágenes van PRIMERO y el texto debajo: las fotos enganchan y el

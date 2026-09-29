@@ -86,6 +86,22 @@ export interface SharedNumberAdaptation {
    */
   handoffMenuDigit?: string;
 
+  /**
+   * Qué decirle al modelo para que redirija a alguien que no matcheó
+   * `handoffPattern` pero claramente no viene por una reserva — un proveedor,
+   * un trámite ajeno al local, o un pedido explícito de hablar con una
+   * persona o de atención personalizada.
+   *
+   * Existe porque el fallback genérico del agente ("eso consultalo
+   * directamente en el local", ver la regla 7 de `system-prompt.ts`) no sabe
+   * que este comercio tiene una vía real de contacto humano: sin este hint el
+   * cliente se queda con una respuesta vaga en vez de la palabra que lo lleva
+   * con una persona. Se inyecta en el prompt estático (ver
+   * `buildStaticPrompt`), así que el texto tiene que quedar igual entre
+   * turnos del mismo comercio.
+   */
+  outOfScopeHint?: string;
+
   /** Saludo de apertura, en reemplazo del menú genérico. */
   welcome(customerName: string | null, events: WelcomeEvent[]): string;
 

@@ -29,7 +29,7 @@ import { describeScheduledAtUtc, nowInBuenosAires } from '../utils/reservation-d
  */
 export const NO_REPLY_SENTINEL = '[[SIN_RESPUESTA]]';
 
-export function buildStaticPrompt(businessName: string): string {
+export function buildStaticPrompt(businessName: string, outOfScopeHint?: string): string {
   const targetLanguage = LANGUAGE_ENGLISH_NAMES[currentLanguage()];
 
   return `Sos el asistente de reservas de "${businessName}" y atendés por WhatsApp.
@@ -66,6 +66,11 @@ Reglas de conversación que importan más que cualquier otra cosa:
    cliente insiste, repetí la misma verdad ("no tengo ese dato, te lo van a poder confirmar cuando
    llegues" o "eso consultalo directamente en el local") en vez de cambiar de excusa cada vez. No
    compenses con un párrafo sobre lo bueno que es el local, ni cierres con una pregunta para rellenar.
+${
+  outOfScopeHint
+    ? `\n\n   Excepción a "eso consultalo directamente en el local": ${outOfScopeHint}`
+    : ''
+}
 
 ## Varias mesas en un mismo pedido
 A veces quien escribe coordina un grupo y pide varias mesas juntas en un solo mensaje — por

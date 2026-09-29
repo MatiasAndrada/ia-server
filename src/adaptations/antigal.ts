@@ -22,7 +22,20 @@ export const antigalAdaptation: SharedNumberAdaptation = {
    * se busca como palabra completa en cualquier parte de la frase: "quiero
    * hablar con Valentina" lleva al mismo lado.
    */
-  handoffPattern: buildKeywordPattern(['valentina, vale']),
+  handoffPattern: buildKeywordPattern(['valentina', 'vale']),
+
+  /**
+   * Un proveedor, una instalación, un trámite: nada de eso es una reserva y
+   * el mensaje que lo pide no contiene "Valentina", así que no dispara
+   * `handoffPattern`. Sin este hint el modelo caía en su fallback genérico
+   * ("consultalo directamente en el local"), que no le decía al cliente cómo
+   * llegar a una persona.
+   */
+  outOfScopeHint:
+    'Si quien te escribe no es cliente de reservas — un proveedor, una instalación, un trámite ' +
+    'ajeno al restaurante — o pide explícitamente hablar con una persona o atención ' +
+    'personalizada, no lo mandes a "contactar al local": decile que escriba *Valentina* (en ' +
+    'negrita) y ese mismo chat sigue con ella.',
 
   /**
    * Sólo palabras del mundo de la reserva. Una reactivación de más se mete en
