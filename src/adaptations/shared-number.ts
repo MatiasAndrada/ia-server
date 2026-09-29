@@ -96,13 +96,14 @@ export interface SharedNumberAdaptation {
 /**
  * Cuánto dura el silencio del bot desde que se canaliza a una persona.
  *
- * Doce horas es "el resto del día": la persona puede tardar en contestar, y
- * hasta que no cierre esa charla el bot no tiene nada que hacer ahí. No es una
- * ventana deslizante a propósito — si el cliente vuelve al día siguiente con un
- * "hola", lo que corresponde es el saludo, no más silencio. Dentro de las doce
- * horas la salida siempre está disponible escribiendo una palabra de reserva.
+ * Veinticuatro horas cubre el día completo: la persona puede tardar en
+ * contestar, y hasta que no cierre esa charla el bot no tiene nada que hacer
+ * ahí. No es una ventana deslizante a propósito — si el cliente vuelve al día
+ * siguiente con un "hola", lo que corresponde es el saludo, no más silencio.
+ * Dentro de las veinticuatro horas la salida siempre está disponible
+ * escribiendo una palabra de reserva.
  */
-const HANDOFF_TTL_SECONDS = 12 * 60 * 60;
+const HANDOFF_TTL_SECONDS = 24 * 60 * 60;
 
 function handoffKey(adaptation: SharedNumberAdaptation, conversationId: string): string {
   return `adaptation:${adaptation.id}:handoff:${conversationId}`;
