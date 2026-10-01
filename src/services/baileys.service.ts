@@ -20,6 +20,7 @@ import { BaileysSession, BaileysMessage } from '../types/index.js';
 import { SupabaseService } from './supabase.service.js';
 import { WhatsAppHandler } from './whatsapp-handler.service.js';
 import { RedisConfig } from '../config/redis.js';
+import { findSharedNumberAdaptation } from '../adaptations/index.js';
 
 // Dynamic import for Baileys ES Module compatibility
 let makeWASocket: any;
@@ -936,13 +937,28 @@ export class BaileysService {
    * Handle incoming messages
    */
   private async handleIncomingMessages(businessId: string, messageUpdate: any): Promise<void> {
+    // Hora de llegada, tomada antes de cualquier espera. La consulta a
+    // Supabase de abajo tarda distinto en cada evento, y sin esto el saludo
+    // automático del celular podía quedar registrado antes que el mensaje del
+    // cliente que lo provocó (ver `WhatsAppHandler.onCustomerMessage`).
+    const receivedAt = Date.now();
+
     try {
       const { messages, type } = messageUpdate;
 
       if (type !== 'notify') return;
 
+      for (const msg of messages ?? []) {
+        if (msg?.message && !msg.key?.fromMe && this.isDirectChat(msg.key?.remoteJid)) {
+          this.whatsAppHandler.onCustomerMessage(businessId, this.resolvePhoneJid(msg.key), receivedAt);
+        }
+      }
+
       const isAiChatEnabled = await SupabaseService.isBusinessAiChatEnabled(businessId);
-      if (!isAiChatEnabled) {
+      // Con el bot apagado, un local de número compartido igual registra en
+      // qué chats escribe la persona: el día que lo vuelven a prender, el bot
+      // ya sabe qué conversaciones son de ella y no les habla encima.
+      if (!isAiChatEnabled && !findSharedNumberAdaptation(businessId)) {
         // Es el estado normal de todo comercio con el bot apagado: 676
         // líneas `info` en la muestra anterior sin ninguna acción posible.
         logger.debug('AI chat disabled for business, skipping incoming messages', {
@@ -954,13 +970,7 @@ export class BaileysService {
 
       for (const msg of messages) {
         // Skip broadcast messages, status updates, and group chats
-        if (
-          !msg.message ||
-          msg.key.remoteJid === 'status@broadcast' ||
-          msg.key.remoteJid?.endsWith('@g.us') ||
-          isJidBroadcast(msg.key.remoteJid!) ||
-          isJidStatusBroadcast(msg.key.remoteJid!)
-        ) {
+        if (!msg.message || !this.isDirectChat(msg.key.remoteJid)) {
           continue;
         }
 
@@ -969,8 +979,6 @@ export class BaileysService {
           msg.message.conversation ||
           msg.message.extendedTextMessage?.text ||
           '';
-
-        if (!messageContent) continue;
 
         // In the LID addressing era, `remoteJid` can be an @lid identity
         // (e.g. 189489813160117@lid) instead of the real phone number.
@@ -991,6 +999,29 @@ export class BaileysService {
           continue;
         }
 
+        // Del cliente al bot sólo le sirve el texto. Pero un audio o una foto
+        // que manda la persona desde el celular también dice "este chat lo
+        // atiendo yo" (ver `WhatsAppHandler.processOwnMessage`).
+        const isOwnMedia = fromMe && !messageContent && this.hasMediaContent(msg.message);
+        if (!messageContent && !isOwnMedia) continue;
+
+        if (!isAiChatEnabled) {
+          // Bot apagado en un local de número compartido: sólo importa en qué
+          // chats escribe la persona. No se loguea ni se guarda el contenido.
+          if (fromMe) {
+            await this.whatsAppHandler.processOwnMessage({
+              from,
+              message: messageContent,
+              timestamp: timestamp * 1000,
+              businessId,
+              messageId,
+              fromMe,
+              receivedAt,
+            });
+          }
+          continue;
+        }
+
         if (messageId) {
           const shouldProcess = await this.shouldProcessInboundMessage(businessId, messageId);
           if (!shouldProcess) {
@@ -1007,6 +1038,7 @@ export class BaileysService {
           messageId,
           message: messageContent,
           messageLength: messageContent.length,
+          ...(fromMe && { fromMe }),
         });
 
         // Create message object
@@ -1017,10 +1049,13 @@ export class BaileysService {
           businessId,
           messageId,
           fromMe,
+          receivedAt,
         };
 
         // Store in Redis
-        await this.storeIncomingMessage(baileysMessage);
+        if (messageContent) {
+          await this.storeIncomingMessage(baileysMessage);
+        }
         
         // Process message with AI
         try {
@@ -1035,6 +1070,41 @@ export class BaileysService {
       logger.error('Error handling incoming messages', { error, businessId });
     }
   }
+
+  /** Chat uno a uno con un contacto: ni grupos, ni estados, ni listas de difusión. */
+  private isDirectChat(remoteJid: string | undefined): boolean {
+    return (
+      !!remoteJid &&
+      remoteJid !== 'status@broadcast' &&
+      !remoteJid.endsWith('@g.us') &&
+      !isJidBroadcast?.(remoteJid) &&
+      !isJidStatusBroadcast?.(remoteJid)
+    );
+  }
+
+  /**
+   * ¿Es un mensaje que una persona manda a mano, aunque no sea texto? Quedan
+   * afuera las reacciones y los mensajes de protocolo (ediciones, borrados,
+   * sincronización entre dispositivos), que no dicen que alguien esté
+   * atendiendo el chat.
+   */
+  private hasMediaContent(content: any): boolean {
+    return BaileysService.MEDIA_MESSAGE_TYPES.some((type) => Boolean(content?.[type]));
+  }
+
+  private static readonly MEDIA_MESSAGE_TYPES = [
+    'imageMessage',
+    'videoMessage',
+    'ptvMessage',
+    'audioMessage',
+    'documentMessage',
+    'documentWithCaptionMessage',
+    'stickerMessage',
+    'contactMessage',
+    'contactsArrayMessage',
+    'locationMessage',
+    'liveLocationMessage',
+  ] as const;
 
   private async shouldProcessInboundMessage(
     businessId: string,
