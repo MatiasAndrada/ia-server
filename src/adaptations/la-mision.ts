@@ -42,15 +42,15 @@ export const laMisionAdaptation: SharedNumberAdaptation = {
 
   /**
    * Igual que en `antigal.ts`: una consulta de hotel ajena a la reserva de
-   * mesa no siempre trae la palabra "consultas" ni el dígito del menú, y sin
-   * este hint el modelo caía en su fallback genérico en vez de nombrar la vía
-   * real de contacto.
+   * mesa no siempre trae la palabra "consultas" ni el dígito del menú. Con
+   * este contexto el modelo la reconoce y deja el chat al equipo del hotel
+   * sin decir nada (ver `humanContext` en shared-number.ts).
    */
-  outOfScopeHint:
-    'Si quien te escribe pregunta algo del hotel — check-in, habitaciones, cualquier cosa que ' +
-    'no sea la reserva de mesa en el restaurante — o pide explícitamente hablar con una persona ' +
-    'o atención personalizada, no lo mandes a "contactar al hotel": decile que escriba ' +
-    '*CONSULTAS* (en negrita) y ese mismo chat sigue con el equipo del hotel.',
+  humanContext:
+    'Este número de WhatsApp es el del hotel Gran Amérian Portal del Iguazú, donde funciona el ' +
+    'Restaurante La Misión, y lo atiende también el equipo del hotel: todo lo del hotel ' +
+    '(check-in, habitaciones, estadías, traslados, huéspedes) y lo que no sea reservar en el ' +
+    'restaurante es de ellos.',
 
   /**
    * Palabras del mundo de la reserva de mesa, más el nombre del restaurante:
@@ -66,6 +66,21 @@ export const laMisionAdaptation: SharedNumberAdaptation = {
     'mesa',
     'mesas',
     'turno',
+    'mision',
+  ]),
+
+  /**
+   * Si fue el equipo del hotel el que escribió en el chat, sólo la palabra
+   * sola le devuelve el chat al bot: "LA MISIÓN" o "Reservar" (lo que enseñan
+   * el saludo y la confirmación) o "Cancelar" (lo que piden los
+   * recordatorios). Sin el "2" del menú: en una charla con el hotel un "2"
+   * suelto es la respuesta a "¿cuántos son?", no una opción.
+   */
+  resumeCommandPattern: buildExactKeywordPattern([
+    ...BOOK_KEYWORDS,
+    ...CANCEL_KEYWORDS,
+    'reservas',
+    'la mision',
     'mision',
   ]),
 

@@ -1,5 +1,11 @@
 import { openRouterService } from '../services/openrouter.service.js';
-import { executeToolCall, getToolDefinitions, ToolContext, ToolResult } from './tools/index.js';
+import {
+  executeToolCall,
+  getToolDefinitions,
+  HAND_OFF_TO_HUMAN,
+  ToolContext,
+  ToolResult,
+} from './tools/index.js';
 import type { ToolAttachment } from './tools/types.js';
 import { buildStateBlock, buildStaticPrompt, NO_REPLY_SENTINEL } from './system-prompt.js';
 import {
@@ -38,6 +44,12 @@ export interface TurnResult {
   /** Herramientas ejecutadas — el harness de tests asierta sobre esto. */
   toolsCalled: string[];
   iterations: number;
+  /**
+   * El modelo dejó el chat en manos de la persona del local
+   * (`hand_off_to_human`): `messages` y `attachments` vienen vacíos a
+   * propósito y no hay que mandar nada.
+   */
+  handedOff?: boolean;
 }
 
 const GENERATION_OPTIONS = {
@@ -64,10 +76,13 @@ export interface TurnInput {
    */
   dryRun?: boolean;
   /**
-   * Sólo para comercios de número compartido (ver `adaptations/shared-number.ts`):
-   * cómo redirigir a alguien cuyo pedido no es del mundo de las reservas.
+   * Sólo para comercios de número compartido (ver `humanContext` en
+   * `adaptations/shared-number.ts`): quién más atiende el número. Con esto el
+   * modelo puede derivar con `hand_off_to_human` lo que no es para el bot.
    */
-  outOfScopeHint?: string;
+  humanContext?: string;
+  /** Cómo contestar al cliente con una consulta ajena a las reservas (ver `inquiryGuidance`). */
+  inquiryGuidance?: string;
 }
 
 /**
@@ -77,7 +92,7 @@ export interface TurnInput {
 export async function handleTurn(input: TurnInput): Promise<TurnResult> {
   const { businessId, conversationId, phone, jid, messageText, language, businessName } = input;
   const dryRun = input.dryRun ?? false;
-  const outOfScopeHint = input.outOfScopeHint;
+  const humanContext = input.humanContext;
 
   // --- Guard determinista: nunca llega al modelo ---
   const scope = evaluateReservationScope(messageText, { businessName });
@@ -108,7 +123,7 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
   }
 
   // Estable primero, volátil después — ver la nota de caching en system-prompt.ts.
-  const systemPrompt = `${buildStaticPrompt(businessName, outOfScopeHint)}\n\n${buildStateBlock(
+  const systemPrompt = `${buildStaticPrompt(businessName, humanContext, input.inquiryGuidance)}\n\n${buildStateBlock(
     rules.business,
     profile,
     rules.weeklyHours,
@@ -127,7 +142,7 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
   const result = await openRouterService.runToolLoop(
     messages,
     systemPrompt,
-    getToolDefinitions(),
+    getToolDefinitions({ humanHandoff: Boolean(humanContext) }),
     async (call) => {
       const toolResult = await executeToolCall(call, ctx);
       if (toolResult.verbatim) {
@@ -158,11 +173,37 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
   // resultados de herramienta dentro de `result.messages`, y duplicarlos como
   // texto del assistant haría que el modelo los repita en el turno siguiente.
   const finalText = silenced ? rawText.split(NO_REPLY_SENTINEL).join('').trim() : rawText;
+
+  // El modelo dejó el chat en manos de la persona del local: de este turno no
+  // se manda NADA — ni su texto, ni un `verbatim`, ni el fallback de turno
+  // vacío. Quien escribió no le estaba hablando al bot, y hasta un "te paso
+  // con Simona" es el bot apareciendo donde nadie lo llamó. Por lo mismo, ese
+  // texto tampoco va al historial: nunca se dijo.
+  const handedOff = result.executedToolCalls.some(
+    (c) => c.name === HAND_OFF_TO_HUMAN && (c.output as ToolResult | undefined)?.ok === true
+  );
+
   const toPersist: LlmMessage[] = [...result.messages];
-  if (finalText) {
+  if (finalText && !handedOff) {
     toPersist.push({ role: 'assistant', content: finalText });
   }
   await saveHistory(conversationId, toPersist, dryRun);
+
+  if (handedOff) {
+    logEvent('info', 'turn.silenced', {
+      conversationId,
+      businessId,
+      via: dryRun ? 'agent_handoff_dry_run' : 'agent_handoff',
+      droppedText: finalText.length > 0 || verbatimMessages.length > 0,
+    });
+    return {
+      messages: [],
+      attachments: [],
+      toolsCalled: result.executedToolCalls.map((c) => c.name),
+      iterations: result.iterations,
+      handedOff: true,
+    };
+  }
 
   // Un turno es improductivo si el modelo agotó las iteraciones sin cerrar, o
   // si todas las herramientas que pidió fallaron. Dos seguidos y se corta: sin

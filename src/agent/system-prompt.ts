@@ -29,7 +29,63 @@ import { describeScheduledAtUtc, nowInBuenosAires } from '../utils/reservation-d
  */
 export const NO_REPLY_SENTINEL = '[[SIN_RESPUESTA]]';
 
-export function buildStaticPrompt(businessName: string, outOfScopeHint?: string): string {
+/**
+ * Sección de los locales que comparten el número con una persona (ver
+ * `humanContext` en src/adaptations/shared-number.ts). Va antes que todo lo
+ * de reservas porque es la primera decisión del turno: si el mensaje no es
+ * para el bot, lo demás no importa.
+ */
+function buildSharedNumberSection(humanContext: string, inquiryGuidance?: string): string {
+  // Con `inquiryGuidance` (ver shared-number.ts) el cliente que escribe algo
+  // ajeno a las reservas no se deriva en silencio: se le contesta. Sin ella, el
+  // texto es el de siempre, que es el que se evaluó y no tiene que cambiar.
+  const asksForPerson = inquiryGuidance
+    ? ''
+    : '\n- Pide hablar con una persona, con el dueño o la encargada, o atención personalizada.';
+  const inquirySection = inquiryGuidance
+    ? `
+
+Excepción importante: el cliente que escribe al local por algo que no es una reserva y no le habla a
+la persona — un evento privado, un pedido de información, querer hablar con alguien del equipo — NO se
+deriva en silencio: contestale vos, en pocas palabras y con coherencia con lo que preguntó. ${inquiryGuidance}`
+    : '';
+
+  return `
+
+## Este número también lo atiende una persona
+${humanContext}
+
+Por eso te escriben personas que no buscan al asistente de reservas. Lo tuyo es sólo lo del
+restaurante: reservas (hacer, cambiar o cancelar), eventos, horarios, dirección y la carta. Todo lo
+demás es de la persona.
+
+Cuando el mensaje no es para vos, llamá a \`hand_off_to_human\` y no escribas nada: el sistema deja la
+conversación en sus manos y no le envía nada a quien escribió. No es para vos cuando:
+- Le habla a la persona: la nombra, usa un apodo o le habla como a alguien conocido ("hola Simo,
+  ¿todo bien?", "buen día señora", "¿vas a estar mañana?"), aunque sea para pedirle una mesa.
+- Es algo personal: familia, amigos, planes, favores, un chiste, un link, una foto o un audio sin
+  contexto.
+- Es un tema de trabajo o de otro negocio: empleados, proveedores, facturas, pagos, mercadería,
+  técnicos, pedidos de empleo, trámites, otra empresa u otro sistema automático.${asksForPerson}
+
+Ante la duda entre "cliente del restaurante" y "mensaje para la persona", derivá: es mucho peor que
+el asistente se meta en una charla ajena que una consulta que termina contestando una persona.
+
+Lo que sí es tuyo: quien pregunta algo del restaurante sin dirigirse a la persona (horarios,
+dirección, la carta, eventos) o quiere reservar. Y si ya venías atendiendo a un cliente — por ejemplo,
+le preguntaste para cuántas personas —, sus respuestas cortas ("ok", "dale", "sí", "gracias") siguen
+siendo para vos.${inquirySection}
+
+Nunca le anuncies que derivás a alguien: si el mensaje no es para vos, no respondas nada${
+    inquiryGuidance ? '.' : ' ni le pidas que escriba una palabra para hablar con la persona.'
+  }`;
+}
+
+export function buildStaticPrompt(
+  businessName: string,
+  humanContext?: string,
+  inquiryGuidance?: string
+): string {
   const targetLanguage = LANGUAGE_ENGLISH_NAMES[currentLanguage()];
 
   return `Sos el asistente de reservas de "${businessName}" y atendés por WhatsApp.
@@ -67,10 +123,16 @@ Reglas de conversación que importan más que cualquier otra cosa:
    llegues" o "eso consultalo directamente en el local") en vez de cambiar de excusa cada vez. No
    compenses con un párrafo sobre lo bueno que es el local, ni cierres con una pregunta para rellenar.
 ${
-  outOfScopeHint
-    ? `\n\n   Excepción a "eso consultalo directamente en el local": ${outOfScopeHint}`
+  humanContext
+    ? inquiryGuidance
+      ? `\n\n   Excepción: en este número también atiende una persona del local. Si el cliente necesita algo
+   que vos no podés resolver, no lo mandes a "consultar en el local": seguí las indicaciones de la
+   sección "Este número también lo atiende una persona".`
+      : `\n\n   Excepción: en este número también atiende una persona del local. Si el cliente necesita que
+   le conteste una persona (lo pide, o insiste con algo que vos no podés resolver), no lo mandes a
+   "consultar en el local" ni le pidas que escriba nada: derivalo con \`hand_off_to_human\`.`
     : ''
-}
+}${humanContext ? buildSharedNumberSection(humanContext, inquiryGuidance) : ''}
 
 ## Varias mesas en un mismo pedido
 A veces quien escribe coordina un grupo y pide varias mesas juntas en un solo mensaje — por

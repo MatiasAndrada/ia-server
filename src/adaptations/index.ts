@@ -5,12 +5,16 @@ import { skyAdaptation } from './sky.js';
 import { matchesBusiness, type SharedNumberAdaptation } from './shared-number.js';
 
 export {
+  handOffWithoutReply,
   interceptSharedNumberTurn,
+  isBotMuted,
   markWelcomeMenuShown,
+  registerHumanReply,
   type SharedNumberAdaptation,
   type SharedNumberOutcome,
   type WelcomeEvent,
 } from './shared-number.js';
+export { isPhoneAutoReply, noteCustomerMessage } from './phone-auto-replies.js';
 
 /**
  * Los locales que comparten su número de WhatsApp entre el bot y una persona.

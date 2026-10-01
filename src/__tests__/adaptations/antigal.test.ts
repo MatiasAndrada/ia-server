@@ -6,7 +6,7 @@ jest.mock('../../utils/logger');
 
 /**
  * Antigal comparte el número con Valentina. A diferencia de De La Fonte el
- * traspaso no es permanente: silencio de veinticuatro horas con salida por
+ * traspaso no es permanente: silencio de cuarenta y ocho horas con salida por
  * palabra de reserva, que es el comportamiento por defecto del motor.
  */
 
@@ -63,10 +63,10 @@ describe('adaptación Antigal', () => {
       }
     );
 
-    it('el traspaso no es permanente: vence a las veinticuatro horas', async () => {
+    it('el traspaso no es permanente: vence a las cuarenta y ocho horas', async () => {
       await intercept('Valentina');
 
-      expect(setEx).toHaveBeenCalledWith(expect.any(String), 24 * 60 * 60, '1');
+      expect(setEx).toHaveBeenCalledWith(expect.any(String), 48 * 60 * 60, '1');
     });
 
     it('después del traspaso el bot no contesta más', async () => {

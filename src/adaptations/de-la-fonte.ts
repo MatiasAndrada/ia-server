@@ -35,21 +35,28 @@ export const deLaFonteAdaptation: SharedNumberAdaptation = {
   ]),
 
   /**
-   * Igual que en `antigal.ts`: un pedido ajeno a las reservas no siempre trae
-   * una de las palabras de `handoffPattern`, y sin este hint el modelo caía
-   * en su fallback genérico en vez de nombrar la vía real de contacto.
+   * El número es el de Simona para todo: en los logs de producción le
+   * escriben amigos ("holaa simo todo bien?"), empleados ("chicos mañana
+   * falto"), proveedores, la escuela de una hija y hasta el bot de otra
+   * empresa. Ninguno escribe PERSONAL, y antes el modelo le contestaba a cada
+   * uno pidiéndoselo. Con este contexto los reconoce y se corre sin decir
+   * nada (ver `humanContext` en shared-number.ts).
    */
-  outOfScopeHint:
-    'Si quien te escribe no es cliente de reservas — un proveedor, un trámite ajeno al local — ' +
-    'o pide explícitamente hablar con una persona o atención personalizada, no lo mandes a ' +
-    '"contactar al local": decile que escriba *PERSONAL* (en negrita) y ese mismo chat sigue ' +
-    'con alguien del local.',
+  humanContext:
+    'Este número de WhatsApp es también el de Simona, la dueña de De La Fonte, y lo usa para todo: ' +
+    'le escriben su familia, sus amigos, el personal del local, proveedores y gente por otros ' +
+    'asuntos suyos que no tienen nada que ver con el restaurante. Muchos la llaman "Simo" o "señora".',
 
   /**
    * Una vez que el cliente elige atención personalizada, el bot no vuelve a
    * activarse en ese chat, de ninguna manera: sin vencimiento y sin palabra de
    * salida. Por eso `reactivationPattern` queda definido sólo por requisito de
    * la interfaz y el motor no lo consulta.
+   *
+   * Lo mismo cuando es Simona la que escribe en un chat desde el celular: ese
+   * chat pasa a ser de ella para siempre (ver `registerHumanReply`). Por eso
+   * tampoco hay `resumeCommandPattern`. Si hace falta devolverle un chat al
+   * bot, `scripts/handoff-silences.ts`.
    */
   permanentHandoff: true,
 

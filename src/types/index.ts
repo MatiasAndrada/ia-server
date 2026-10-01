@@ -355,6 +355,12 @@ export interface BaileysMessage {
   businessId: string;
   messageId?: string;
   fromMe?: boolean;
+  /**
+   * Hora LOCAL de llegada (ms), tomada apenas Baileys emite el mensaje.
+   * `timestamp` es la del emisor y puede venir corrida; ésta sirve para
+   * comparar dos mensajes del mismo chat (ver `isPhoneAutoReply`).
+   */
+  receivedAt?: number;
 }
 
 // WebSocket Event Types

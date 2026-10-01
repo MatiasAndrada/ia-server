@@ -18,10 +18,12 @@ import {
   showEventDetailsTool,
 } from './business.tools.js';
 import { setLanguageTool, updateCustomerNameTool } from './customer.tools.js';
+import { handOffToHumanTool } from './handoff.tools.js';
 import { LlmToolCall, LlmToolDefinition } from '../../types/index.js';
 import { logger } from '../../utils/logger.js';
 
 export type { ToolAttachment, ToolContext, ToolResult } from './types.js';
+export { HAND_OFF_TO_HUMAN } from './handoff.tools.js';
 
 /**
  * Registro de herramientas del agente.
@@ -51,13 +53,26 @@ const TOOLS: readonly AgentTool<any>[] = [
   setLanguageTool,
 ];
 
+/**
+ * Sólo para comercios que comparten el número con una persona (ver
+ * src/adaptations/). Van DESPUÉS de las comunes: así la lista de un comercio
+ * es siempre la misma de turno a turno, y el prefijo común a todos no cambia.
+ */
+const HUMAN_HANDOFF_TOOLS: readonly AgentTool<any>[] = [handOffToHumanTool];
+
 const BY_NAME = new Map<string, AgentTool<any>>(
-  TOOLS.map((tool) => [tool.definition.function.name, tool])
+  [...TOOLS, ...HUMAN_HANDOFF_TOOLS].map((tool) => [tool.definition.function.name, tool])
 );
 
+export interface ToolDefinitionOptions {
+  /** El número lo atiende también una persona: se ofrece `hand_off_to_human`. */
+  humanHandoff?: boolean;
+}
+
 /** Definiciones para mandarle al modelo. Se reenvían en CADA request del loop. */
-export function getToolDefinitions(): LlmToolDefinition[] {
-  return TOOLS.map((tool) => tool.definition);
+export function getToolDefinitions(options: ToolDefinitionOptions = {}): LlmToolDefinition[] {
+  const tools = options.humanHandoff ? [...TOOLS, ...HUMAN_HANDOFF_TOOLS] : TOOLS;
+  return tools.map((tool) => tool.definition);
 }
 
 /**

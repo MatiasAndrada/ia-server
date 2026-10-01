@@ -1,4 +1,9 @@
-import { BOOK_KEYWORDS, CANCEL_KEYWORDS, buildKeywordPattern } from '../i18n/keywords.js';
+import {
+  BOOK_KEYWORDS,
+  CANCEL_KEYWORDS,
+  buildExactKeywordPattern,
+  buildKeywordPattern,
+} from '../i18n/keywords.js';
 import { capitalize, type SharedNumberAdaptation, type WelcomeEvent } from './shared-number.js';
 
 /**
@@ -7,7 +12,7 @@ import { capitalize, type SharedNumberAdaptation, type WelcomeEvent } from './sh
  *
  * Como en De La Fonte el otro camino es una persona con nombre, pero acá el
  * traspaso NO es permanente: rige el comportamiento por defecto del motor
- * (`shared-number.ts`) — silencio de veinticuatro horas, con salida antes de
+ * (`shared-number.ts`) — silencio de cuarenta y ocho horas, con salida antes de
  * tiempo si el cliente escribe una palabra de reserva.
  */
 export const antigalAdaptation: SharedNumberAdaptation = {
@@ -25,17 +30,16 @@ export const antigalAdaptation: SharedNumberAdaptation = {
   handoffPattern: buildKeywordPattern(['valentina', 'vale']),
 
   /**
-   * Un proveedor, una instalación, un trámite: nada de eso es una reserva y
-   * el mensaje que lo pide no contiene "Valentina", así que no dispara
-   * `handoffPattern`. Sin este hint el modelo caía en su fallback genérico
-   * ("consultalo directamente en el local"), que no le decía al cliente cómo
-   * llegar a una persona.
+   * Un proveedor, una instalación, un amigo que le escribe a Valentina: nada
+   * de eso es una reserva, y el mensaje no siempre la nombra, así que no
+   * dispara `handoffPattern`. Con este contexto el modelo lo reconoce y deja
+   * el chat en sus manos sin decir nada (ver `humanContext` en
+   * shared-number.ts).
    */
-  outOfScopeHint:
-    'Si quien te escribe no es cliente de reservas — un proveedor, una instalación, un trámite ' +
-    'ajeno al restaurante — o pide explícitamente hablar con una persona o atención ' +
-    'personalizada, no lo mandes a "contactar al local": decile que escriba *Valentina* (en ' +
-    'negrita) y ese mismo chat sigue con ella.',
+  humanContext:
+    'Este número de WhatsApp es también el de Valentina, de Antigal, y lo usa para sus propias ' +
+    'conversaciones: le escriben amigos, familia, empleados, proveedores y clientes que la ' +
+    'conocen. Muchos la llaman "Vale".',
 
   /**
    * Sólo palabras del mundo de la reserva. Una reactivación de más se mete en
@@ -50,6 +54,14 @@ export const antigalAdaptation: SharedNumberAdaptation = {
     'mesas',
     'turno',
   ]),
+
+  /**
+   * Si fue Valentina la que escribió en el chat, sólo la palabra sola le
+   * devuelve el chat al bot: "Reservar" (lo que enseñan el saludo y la
+   * confirmación) o "Cancelar" (lo que piden los recordatorios). "¿Tenés mesa
+   * el sábado?" en una charla con ella es para ella.
+   */
+  resumeCommandPattern: buildExactKeywordPattern([...BOOK_KEYWORDS, ...CANCEL_KEYWORDS, 'reservas']),
 
   welcome(customerName: string | null, events: WelcomeEvent[] = []): string {
     const lines = [

@@ -47,14 +47,28 @@ export const skyAdaptation: SharedNumberAdaptation = {
   /**
    * Igual que en `antigal.ts`: un pedido ajeno a las reservas no siempre trae
    * una de las palabras de `handoffPattern` ("hola, quería preguntar por un
-   * evento privado" no dice "SKY" ni "consulta"), y sin este hint el modelo
-   * caía en su fallback genérico en vez de nombrar la vía real de contacto.
+   * evento privado" no dice "SKY" ni "consulta"). Con este contexto el modelo
+   * lo reconoce. Lo que es para el equipo y no para el bot (proveedores,
+   * empleados, amigos) queda en silencio; el cliente que consulta por algo
+   * ajeno a la reserva se contesta (ver `inquiryGuidance`).
    */
-  outOfScopeHint:
-    'Si quien te escribe no es cliente de reservas — un proveedor, un trámite ajeno al local — ' +
-    'o pide explícitamente hablar con una persona o atención personalizada, no lo mandes a ' +
-    '"contactar al local": decile que escriba *SKY* (en negrita) y ese mismo chat sigue con el ' +
-    'equipo del local.',
+  humanContext:
+    'Este número de WhatsApp es el del local SKY Restaurante and Bar y lo atiende también su ' +
+    'equipo: las consultas que no son reservas de mesa, los eventos privados, los proveedores y ' +
+    'los temas internos son de ellos.',
+
+  /**
+   * "Hola, quería preguntar por un evento privado" es un cliente, no un
+   * mensaje para el equipo: silenciarlo lo deja sin respuesta en el primer
+   * contacto. El bot le contesta y le muestra la salida que el menú ya enseña
+   * — escribir *SKY* —, que es la que efectivamente deja el chat al equipo.
+   * No inventa condiciones ni precios de eventos que no conoce.
+   */
+  inquiryGuidance:
+    'Respondé con naturalidad a lo que preguntó (por ejemplo, que los eventos privados los ' +
+    'coordina directamente el equipo de SKY), sin inventar precios, capacidades ni disponibilidad, ' +
+    'y cerrá diciéndole que escriba *SKY* (en negrita) para seguir esa consulta por este mismo ' +
+    'chat con el equipo. Si además quiere reservar una mesa, atendelo vos.',
 
   /**
    * Igual que en De La Fonte: sólo palabras del mundo de la reserva. Una
@@ -69,6 +83,13 @@ export const skyAdaptation: SharedNumberAdaptation = {
     'mesas',
     'turno',
   ]),
+
+  /**
+   * Si fue el equipo el que escribió en el chat, sólo la palabra sola le
+   * devuelve el chat al bot: "Reserva" (lo que enseñan el saludo y la
+   * confirmación) o "Cancelar" (lo que piden los recordatorios).
+   */
+  resumeCommandPattern: buildExactKeywordPattern([...BOOK_KEYWORDS, ...CANCEL_KEYWORDS, 'reservas']),
 
   welcome(customerName: string | null, events: WelcomeEvent[] = []): string {
     const lines = [

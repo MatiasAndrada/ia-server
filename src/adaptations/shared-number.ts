@@ -1,4 +1,5 @@
 import { RedisConfig } from '../config/redis.js';
+import { GREETING_UNIT_SOURCE } from '../i18n/keywords.js';
 import { logEvent, logger } from '../utils/logger.js';
 import { hasPermanentHandoff, savePermanentHandoff } from './handoff-store.js';
 
@@ -12,12 +13,16 @@ import { hasPermanentHandoff, savePermanentHandoff } from './handoff-store.js';
  * escribió para arreglar un cumpleaños termina peleándose con un asistente que
  * le pregunta para cuántas personas.
  *
- * La adaptación son siempre las mismas tres piezas:
+ * La adaptación son siempre las mismas cuatro piezas:
  *
  * 1. Un saludo propio que dice de entrada que el número es compartido y cómo
  *    elegir cada camino.
- * 2. Un interruptor: quien pide por la persona deja de recibir respuestas.
+ * 2. Un interruptor: quien pide por la persona — o le escribe algo que no es
+ *    para el bot — deja de recibir respuestas.
  * 3. Una vuelta: alguna palabra de reserva reactiva al bot.
+ * 4. Si la persona del local escribe en un chat desde el celular, ese chat es
+ *    suyo y el bot se corre (ver `registerHumanReply`). Sin esto, el amigo que
+ *    le contesta un mensaje a la dueña recibe la respuesta del bot.
  *
  * Lo que cambia de un local a otro es el texto y las palabras, no el mecanismo.
  * Por eso el mecanismo vive acá y cada local aporta sólo su configuración (ver
@@ -61,11 +66,27 @@ export interface SharedNumberAdaptation {
   reactivationPattern: RegExp;
 
   /**
+   * Con qué recupera el bot un chat que quedó en manos de la persona porque
+   * ELLA escribió ahí desde el celular (ver `registerHumanReply`).
+   *
+   * A diferencia de `reactivationPattern`, tiene que ser el mensaje ENTERO
+   * ("Reservar", "Cancelar"): en una charla con la persona es normal que
+   * aparezca "mesa" o "reserva" en medio de una frase ("¿tenés mesa el
+   * sábado?"), y eso es para ella, no para el bot. La palabra sola, en
+   * cambio, es la que el saludo y la confirmación del traspaso le enseñan al
+   * cliente — y la que le piden los recordatorios para cancelar.
+   *
+   * Sin esto ese silencio termina sólo con el tiempo. Se ignora si
+   * `permanentHandoff` está activo: ahí nada reactiva al bot.
+   */
+  resumeCommandPattern?: RegExp;
+
+  /**
    * Si es `true`, canalizar a la persona es definitivo para esa conversación:
    * el traspaso se guarda sin vencimiento en un archivo local (ver
    * `handoff-store.ts`, no en Redis) y NADA reactiva al bot — ni
    * `reactivationPattern`, ni el paso del tiempo, ni un saludo al día siguiente.
-   * Sin esto rige el comportamiento por defecto (silencio de veinticuatro
+   * Sin esto rige el comportamiento por defecto (silencio de cuarenta y ocho
    * horas con salida por palabra de reserva).
    */
   permanentHandoff?: boolean;
@@ -87,20 +108,34 @@ export interface SharedNumberAdaptation {
   handoffMenuDigit?: string;
 
   /**
-   * Qué decirle al modelo para que redirija a alguien que no matcheó
-   * `handoffPattern` pero claramente no viene por una reserva — un proveedor,
-   * un trámite ajeno al local, o un pedido explícito de hablar con una
-   * persona o de atención personalizada.
+   * Quién más atiende este número y qué mensajes son suyos, dicho para el
+   * modelo. Es lo que le permite reconocer lo que no matchea `handoffPattern`
+   * pero tampoco es para el bot: el amigo que escribe "holaa simo todo bien?",
+   * el empleado que avisa que mañana falta, el proveedor que ofrece
+   * mercadería.
    *
-   * Existe porque el fallback genérico del agente ("eso consultalo
-   * directamente en el local", ver la regla 7 de `system-prompt.ts`) no sabe
-   * que este comercio tiene una vía real de contacto humano: sin este hint el
-   * cliente se queda con una respuesta vaga en vez de la palabra que lo lleva
-   * con una persona. Se inyecta en el prompt estático (ver
+   * Con esto el modelo tiene disponible `hand_off_to_human` (ver
+   * `agent/tools/handoff.tools.ts`), que deja el chat en manos de la persona
+   * SIN responder nada. Antes el modelo le contestaba a esa gente pidiéndole
+   * que escribiera la palabra del menú — que es exactamente el bot metiéndose
+   * en una charla ajena. Se inyecta en el prompt estático (ver
    * `buildStaticPrompt`), así que el texto tiene que quedar igual entre
    * turnos del mismo comercio.
    */
-  outOfScopeHint?: string;
+  humanContext: string;
+
+  /**
+   * Opcional. Qué hacer con el cliente que escribe algo ajeno a las reservas y
+   * NO le habla a la persona ("quería preguntar por un evento privado"). Sin
+   * esto el modelo lo deriva en silencio con `hand_off_to_human`; con esto le
+   * contesta, siguiendo este texto (ver `buildSharedNumberSection` en
+   * system-prompt.ts).
+   *
+   * Lo personal, lo de proveedores/empleados y lo dirigido a la persona por su
+   * nombre sigue yendo en silencio: esto sólo cubre al cliente. Se inyecta en
+   * el prompt estático, así que tiene que quedar igual entre turnos.
+   */
+  inquiryGuidance?: string;
 
   /** Saludo de apertura, en reemplazo del menú genérico. */
   welcome(customerName: string | null, events: WelcomeEvent[]): string;
@@ -112,17 +147,34 @@ export interface SharedNumberAdaptation {
 /**
  * Cuánto dura el silencio del bot desde que se canaliza a una persona.
  *
- * Veinticuatro horas cubre el día completo: la persona puede tardar en
- * contestar, y hasta que no cierre esa charla el bot no tiene nada que hacer
- * ahí. No es una ventana deslizante a propósito — si el cliente vuelve al día
- * siguiente con un "hola", lo que corresponde es el saludo, no más silencio.
- * Dentro de las veinticuatro horas la salida siempre está disponible
- * escribiendo una palabra de reserva.
+ * Cuarenta y ocho horas cubren un par de días completos: la persona puede
+ * tardar en contestar, y hasta que no cierre esa charla el bot no tiene nada
+ * que hacer ahí. No es una ventana deslizante a propósito — si el cliente
+ * vuelve pasadas las cuarenta y ocho horas con un "hola", lo que corresponde
+ * es el saludo, no más silencio. Dentro de la ventana la salida siempre está
+ * disponible escribiendo una palabra de reserva.
  */
-const HANDOFF_TTL_SECONDS = 24 * 60 * 60;
+const HANDOFF_TTL_SECONDS = 48 * 60 * 60;
 
 function handoffKey(adaptation: SharedNumberAdaptation, conversationId: string): string {
   return `adaptation:${adaptation.id}:handoff:${conversationId}`;
+}
+
+/**
+ * Cuánto dura el silencio cuando la persona del local ESCRIBIÓ en el chat
+ * (ver `registerHumanReply`). Se renueva con cada mensaje suyo, así que es
+ * "cuarenta y ocho horas desde la última vez que ella habló ahí".
+ *
+ * Hoy vale lo mismo que `HANDOFF_TTL_SECONDS`, pero se mantienen separadas:
+ * la señal es distinta — no es un cliente que pidió por alguien, es ella
+ * atendiendo — y acá la ventana sí se desliza. Un cliente que quiera volver a
+ * reservar con el bot antes de que venza tiene la salida de
+ * `resumeCommandPattern`.
+ */
+const HUMAN_REPLY_TTL_SECONDS = 48 * 60 * 60;
+
+function humanReplyKey(adaptation: SharedNumberAdaptation, conversationId: string): string {
+  return `adaptation:${adaptation.id}:human:${conversationId}`;
 }
 
 /**
@@ -227,12 +279,15 @@ function configuredBusinessIds(envVar: string): Set<string> {
  * - `continue`: el bot atiende normalmente (incluye el caso "venía en silencio
  *   y el cliente lo reactivó": el mensaje que reactiva TAMBIÉN se contesta, que
  *   es lo que espera alguien que escribió "quiero reservar").
- * - `silence`: está atendiendo una persona, el bot no dice nada.
+ * - `silence`: el chat es de la persona y el bot no dice nada — porque el
+ *   cliente pidió por ella (`handoff`) o porque ella escribió ahí (`human`).
+ *   Incluye el mensaje que recién canaliza sin hablarle al bot ("Hola
+ *   Simona!", ver `talksToTheBot`).
  * - `reply`: se canaliza a la persona y se confirma con este texto.
  */
 export type SharedNumberOutcome =
   | { action: 'continue' }
-  | { action: 'silence' }
+  | { action: 'silence'; reason: 'handoff' | 'human' }
   | { action: 'reply'; text: string };
 
 /**
@@ -253,13 +308,29 @@ export async function interceptSharedNumberTurn(
 ): Promise<SharedNumberOutcome> {
   const normalized = normalize(messageText);
 
+  // La persona escribió en este chat: la conversación es suya. Va antes que
+  // el traspaso porque es la señal más fuerte, y porque su salida es más
+  // estricta (sólo el mensaje exacto, ver `resumeCommandPattern`).
+  if (await isHumanInCharge(adaptation, conversationId)) {
+    if (adaptation.resumeCommandPattern?.test(normalized)) {
+      await resumeBot(adaptation, conversationId);
+      logEvent('info', 'handoff.resumed', {
+        conversationId,
+        adaptation: adaptation.id,
+        via: 'command',
+      });
+      return { action: 'continue' };
+    }
+    return { action: 'silence', reason: 'human' };
+  }
+
   if (await isHandedOff(adaptation, conversationId)) {
     if (!adaptation.permanentHandoff && adaptation.reactivationPattern.test(normalized)) {
       await resumeBot(adaptation, conversationId);
       logEvent('info', 'handoff.resumed', { conversationId, adaptation: adaptation.id });
       return { action: 'continue' };
     }
-    return { action: 'silence' };
+    return { action: 'silence', reason: 'handoff' };
   }
 
   // Se consume en CADA turno sin traspaso activo, no sólo cuando el mensaje
@@ -273,16 +344,159 @@ export async function interceptSharedNumberTurn(
 
   if (adaptation.handoffPattern.test(normalized) || isMenuDigit) {
     await handOffToHuman(adaptation, conversationId);
+
+    // Contestar el menú ("PERSONAL", "quiero hablar con Valentina") es
+    // hablarle al bot, y el bot confirma antes de callarse. Nombrar a la
+    // persona en medio de otra cosa ("Hola Simona!! ¿cómo estás?", "Buen día
+    // Simona, te quería ofrecer...") es hablarle a ELLA: el bot se corre sin
+    // aparecer, que es justo lo que se le reclamaba.
+    const answersTheMenu = isMenuDigit || talksToTheBot(adaptation.handoffPattern, normalized);
     logEvent('info', 'handoff.started', {
       conversationId,
       adaptation: adaptation.id,
       ttlSeconds: adaptation.permanentHandoff ? null : HANDOFF_TTL_SECONDS,
       via: isMenuDigit ? 'menu-digit' : 'keyword',
+      silent: !answersTheMenu,
     });
-    return { action: 'reply', text: adaptation.handoffConfirmation() };
+    return answersTheMenu
+      ? { action: 'reply', text: adaptation.handoffConfirmation() }
+      : { action: 'silence', reason: 'handoff' };
   }
 
   return { action: 'continue' };
+}
+
+/**
+ * Las fórmulas con las que se le pide AL BOT por la persona: "quiero hablar
+ * con", "quería comunicarme con la"..., con un saludo opcional adelante. El
+ * texto ya viene normalizado (minúsculas, sin acentos ni signos).
+ */
+const ASKS_FOR_SOMEONE_PREFIX = new RegExp(
+  `^(?:${GREETING_UNIT_SOURCE}\\s+)*` +
+    '(?:(?:quiero|quisiera|queria|necesito|puedo|podria|me gustaria)\\s+)?' +
+    '(?:hablar|comunicarme|charlar)\\s+con\\s+(?:la\\s+|el\\s+)?'
+);
+
+/**
+ * ¿El mensaje que matcheó `handoffPattern` le habla al bot, o a la persona?
+ *
+ * Le habla al bot si es la palabra del menú sola ("PERSONAL", "Valentina") o
+ * un pedido que arranca por ella ("quería hablar con la dueña por un
+ * cumpleaños"). Cualquier otra forma de nombrarla es hablarle a ella: "Hola
+ * Simona", "Simona, te paso las facturas".
+ */
+function talksToTheBot(handoffPattern: RegExp, normalized: string): boolean {
+  const request = ASKS_FOR_SOMEONE_PREFIX.exec(normalized);
+  const rest = request ? normalized.slice(request[0].length) : normalized;
+  const match = handoffPattern.exec(rest);
+  if (!match || match.index !== 0) return false;
+  // Después de un pedido puede venir el motivo; sin pedido, sólo vale la
+  // palabra sola.
+  return request !== null || match[0].length === rest.length;
+}
+
+/**
+ * La persona del local escribió en este chat (desde el celular o WhatsApp
+ * Web): a partir de acá la conversación es suya y el bot no contesta.
+ *
+ * Con `permanentHandoff` es el mismo traspaso permanente de siempre — archivo
+ * local, sin salida —, porque para ese local "el bot no vuelve en un chat que
+ * atendió una persona" ya es la regla. Si no, silencio de
+ * `HUMAN_REPLY_TTL_SECONDS` que se renueva con cada mensaje suyo y se levanta
+ * antes con `resumeCommandPattern`.
+ *
+ * Quién decide que el mensaje lo escribió ella y no el celular solo (el
+ * saludo automático de WhatsApp Business) es el handler, antes de llamar acá.
+ *
+ * Devuelve si el chat recién ahora pasó a sus manos, para loguear el cambio
+ * una vez y no en cada mensaje suyo. Nunca lanza.
+ */
+export async function registerHumanReply(
+  adaptation: SharedNumberAdaptation,
+  conversationId: string
+): Promise<boolean> {
+  if (adaptation.permanentHandoff) {
+    if (await hasPermanentHandoff(adaptation.id, conversationId)) return false;
+    await savePermanentHandoff(adaptation.id, conversationId);
+    return true;
+  }
+
+  try {
+    if (!RedisConfig.isReady()) return false;
+    const client = RedisConfig.getClient();
+    const key = humanReplyKey(adaptation, conversationId);
+    const alreadyHers = (await client.get(key)) !== null;
+    await client.setEx(key, HUMAN_REPLY_TTL_SECONDS, '1');
+    return !alreadyHers;
+  } catch (error) {
+    logger.warn('Failed to persist the human-reply flag', {
+      conversationId,
+      adaptation: adaptation.id,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+    return false;
+  }
+}
+
+/**
+ * El traspaso que decide el modelo (`hand_off_to_human`): el mismo silencio
+ * que pedir por la persona con la palabra del menú, pero sin la confirmación.
+ * Quien escribió no le estaba hablando al bot — un amigo, un proveedor —, así
+ * que el bot no aparece.
+ */
+export async function handOffWithoutReply(
+  adaptation: SharedNumberAdaptation,
+  conversationId: string,
+  reason?: string
+): Promise<void> {
+  await handOffToHuman(adaptation, conversationId);
+  logEvent('info', 'handoff.started', {
+    conversationId,
+    adaptation: adaptation.id,
+    ttlSeconds: adaptation.permanentHandoff ? null : HANDOFF_TTL_SECONDS,
+    via: 'agent',
+    silent: true,
+    ...(reason && { reason }),
+  });
+}
+
+/**
+ * ¿El bot tiene que quedarse callado en este chat, por la razón que sea?
+ *
+ * Lo usa el handler después de que el modelo contesta: si mientras se
+ * generaba la respuesta la persona empezó a escribir desde el celular, esa
+ * respuesta ya no se manda. Nunca lanza.
+ */
+export async function isBotMuted(
+  adaptation: SharedNumberAdaptation,
+  conversationId: string
+): Promise<boolean> {
+  return (
+    (await isHumanInCharge(adaptation, conversationId)) ||
+    (await isHandedOff(adaptation, conversationId))
+  );
+}
+
+async function isHumanInCharge(
+  adaptation: SharedNumberAdaptation,
+  conversationId: string
+): Promise<boolean> {
+  // Con traspaso permanente, que escriba la persona ES un traspaso permanente
+  // (ver `registerHumanReply`): ya lo responde `isHandedOff`.
+  if (adaptation.permanentHandoff) return false;
+
+  try {
+    if (!RedisConfig.isReady()) return false;
+    const raw = await RedisConfig.getClient().get(humanReplyKey(adaptation, conversationId));
+    return raw !== null;
+  } catch (error) {
+    logger.warn('Failed to read the human-reply flag, the bot answers', {
+      conversationId,
+      adaptation: adaptation.id,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+    return false;
+  }
 }
 
 async function isHandedOff(
@@ -336,13 +550,16 @@ async function handOffToHuman(
   }
 }
 
+/** Le devuelve el chat al bot: levanta los dos silencios, el que haya. */
 async function resumeBot(
   adaptation: SharedNumberAdaptation,
   conversationId: string
 ): Promise<void> {
   try {
     if (!RedisConfig.isReady()) return;
-    await RedisConfig.getClient().del(handoffKey(adaptation, conversationId));
+    const client = RedisConfig.getClient();
+    await client.del(humanReplyKey(adaptation, conversationId));
+    await client.del(handoffKey(adaptation, conversationId));
   } catch (error) {
     logger.warn('Failed to clear the shared-number handoff flag', {
       conversationId,

@@ -55,7 +55,11 @@ import { formatName } from '../utils/formatters.js';
 import {
   findSharedNumberAdaptation,
   interceptSharedNumberTurn,
+  isBotMuted,
+  isPhoneAutoReply,
   markWelcomeMenuShown,
+  noteCustomerMessage,
+  registerHumanReply,
 } from '../adaptations/index.js';
 
 /** How long (ms) to wait for more messages before processing the batch. */
@@ -95,6 +99,9 @@ const CONVERSATION_IDLE_RESET_MS = 10 * 60 * 1000;
 
 /** Una palabra de un nombre: letras, con guiones y apóstrofes ("O'Brien", "Ana-María"). */
 const NAME_WORD_PATTERN = /^\p{L}[\p{L}'’-]*$/u;
+
+/** Algo con contenido: al menos una letra o un número (no sólo emojis y signos). */
+const CONTENT_PATTERN = /[\p{L}\p{N}]/u;
 
 /**
  * Palabras que, en el paso del nombre, significan otra cosa: nadie se llama
@@ -161,6 +168,18 @@ export class WhatsAppHandler {
    * ensuring the bot always responds to the latest user context.
    */
   async processMessage(message: BaileysMessage): Promise<void> {
+    // Lo que sale del número del local sin mandarlo el bot se resuelve acá,
+    // ANTES del debounce. Adentro del lote se mezclaba con lo que escribió el
+    // cliente: el saludo automático de WhatsApp Business llega un segundo
+    // después del "hola" y se procesaba como si el cliente hubiera escrito
+    // los dos — con "escribí Simona" adentro, que dispara el traspaso.
+    if (message.fromMe && !this.answersOwnMessages()) {
+      await this.processOwnMessage(message);
+      return;
+    }
+    // Un mensaje propio sin texto (un audio) en modo test: nada que contestar.
+    if (!message.message) return;
+
     const { from, businessId } = message;
     const phone = this.normalizeWhatsAppNumber(from);
     const conversationId = `${businessId}-${phone}`;
@@ -196,6 +215,70 @@ export class WhatsAppHandler {
     entry.timer = timer;
     if (!existing) {
       this.debounceBuffer.set(conversationId, entry);
+    }
+  }
+
+  /**
+   * El cliente escribió algo — cualquier tipo de mensaje, también un audio.
+   *
+   * BaileysService lo avisa apenas llega, antes de cualquier espera: es la
+   * referencia para reconocer el saludo automático que el celular manda un
+   * segundo después (ver `isPhoneAutoReply`). Sólo importa en los locales de
+   * número compartido.
+   */
+  onCustomerMessage(businessId: string, from: string, receivedAt: number): void {
+    if (!findSharedNumberAdaptation(businessId)) return;
+    noteCustomerMessage(businessId, this.normalizeWhatsAppNumber(from), receivedAt);
+  }
+
+  /**
+   * Un mensaje que salió del número del local sin mandarlo el bot: lo escribió
+   * la persona desde el celular (o WhatsApp Web), o lo mandó el celular solo.
+   *
+   * El bot nunca le contesta a esto — es un mensaje propio —, pero en los
+   * locales de número compartido dice algo importante: si lo escribió la
+   * persona, ese chat es suyo y el bot se corre (ver `registerHumanReply`).
+   * Es lo que evita que el amigo que le contesta un mensaje a Simona reciba la
+   * respuesta del bot.
+   *
+   * Nunca lanza.
+   */
+  async processOwnMessage(message: BaileysMessage): Promise<void> {
+    const { businessId, from } = message;
+    const adaptation = findSharedNumberAdaptation(businessId);
+    if (!adaptation) {
+      logger.debug('Ignoring own message in production mode', { businessId, from });
+      return;
+    }
+
+    const phone = this.normalizeWhatsAppNumber(from);
+    const conversationId = `${businessId}-${phone}`;
+
+    try {
+      const receivedAt = message.receivedAt ?? Date.now();
+      if (await isPhoneAutoReply(businessId, phone, message.message, receivedAt)) {
+        logger.debug('Own message looks like the phone auto-reply, the chat stays with the bot', {
+          conversationId,
+          adaptation: adaptation.id,
+        });
+        return;
+      }
+
+      if (await registerHumanReply(adaptation, conversationId)) {
+        logEvent('info', 'handoff.started', {
+          conversationId,
+          adaptation: adaptation.id,
+          via: 'human-reply',
+          permanent: adaptation.permanentHandoff === true,
+        });
+      } else {
+        logger.debug('Own message keeps the chat with the human', {
+          conversationId,
+          adaptation: adaptation.id,
+        });
+      }
+    } catch (error) {
+      logger.error('Failed to process own message', { conversationId, error });
     }
   }
 
@@ -406,7 +489,7 @@ export class WhatsAppHandler {
         // Silencio deliberado: la conversación es del local y el bot no
         // aparece. Tampoco se persiste el mensaje en el historial del agente —
         // lo que se hablen ahí no es contexto del bot.
-        logEvent('info', 'turn.silenced', { conversationId, businessId, via: 'handoff' });
+        logEvent('info', 'turn.silenced', { conversationId, businessId, via: outcome.reason });
         return;
       }
 
@@ -430,6 +513,21 @@ export class WhatsAppHandler {
       // un saludo y no trae señal de idioma suficiente.
       const conversationStarted = (await loadHistory(conversationId)).length > 0;
       const onboardingStep = conversationStarted ? await loadOnboardingStep(conversationId) : null;
+
+      // Un mensaje sin letras ni números (un 👍, un "?") no le pide nada al
+      // bot. En un número compartido, si no venía una conversación con él,
+      // casi siempre es para la persona — el pulgar con que un amigo contesta
+      // algo que ella le mandó — y el modelo lo saludaba con el menú de
+      // reservas. Dentro de una conversación sí puede ser una respuesta
+      // ("¿confirmo para las 21?" → 👍), y eso lo sigue leyendo el modelo.
+      if (
+        sharedNumber &&
+        !CONTENT_PATTERN.test(messageText) &&
+        !(await this.isConversationInProgress(conversationId, conversationStarted))
+      ) {
+        logEvent('info', 'turn.silenced', { conversationId, businessId, via: 'no_content' });
+        return;
+      }
 
       // El número compartido se saltea el menú de idiomas: su primer mensaje ya
       // tiene que resolver una bifurcación más urgente (persona o bot), y
@@ -585,8 +683,28 @@ export class WhatsAppHandler {
         messageText,
         language,
         businessName: businessStatus.name,
-        outOfScopeHint: sharedNumber?.outOfScopeHint,
+        humanContext: sharedNumber?.humanContext,
+        inquiryGuidance: sharedNumber?.inquiryGuidance,
       });
+
+      if (result.handedOff) {
+        // `hand_off_to_human`: el mensaje no era para el bot y el chat quedó
+        // en manos de la persona. Este turno no manda nada (ver orchestrator.ts).
+        return;
+      }
+
+      // La respuesta del modelo tarda segundos. Si mientras tanto la persona
+      // empezó a contestar desde el celular, ya no corresponde mandarla: el
+      // chat es de ella y el bot le hablaría encima.
+      if (sharedNumber && (await isBotMuted(sharedNumber, conversationId))) {
+        logEvent('info', 'turn.silenced', {
+          conversationId,
+          businessId,
+          via: 'human',
+          droppedMessages: result.messages.length + result.attachments.length,
+        });
+        return;
+      }
 
       // Las imágenes van PRIMERO y el texto debajo: las fotos enganchan y el
       // detalle queda como el último mensaje visible, que es el que el
@@ -969,13 +1087,22 @@ export class WhatsAppHandler {
     }
   }
 
+  /**
+   * En modo test los mensajes propios se atienden como si fueran de un
+   * cliente: así se prueba el bot escribiéndole desde el propio número (el
+   * chat con uno mismo). En producción nunca — ver `processOwnMessage`.
+   */
+  private answersOwnMessages(): boolean {
+    return process.env.NODE_ENV === 'test';
+  }
+
   private shouldIgnoreMessage(
     from: string,
     _messageText: string,
     fromMe: boolean | undefined,
     businessId: string
   ): boolean {
-    const isTestEnv = process.env.NODE_ENV === 'test';
+    const isTestEnv = this.answersOwnMessages();
 
     if (isTestEnv) {
       // In test we allow self-chat messages, but outbound bot echoes are filtered in BaileysService.
