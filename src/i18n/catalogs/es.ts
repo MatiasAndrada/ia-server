@@ -1030,6 +1030,23 @@ export const esCatalog = {
   genericError(): string {
     return `Uy, tuve un problema procesando tu mensaje. ¿Me lo repetís?`;
   },
+
+  /**
+   * El cliente mandó un audio. El bot no lo puede escuchar, pero quedarse
+   * callado es peor: desde el otro lado no se distingue de un bot caído.
+   */
+  audioNotSupported(): string {
+    return `Todavía no puedo escuchar audios. ¿Me lo escribís, por favor?`;
+  },
+
+  /**
+   * La IA no respondió (sin saldo, caída del proveedor). No invita a repetir
+   * en segundos como `genericError`: si el problema es de fondo, reintentar
+   * enseguida no cambia nada.
+   */
+  aiUnavailable(businessName: string): string {
+    return `Disculpá, en este momento el asistente de ${businessName} no está disponible. Escribinos de nuevo en unos minutos, por favor.`;
+  },
 };
 
 /**

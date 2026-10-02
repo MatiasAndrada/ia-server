@@ -527,6 +527,16 @@ export function genericError(): string {
   return catalog().genericError();
 }
 
+/** El cliente mandó un audio, que el bot no puede escuchar. */
+export function audioNotSupported(): string {
+  return catalog().audioNotSupported();
+}
+
+/** La IA no respondió: respuesta de respaldo del turno (ver orchestrator.ts). */
+export function aiUnavailable(businessName: string): string {
+  return catalog().aiUnavailable(businessName);
+}
+
 // ============================
 // Guards y prompts de flujo (T1b — consolidados desde whatsapp-handler)
 // ============================

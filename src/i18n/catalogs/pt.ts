@@ -914,4 +914,12 @@ export const ptCatalog: MessageCatalog = {
   genericError(): string {
     return `Ops, tive um problema ao processar sua mensagem. Pode enviar de novo?`;
   },
+
+  audioNotSupported(): string {
+    return `Ainda não consigo ouvir áudios. Pode escrever, por favor?`;
+  },
+
+  aiUnavailable(businessName: string): string {
+    return `Desculpe, o assistente de ${businessName} não está disponível agora. Por favor, escreva de novo em alguns minutos.`;
+  },
 };

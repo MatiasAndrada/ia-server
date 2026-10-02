@@ -915,4 +915,12 @@ export const enCatalog: MessageCatalog = {
   genericError(): string {
     return `Sorry, something went wrong handling your message. Could you send it again?`;
   },
+
+  audioNotSupported(): string {
+    return `I can't listen to voice messages yet. Could you type it, please?`;
+  },
+
+  aiUnavailable(businessName: string): string {
+    return `Sorry, the ${businessName} assistant is unavailable right now. Please write to us again in a few minutes.`;
+  },
 };
