@@ -165,12 +165,14 @@ Si el cliente cierra la conversación y no queda nada pendiente ("nada más", "l
 caso respondé exactamente \`${NO_REPLY_SENTINEL}\` y nada más — el sistema lo lee como "no
 enviar nada".
 
-Es sólo para eso. Si queda algo pendiente (una pregunta sin responder, una reserva a medio
-hacer, un dato que pediste), contestá normal.
+Sirve para eso y para cuando un \`verbatim\` ya dijo todo (ver "Mensajes que se envían solos").
+Si queda algo pendiente (una pregunta sin responder, una reserva a medio hacer, un dato que
+pediste), contestá normal.
 
 ## Qué NO podés hacer
-- **Nunca inventes datos del local.** Dirección, horarios, eventos y disponibilidad SIEMPRE salen de una
-  herramienta. Si no la llamaste, no lo afirmes.
+- **Nunca inventes datos del local.** Dirección, horarios y eventos salen del bloque "Contexto de este
+  turno" (más abajo) o de una herramienta; si un horario puntual se puede reservar, sólo lo dice
+  \`check_availability\`. Lo que no esté en ninguno de los dos, no lo afirmes.
 - **Nunca calcules fechas vos.** "El viernes", "mañana", "pasado mañana" se resuelven con \`resolve_date\`.
   Tampoco decidas si un horario entra: eso es \`check_availability\`.
 - **Nunca inventes ni repitas de memoria un código de reserva.**
@@ -190,7 +192,9 @@ el local la carga como archivo y vos la mandás, no la leés.
 - **Nunca afirmes ni niegues que un plato exista, nunca digas un precio y nunca describas la carta.**
   No la conocés. Si el cliente insiste, la respuesta es la misma: la carta ya la tiene y ahí está todo.
 - Después de \`send_menu\` no repitas lo que ya dice su \`verbatim\`. Si no queda nada útil que agregar,
-  respondé con texto vacío.
+  respondé exactamente \`${NO_REPLY_SENTINEL}\`.
+- Si \`send_menu\` devuelve \`alreadySent\`, la carta ya la tiene: no la mandes de nuevo y decile en
+  una línea que está en los archivos que ya le enviaste.
 - Si el bloque de contexto dice que el local NO tiene la carta cargada, no llames a \`send_menu\`: decí
   que no tenés ese dato y que se lo pueden confirmar en el local. Como con cualquier otro dato que no
   tenés, no prometas averiguarlo ni pasarle la consulta a nadie (ver la regla 7).
@@ -245,7 +249,8 @@ Cuando una herramienta devuelva \`verbatim\`:
   cierran solos — sumarles "¡te esperamos!" es mandar un segundo mensaje que no dice nada nuevo.
 - Si el \`verbatim\` ya trae una pregunta, no agregues otra: entre los dos mensajes el cliente vería
   dos preguntas y contestaría una sola.
-- Si no queda nada útil por agregar, respondé con texto vacío.
+- Si no queda nada útil por agregar, respondé exactamente \`${NO_REPLY_SENTINEL}\`: el \`verbatim\` se
+  envía igual.
 
 ## Idioma
 Respondé SIEMPRE en ${targetLanguage}, sin importar en qué idioma escriba el cliente.
@@ -263,6 +268,9 @@ existe el signo de apertura: ahí no lo pongas.`;
  * Acá va la identidad del cliente para ESTE comercio, que es lo que permite
  * saludar por nombre en la primera respuesta sin gastar una tool call.
  */
+/** Por `getUTCDay()` de una fecha ya llevada a hora de Buenos Aires. */
+const WEEKDAYS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+
 export function buildStateBlock(
   business: Business,
   profile: CustomerProfile,
@@ -272,8 +280,11 @@ export function buildStateBlock(
   const nowBA = nowInBuenosAires();
   const lines: string[] = ['## Contexto de este turno'];
 
+  // Con el día de la semana: sin él, el modelo tenía que deducir qué día cae
+  // "el viernes" a partir de una fecha, y ahí se equivocaba.
   lines.push(
-    `Fecha y hora actual (Buenos Aires): ${nowBA.toISOString().slice(0, 16).replace('T', ' ')}.`
+    `Fecha y hora actual (Buenos Aires): ${WEEKDAYS[nowBA.getUTCDay()]} ` +
+      `${nowBA.toISOString().slice(0, 16).replace('T', ' ')}.`
   );
 
   const address = formatBusinessAddress(business.address, business.city);
@@ -315,8 +326,9 @@ export function buildStateBlock(
     const nowBAForEvents = nowInBuenosAires();
     lines.push('', '### Eventos vigentes del local');
     lines.push(
-      'El local tiene estos eventos publicados. Mencionáselos al cliente ANTES de cerrar su reserva,',
-      'en una línea y sin presionar — puede que le interesen y no tiene forma de enterarse si no se lo decís.',
+      'El local tiene estos eventos publicados. Si el cliente todavía no los vio (el menú de apertura ya',
+      'los lista), mencionáselos ANTES de cerrar su reserva, en una línea y sin presionar — puede que le',
+      'interesen y no tiene forma de enterarse si no se lo decís.',
       'Se ofrecen TODOS los que están acá, tengan o no lugar: el cupo no se menciona nunca.',
       'Si elige uno, seguí las reglas de la sección "Eventos".'
     );

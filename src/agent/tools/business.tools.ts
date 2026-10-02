@@ -27,7 +27,7 @@ export const getBusinessInfoTool: AgentTool<Record<string, never>> = {
       description:
         'Datos del local: nombre, dirección, descripción y horarios de la semana. ' +
         'Usala ante cualquier pregunta sobre dónde queda, cuándo abre o qué es el lugar. ' +
-        'Nunca inventes estos datos: si no llamaste a esta herramienta, decí que vas a verificar.',
+        'Nunca inventes estos datos: salen de acá o del contexto del turno.',
       parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
     },
   },
