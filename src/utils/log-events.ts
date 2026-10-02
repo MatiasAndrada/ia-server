@@ -33,6 +33,9 @@ export type LogEvent =
 
   // ─── Mensajería ───
   | 'msg.in'
+  // Un mensaje de un cliente que llegó y no se procesa (viejo, o de un tipo
+  // que el bot no lee). Sin esto se perdían sin dejar rastro.
+  | 'msg.dropped'
   | 'msg.out'
   | 'msg.out_failed'
 
@@ -101,6 +104,7 @@ export const EVENT_LABELS: Record<LogEvent, string> = {
   'session.stopped': 'WhatsApp session stopped',
 
   'msg.in': 'Message received',
+  'msg.dropped': 'Incoming message not processed',
   'msg.out': 'Message sent',
   'msg.out_failed': 'Message send failed',
 

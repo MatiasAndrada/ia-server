@@ -5,7 +5,7 @@ import { logger, logEvent } from '../utils/logger.js';
 import type { SendFailureReason } from '../utils/log-events.js';
 import { withLogContext } from '../utils/log-context.js';
 import { throttle } from '../utils/log-throttle.js';
-import { phoneCandidates } from '../utils/phone.js';
+import { normalizePhone, phoneCandidates } from '../utils/phone.js';
 import { normalizeWhatsAppBold } from '../utils/formatters.js';
 
 /**
@@ -21,6 +21,19 @@ import { SupabaseService } from './supabase.service.js';
 import { WhatsAppHandler } from './whatsapp-handler.service.js';
 import { RedisConfig } from '../config/redis.js';
 import { findSharedNumberAdaptation } from '../adaptations/index.js';
+
+/** `messageTimestamp` (segundos) llega como número, como Long de protobuf o como string. */
+function messageTimestampMs(value: unknown): number | null {
+  const seconds =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string'
+        ? Number(value)
+        : typeof (value as { toNumber?: unknown } | null)?.toNumber === 'function'
+          ? (value as { toNumber: () => number }).toNumber()
+          : NaN;
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : null;
+}
 
 // Dynamic import for Baileys ES Module compatibility
 let makeWASocket: any;
@@ -131,9 +144,35 @@ export class BaileysService {
   // intentos hasta un techo. Solo se deja de reintentar ante logout real (401)
   // o conflicto de sesión (440), donde reintentar no sirve de nada.
   private readonly RECONNECT_BASE_DELAY_MS = 2000;
+
+  /**
+   * Un envío que encuentra la sesión reconectando espera a que vuelva en vez
+   * de perderse: los cortes de todos los días (408/428/503) duran segundos, y
+   * la respuesta al cliente o la confirmación de su reserva se descartaban.
+   * Sólo se espera si el corte es reciente (`SEND_WAIT_MAX_RECONNECT_ATTEMPTS`):
+   * un comercio con la sesión rota no tiene que trabar cada envío dos minutos.
+   */
+  private static readonly SEND_RECONNECT_WAIT_MS = 2 * 60 * 1000;
+  private static readonly SEND_RECONNECT_POLL_MS = 1000;
+  private static readonly SEND_WAIT_MAX_RECONNECT_ATTEMPTS = 4;
   private readonly RECONNECT_MAX_DELAY_MS = 60000;
   private readonly RECONNECT_JITTER_RATIO = 0.2;
   private readonly INBOUND_DEDUP_TTL_SECONDS = 600;
+
+  /**
+   * Lo que un cliente escribió mientras la sesión estaba caída llega como
+   * `append` al reconectar (ver `acceptOfflineMessages`). Hasta este tope se
+   * contesta como cualquier mensaje; más viejo, contestarlo como si nada
+   * confunde más de lo que ayuda, y queda registrado como `msg.dropped`.
+   */
+  private static readonly OFFLINE_MAX_AGE_MS = 15 * 60 * 1000;
+
+  /**
+   * Antigüedad mínima de un mensaje PROPIO que llega como `append` para tomarlo
+   * como escrito por la persona durante el corte. El eco de lo que manda el
+   * bot también llega como `append`, pero siempre en el mismo instante.
+   */
+  private static readonly OWN_OFFLINE_MIN_AGE_MS = 30 * 1000;
   private readonly OUTBOUND_ECHO_TTL_MS = 5 * 60 * 1000;
   private readonly START_SESSION_LOCK_TTL_SECONDS = Number(
     process.env.BAILEYS_START_SESSION_LOCK_TTL_SECONDS || 20
@@ -365,6 +404,34 @@ export class BaileysService {
     }
 
     return remoteJid!;
+  }
+
+  /**
+   * El JID con el teléfono real de quien escribió.
+   *
+   * Si WhatsApp identifica al remitente sólo por LID (`…@lid`, sin
+   * `remoteJidAlt`), se busca su número en el mapeo LID→teléfono que la sesión
+   * ya guardó. Sin esto, ese "número" eran los dígitos del LID: otra
+   * conversación, otra ficha de cliente, el saludo de nuevo, y los silencios y
+   * los bloqueos por teléfono no lo reconocían. Si el mapeo no está, queda el
+   * LID, como antes. Nunca lanza.
+   */
+  private async resolveSenderJid(businessId: string, key: any): Promise<string> {
+    const jid = this.resolvePhoneJid(key);
+    if (!jid?.endsWith('@lid')) return jid;
+
+    try {
+      const pn: string | null | undefined = await this.sessions
+        ?.get(businessId)
+        ?.signalRepository?.lidMapping?.getPNForLID(jid);
+      const digits = normalizePhone(pn);
+      if (digits) return `${digits}@s.whatsapp.net`;
+    } catch (error) {
+      logger.debug('LID to phone lookup failed', { businessId, jid, error });
+    }
+
+    logger.info('Sender known only by LID, phone number unavailable', { businessId, jid });
+    return jid;
   }
 
   /**
@@ -944,13 +1011,29 @@ export class BaileysService {
     const receivedAt = Date.now();
 
     try {
-      const { messages, type } = messageUpdate;
+      const { type } = messageUpdate;
+      if (type !== 'notify' && type !== 'append') return;
 
-      if (type !== 'notify') return;
+      const messages: any[] =
+        type === 'notify'
+          ? messageUpdate.messages ?? []
+          : this.acceptOfflineMessages(businessId, messageUpdate.messages ?? [], receivedAt);
+      if (messages.length === 0) return;
 
-      for (const msg of messages ?? []) {
+      // Quién escribió cada mensaje, con su teléfono real. Casi siempre sale
+      // del key sin esperar nada; sólo un remitente identificado únicamente
+      // por LID necesita buscar su número (ver `resolveSenderJid`).
+      const senders = new Map<any, string>();
+      for (const msg of messages) {
+        if (!msg?.key) continue;
+        const jid = this.resolvePhoneJid(msg.key);
+        // Sin `await` en el caso común: la llegada se anota antes de cualquier espera.
+        senders.set(msg, jid?.endsWith('@lid') ? await this.resolveSenderJid(businessId, msg.key) : jid);
+      }
+
+      for (const msg of messages) {
         if (msg?.message && !msg.key?.fromMe && this.isDirectChat(msg.key?.remoteJid)) {
-          this.whatsAppHandler.onCustomerMessage(businessId, this.resolvePhoneJid(msg.key), receivedAt);
+          this.whatsAppHandler.onCustomerMessage(businessId, senders.get(msg)!, receivedAt);
         }
       }
 
@@ -974,21 +1057,18 @@ export class BaileysService {
           continue;
         }
 
-        // Extract message content
-        const messageContent =
-          msg.message.conversation ||
-          msg.message.extendedTextMessage?.text ||
-          '';
+        const content = this.unwrapMessageContent(msg.message);
+        const messageContent = this.extractText(content);
 
         // In the LID addressing era, `remoteJid` can be an @lid identity
         // (e.g. 189489813160117@lid) instead of the real phone number.
         // In that case Baileys exposes the underlying phone JID in
         // `remoteJidAlt` (e.g. 5493532401540@s.whatsapp.net). Prefer the phone
         // JID so we store/reply with the real number, not the LID.
-        const from = this.resolvePhoneJid(msg.key);
+        const from = senders.get(msg) ?? this.resolvePhoneJid(msg.key);
         const messageId = msg.key.id as string | undefined;
         const fromMe = !!msg.key.fromMe;
-        const timestamp = msg.messageTimestamp as number;
+        const timestamp = messageTimestampMs(msg.messageTimestamp) ?? receivedAt;
 
         if (fromMe && this.isKnownOutboundMessageId(businessId, messageId)) {
           logger.debug('Skipping outbound echo message from bot', {
@@ -1002,8 +1082,23 @@ export class BaileysService {
         // Del cliente al bot sólo le sirve el texto. Pero un audio o una foto
         // que manda la persona desde el celular también dice "este chat lo
         // atiendo yo" (ver `WhatsAppHandler.processOwnMessage`).
-        const isOwnMedia = fromMe && !messageContent && this.hasMediaContent(msg.message);
-        if (!messageContent && !isOwnMedia) continue;
+        const isOwnMedia = fromMe && !messageContent && this.hasMediaContent(content);
+        // Un audio del cliente no se puede escuchar, pero tampoco se puede
+        // ignorar como si no hubiera llegado: el handler le contesta.
+        const isCustomerAudio = !fromMe && !messageContent && Boolean(content?.audioMessage);
+        if (!messageContent && !isOwnMedia && !isCustomerAudio) {
+          const mediaType = fromMe ? undefined : this.mediaType(content);
+          if (mediaType && isAiChatEnabled) {
+            logEvent('info', 'msg.dropped', {
+              businessId,
+              from,
+              messageId,
+              reason: 'unsupported_media',
+              mediaType,
+            });
+          }
+          continue;
+        }
 
         if (!isAiChatEnabled) {
           // Bot apagado en un local de número compartido: sólo importa en qué
@@ -1012,7 +1107,7 @@ export class BaileysService {
             await this.whatsAppHandler.processOwnMessage({
               from,
               message: messageContent,
-              timestamp: timestamp * 1000,
+              timestamp,
               businessId,
               messageId,
               fromMe,
@@ -1039,17 +1134,19 @@ export class BaileysService {
           message: messageContent,
           messageLength: messageContent.length,
           ...(fromMe && { fromMe }),
+          ...(isCustomerAudio && { media: 'audio' }),
         });
 
         // Create message object
         const baileysMessage: BaileysMessage = {
           from,
           message: messageContent,
-          timestamp: timestamp * 1000, // Convert to milliseconds
+          timestamp,
           businessId,
           messageId,
           fromMe,
           receivedAt,
+          ...(isCustomerAudio && { media: 'audio' as const }),
         };
 
         // Store in Redis
@@ -1077,6 +1174,8 @@ export class BaileysService {
       !!remoteJid &&
       remoteJid !== 'status@broadcast' &&
       !remoteJid.endsWith('@g.us') &&
+      // Canales: llegan como `append` y nadie del otro lado espera respuesta.
+      !remoteJid.endsWith('@newsletter') &&
       !isJidBroadcast?.(remoteJid) &&
       !isJidStatusBroadcast?.(remoteJid)
     );
@@ -1089,7 +1188,90 @@ export class BaileysService {
    * atendiendo el chat.
    */
   private hasMediaContent(content: any): boolean {
-    return BaileysService.MEDIA_MESSAGE_TYPES.some((type) => Boolean(content?.[type]));
+    return this.mediaType(content) !== undefined;
+  }
+
+  private mediaType(content: any): string | undefined {
+    return BaileysService.MEDIA_MESSAGE_TYPES.find((type) => Boolean(content?.[type]));
+  }
+
+  /**
+   * El contenido real del mensaje: los temporales, los de "ver una vez" y los
+   * documentos con epígrafe llegan envueltos, y sin esto su texto se perdía.
+   * Las ediciones (`editedMessage`) no se desenvuelven a propósito: el bot
+   * contestaría dos veces el mismo pedido.
+   */
+  private unwrapMessageContent(content: any): any {
+    let current = content;
+    for (let depth = 0; depth < 5 && current; depth++) {
+      const wrapper =
+        current.ephemeralMessage ??
+        current.viewOnceMessage ??
+        current.viewOnceMessageV2 ??
+        current.viewOnceMessageV2Extension ??
+        current.documentWithCaptionMessage;
+      if (!wrapper?.message) break;
+      current = wrapper.message;
+    }
+    return current;
+  }
+
+  /** Lo que escribió quien manda el mensaje: el texto, o el epígrafe de una foto, un video o un documento. */
+  private extractText(content: any): string {
+    return (
+      content?.conversation ||
+      content?.extendedTextMessage?.text ||
+      content?.imageMessage?.caption ||
+      content?.videoMessage?.caption ||
+      content?.documentMessage?.caption ||
+      ''
+    );
+  }
+
+  /**
+   * Qué se procesa de lo que Baileys entrega como `append`.
+   *
+   * Así llegan los mensajes que entraron mientras la sesión estaba caída o
+   * reconectando, y antes se descartaban todos: el cliente que escribía justo
+   * en uno de esos cortes — hay decenas por día — no recibía nunca respuesta,
+   * y no quedaba ni una línea de log. Pero `append` también trae cosas que no
+   * hay que tocar:
+   *
+   * - el eco de cada mensaje que manda el propio bot (`emitOwnEvents`). Llega
+   *   en el mismo instante, a veces antes de que el guard de eco lo conozca, y
+   *   en un número compartido contaría como "la persona escribió" y silenciaría
+   *   el chat. Por eso un mensaje propio sólo pasa si ya tiene
+   *   `OWN_OFFLINE_MIN_AGE_MS`: es lo que la persona escribió durante el corte;
+   * - mensajes de canales y grupos, que `isDirectChat` descarta;
+   * - lo de un cliente con más de `OFFLINE_MAX_AGE_MS`, que queda en el log.
+   */
+  private acceptOfflineMessages(businessId: string, messages: any[], now: number): any[] {
+    return messages.filter((msg) => {
+      if (!msg?.message || !this.isDirectChat(msg.key?.remoteJid)) return false;
+
+      const sentAt = messageTimestampMs(msg.messageTimestamp);
+      const ageMs = sentAt === null ? null : now - sentAt;
+
+      if (msg.key?.fromMe) {
+        return ageMs !== null && ageMs >= BaileysService.OWN_OFFLINE_MIN_AGE_MS;
+      }
+
+      if (ageMs !== null && ageMs > BaileysService.OFFLINE_MAX_AGE_MS) {
+        const content = this.unwrapMessageContent(msg.message);
+        if (this.extractText(content) || this.hasMediaContent(content)) {
+          logEvent('info', 'msg.dropped', {
+            businessId,
+            from: this.resolvePhoneJid(msg.key),
+            messageId: msg.key?.id,
+            reason: 'stale_offline',
+            ageSeconds: Math.round(ageMs / 1000),
+          });
+        }
+        return false;
+      }
+
+      return true;
+    });
   }
 
   private static readonly MEDIA_MESSAGE_TYPES = [
@@ -1249,21 +1431,16 @@ export class BaileysService {
       // Ensure Baileys module is loaded
       await loadBaileys();
 
-      const sock = this.sessions.get(businessId);
-
       // Antes estos dos casos eran `error` sin campo común y sin throttle:
       // 1754 líneas de "Session not found" en el log anterior. Ahora comparten
       // el evento `msg.out_failed` con una `reason` tipificada, así se puede
       // agrupar por causa en vez de leer tres mensajes distintos.
-      if (!sock) {
-        this.logSendFailure(businessId, to, 'no_session');
+      const connected = await this.connectedSocket(businessId);
+      if ('reason' in connected) {
+        this.logSendFailure(businessId, to, connected.reason);
         return false;
       }
-
-      if (!this.isSessionConnected(businessId)) {
-        this.logSendFailure(businessId, to, 'not_connected');
-        return false;
-      }
+      const { sock } = connected;
 
       // Un destinatario sin un solo dígito no puede producir un JID válido.
       // Sin esta guarda, Baileys acepta el envío y recién falla a los 15s del
@@ -1334,17 +1511,12 @@ export class BaileysService {
     try {
       await loadBaileys();
 
-      const sock = this.sessions.get(businessId);
-
-      if (!sock) {
-        this.logSendFailure(businessId, to, 'no_session');
+      const connected = await this.connectedSocket(businessId);
+      if ('reason' in connected) {
+        this.logSendFailure(businessId, to, connected.reason);
         return false;
       }
-
-      if (!this.isSessionConnected(businessId)) {
-        this.logSendFailure(businessId, to, 'not_connected');
-        return false;
-      }
+      const { sock } = connected;
 
       const jid = await this.resolveJid(businessId, to);
       const normalizedCaption = caption ? normalizeWhatsAppBold(caption) : caption;
@@ -1411,17 +1583,12 @@ export class BaileysService {
     try {
       await loadBaileys();
 
-      const sock = this.sessions.get(businessId);
-
-      if (!sock) {
-        this.logSendFailure(businessId, to, 'no_session');
+      const connected = await this.connectedSocket(businessId);
+      if ('reason' in connected) {
+        this.logSendFailure(businessId, to, connected.reason);
         return false;
       }
-
-      if (!this.isSessionConnected(businessId)) {
-        this.logSendFailure(businessId, to, 'not_connected');
-        return false;
-      }
+      const { sock } = connected;
 
       if (!to.includes('@') && phoneCandidates(to).length === 0) {
         this.logSendFailure(businessId, to, 'invalid_recipient');
@@ -1467,6 +1634,47 @@ export class BaileysService {
       this.logSendFailure(businessId, to, isTimeout ? 'timeout' : 'send_error', error);
       return false;
     }
+  }
+
+  /**
+   * El socket de la sesión, listo para enviar.
+   *
+   * Si la sesión está reconectando después de un corte reciente, espera hasta
+   * `SEND_RECONNECT_WAIT_MS` a que vuelva (ver la nota de las constantes). Si
+   * no hay sesión, o el corte ya lleva varios intentos, falla enseguida como
+   * siempre.
+   */
+  private async connectedSocket(
+    businessId: string
+  ): Promise<{ sock: any } | { reason: SendFailureReason }> {
+    const ready = () => {
+      const sock = this.sessions.get(businessId);
+      return sock && this.isSessionConnected(businessId) ? sock : null;
+    };
+
+    const sock = ready();
+    if (sock) return { sock };
+
+    const attempts = this.reconnectAttempts.get(businessId) ?? 0;
+    const recentDrop = attempts > 0 && attempts <= BaileysService.SEND_WAIT_MAX_RECONNECT_ATTEMPTS;
+    if (recentDrop) {
+      const deadline = Date.now() + BaileysService.SEND_RECONNECT_WAIT_MS;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, BaileysService.SEND_RECONNECT_POLL_MS));
+        const reconnected = ready();
+        if (reconnected) {
+          logger.info('Send waited for the session to reconnect', {
+            businessId,
+            waitedMs: BaileysService.SEND_RECONNECT_WAIT_MS - (deadline - Date.now()),
+          });
+          return { sock: reconnected };
+        }
+        // La sesión se dio por irrecuperable mientras se esperaba: no vuelve.
+        if (!this.reconnectAttempts.has(businessId)) break;
+      }
+    }
+
+    return { reason: this.sessions.has(businessId) ? 'not_connected' : 'no_session' };
   }
 
   /**
