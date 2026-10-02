@@ -3,6 +3,13 @@ import { ToolContext } from '../../agent/tools/types.js';
 import { SupabaseService } from '../../services/supabase.service.js';
 import { LlmToolCall } from '../../types/index.js';
 import { runWithLanguage } from '../../i18n/index.js';
+import * as notificationDedup from '../../utils/notification-dedup.js';
+import {
+  combineToUtcISO,
+  formatBaDateKey,
+  nowInBuenosAires,
+  parseBaDateKey,
+} from '../../utils/reservation-datetime.js';
 
 jest.mock('../../utils/logger');
 
@@ -190,6 +197,72 @@ describe('agent tool registry', () => {
     });
   });
 
+  describe('create_reservation y modify_reservation — revalidan el horario antes de escribir', () => {
+    // Dentro de diez días, para que ninguna regla de "hoy" se meta en el medio.
+    const inTenDays = new Date(nowInBuenosAires().getTime() + 10 * 24 * 60 * 60 * 1000);
+    const dateKey = formatBaDateKey(inTenDays);
+    const at = (hour: number) => combineToUtcISO(parseBaDateKey(dateKey), hour, 0);
+
+    let createSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      createSpy = jest.spyOn(SupabaseService, 'createReservation').mockResolvedValue({
+        success: true,
+        waitlistEntry: { id: 'r1', status: 'WAITING', party_size: 4, scheduled_at: at(21), display_code: 'A100' },
+      } as any);
+    });
+
+    it('un día bloqueado no llega a la base, aunque el modelo no haya consultado antes', async () => {
+      jest
+        .spyOn(SupabaseService, 'getBlockedDates')
+        .mockResolvedValue(new Map([[dateKey, { reason: 'Evento privado', reasonMessage: null }]]));
+
+      const result = await run('create_reservation', { customerName: 'Ana', partySize: 4, scheduledAt: at(21) });
+
+      expect(result).toMatchObject({ ok: false, error: { code: 'date_blocked' } });
+      expect(result.verbatim).toBeTruthy();
+      expect(createSpy).not.toHaveBeenCalled();
+    });
+
+    it('un horario con el local cerrado no llega a la base, y se propone una alternativa', async () => {
+      const result = await run('create_reservation', { customerName: 'Ana', partySize: 4, scheduledAt: at(4) });
+
+      expect(result).toMatchObject({ ok: false, error: { code: 'outside_hours' } });
+      expect((result.data as any)?.suggestedAlternative).not.toBeNull();
+      expect(createSpy).not.toHaveBeenCalled();
+    });
+
+    it('un horario válido se crea normalmente', async () => {
+      const result = await run('create_reservation', { customerName: 'Ana', partySize: 4, scheduledAt: at(21) });
+
+      expect(result.ok).toBe(true);
+      expect(createSpy).toHaveBeenCalledWith(expect.objectContaining({ scheduledAt: at(21) }));
+    });
+
+    it('un evento no se revalida: su horario lo fijó el local', async () => {
+      jest.spyOn(SupabaseService, 'getActiveEvents').mockResolvedValue([
+        { id: 'ev1', title: 'Noche de tango', startsAt: at(4) } as any,
+      ]);
+
+      const result = await run('create_reservation', { customerName: 'Ana', partySize: 4, eventId: 'ev1' });
+
+      expect(result.ok).toBe(true);
+      expect(createSpy).toHaveBeenCalledWith(expect.objectContaining({ eventId: 'ev1' }));
+    });
+
+    it('modify_reservation tampoco mueve una reserva a un horario con el local cerrado', async () => {
+      jest
+        .spyOn(SupabaseService, 'getActiveReservationsByPhone')
+        .mockResolvedValue([{ id: 'r1', party_size: 4, scheduled_at: at(21), status: 'WAITING' } as any]);
+      const updateSpy = jest.spyOn(SupabaseService, 'updateReservationSchedule').mockResolvedValue(true as any);
+
+      const result = await run('modify_reservation', { reservationId: 'r1', scheduledAt: at(4) });
+
+      expect(result).toMatchObject({ ok: false, error: { code: 'outside_hours' } });
+      expect(updateSpy).not.toHaveBeenCalled();
+    });
+  });
+
   describe('modo sombra (dryRun) — ninguna herramienta escribe', () => {
     const SHADOW_CTX: ToolContext = { ...CTX, dryRun: true };
 
@@ -356,8 +429,7 @@ describe('agent tool registry', () => {
     });
 
     it('marca las claves de dedup para que realtime no duplique el aviso', async () => {
-      const dedup = require('../../utils/notification-dedup.js');
-      const markSpy = jest.spyOn(dedup, 'markNotified').mockResolvedValue(undefined);
+      const markSpy = jest.spyOn(notificationDedup, 'markNotified').mockResolvedValue(undefined);
       mockCreated('WAITING');
 
       await run('create_reservation', { customerName: 'Matías', partySize: 4 });

@@ -379,6 +379,69 @@ describe('agent orchestrator', () => {
     });
   });
 
+  describe('la IA no responde (sin saldo, proveedor caído)', () => {
+    it('le avisa que el asistente no está disponible, sin invitar a repetir enseguida', async () => {
+      jest.spyOn(openRouterService, 'runToolLoop').mockResolvedValue({
+        content: '',
+        executedToolCalls: [],
+        messages: [{ role: 'user', content: 'quiero reservar' }],
+        model: 'none',
+        iterations: 1,
+        exhausted: false,
+        degraded: true,
+      });
+
+      const result = await turn('quiero reservar');
+
+      expect(result.messages).toEqual([
+        'Disculpá, en este momento el asistente de La Parrilla no está disponible. Escribinos de nuevo en unos minutos, por favor.',
+      ]);
+      // El pedido del cliente queda en el historial; el aviso no es algo que "dijo" el asistente.
+      expect(savedHistory).toEqual([{ role: 'user', content: 'quiero reservar' }]);
+    });
+
+    it('si alcanzó a crear la reserva, manda sólo la confirmación', async () => {
+      jest.spyOn(openRouterService, 'runToolLoop').mockImplementation(async (_m, _s, _t, executor) => {
+        await executor({ id: 't1', type: 'function', function: { name: 'noop', arguments: '{}' } });
+        return {
+          content: '',
+          executedToolCalls: [{ name: 'create_reservation', arguments: '{}', output: { ok: true } }],
+          messages: [],
+          model: 'none',
+          iterations: 2,
+          exhausted: false,
+          degraded: true,
+        };
+      });
+      jest
+        .spyOn(await import('../../agent/tools/index.js'), 'executeToolCall')
+        .mockResolvedValue({ ok: true, verbatim: '✅ Reserva confirmada para 4 personas' });
+
+      const result = await turn('para 4 el viernes a las 21');
+
+      expect(result.messages).toEqual(['✅ Reserva confirmada para 4 personas']);
+    });
+
+    it('no cuenta como turno logrado ni como fallido: la racha queda como estaba', async () => {
+      const bump = jest.spyOn(state, 'bumpUnproductiveStreak').mockResolvedValue(1);
+      const clear = jest.spyOn(state, 'clearUnproductiveStreak').mockResolvedValue();
+      jest.spyOn(openRouterService, 'runToolLoop').mockResolvedValue({
+        content: '',
+        executedToolCalls: [],
+        messages: [],
+        model: 'none',
+        iterations: 1,
+        exhausted: false,
+        degraded: true,
+      });
+
+      await turn('hola');
+
+      expect(bump).not.toHaveBeenCalled();
+      expect(clear).not.toHaveBeenCalled();
+    });
+  });
+
   describe('resiliencia', () => {
     it('nunca deja al cliente sin respuesta si el modelo devuelve vacío', async () => {
       jest.spyOn(openRouterService, 'runToolLoop').mockResolvedValue({

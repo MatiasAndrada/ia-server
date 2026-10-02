@@ -1,3 +1,4 @@
+import { AxiosError } from 'axios';
 import { OpenRouterService } from '../../services/openrouter.service.js';
 import { OpenRouterConfig } from '../../config/openrouter.js';
 
@@ -110,6 +111,68 @@ describe('OpenRouterService', () => {
       const result = await service.chat([{ role: 'user', content: 'Test' }]);
 
       expect(result).toContain('problemas técnicos');
+    });
+  });
+
+  describe('errores que no se arreglan reintentando', () => {
+    function httpError(status: number, data: object = { error: { message: 'boom' } }) {
+      return new AxiosError('Request failed', 'ERR_BAD_REQUEST', undefined, undefined, {
+        status,
+        data,
+      } as any);
+    }
+
+    it.each([
+      [402, 'sin saldo'],
+      [403, 'límite de la key'],
+      [400, 'request inválido'],
+    ])('un %s (%s) no se reintenta: falla una vez y degrada', async (status) => {
+      mockAxiosInstance.post.mockRejectedValue(httpError(status));
+
+      const result = await service.chatWithActions([{ role: 'user', content: 'hola' }]);
+
+      expect(mockAxiosInstance.post).toHaveBeenCalledTimes(1);
+      expect(result.degraded).toBe(true);
+      expect(result.toolCalls).toEqual([]);
+    });
+
+    it.each([429, 503])('un %s sí se reintenta', async (status) => {
+      mockAxiosInstance.post.mockRejectedValueOnce(httpError(status)).mockResolvedValueOnce({
+        data: { choices: [{ message: { role: 'assistant', content: 'ok' } }] },
+      });
+
+      const result = await service.chatWithActions([{ role: 'user', content: 'hola' }]);
+
+      expect(mockAxiosInstance.post).toHaveBeenCalledTimes(2);
+      expect(result).toMatchObject({ content: 'ok' });
+      expect(result.degraded).toBeUndefined();
+    });
+
+    it('si el modelo deja de responder a mitad del loop, el turno sale marcado y sin el texto de respaldo', async () => {
+      mockAxiosInstance.post
+        .mockResolvedValueOnce({
+          data: {
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: '',
+                  tool_calls: [
+                    { id: 't1', type: 'function', function: { name: 'create_reservation', arguments: '{}' } },
+                  ],
+                },
+              },
+            ],
+          },
+        })
+        .mockRejectedValue(httpError(402));
+      const executor = jest.fn(async () => ({ ok: true, verbatim: 'Reserva confirmada' }));
+
+      const result = await service.runToolLoop([{ role: 'user', content: 'para 4' }], 'sys', [], executor);
+
+      expect(executor).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({ content: '', degraded: true });
+      expect(result.executedToolCalls.map((c) => c.name)).toEqual(['create_reservation']);
     });
   });
 

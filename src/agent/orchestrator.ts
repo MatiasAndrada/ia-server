@@ -212,25 +212,31 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
     result.executedToolCalls.length > 0 &&
     result.executedToolCalls.every((c) => (c.output as ToolResult | undefined)?.ok === false);
 
-  if (!dryRun && (result.exhausted || allToolsFailed)) {
-    const streak = await bumpUnproductiveStreak(conversationId);
-    if (streak >= 2) {
-      logger.warn('Agent: unproductive streak reached, handing off', {
-        conversationId,
-        businessId,
-        streak,
-      });
-      await clearHistory(conversationId);
+  // Un turno sin IA (sin saldo, proveedor caído) no dice nada de la
+  // conversación: ni corta la racha ni la suma. Cortarla sería contarlo como
+  // un turno logrado; sumarla terminaría mandándole a un cliente que no hizo
+  // nada mal el mensaje de "no nos estamos entendiendo".
+  if (!dryRun && !result.degraded) {
+    if (result.exhausted || allToolsFailed) {
+      const streak = await bumpUnproductiveStreak(conversationId);
+      if (streak >= 2) {
+        logger.warn('Agent: unproductive streak reached, handing off', {
+          conversationId,
+          businessId,
+          streak,
+        });
+        await clearHistory(conversationId);
+        await clearUnproductiveStreak(conversationId);
+        return {
+          messages: [templates.tooManyInvalidAttempts()],
+          attachments: [],
+          toolsCalled: result.executedToolCalls.map((c) => c.name),
+          iterations: result.iterations,
+        };
+      }
+    } else {
       await clearUnproductiveStreak(conversationId);
-      return {
-        messages: [templates.tooManyInvalidAttempts()],
-        attachments: [],
-        toolsCalled: result.executedToolCalls.map((c) => c.name),
-        iterations: result.iterations,
-      };
     }
-  } else if (!dryRun) {
-    await clearUnproductiveStreak(conversationId);
   }
 
   const outbound = [...verbatimMessages, finalText].filter((text) => text.length > 0);
@@ -248,13 +254,20 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
   // Un turno sin nada que decir deja al cliente esperando. Sólo puede pasar si
   // el modelo devolvió vacío y ninguna herramienta produjo `verbatim` — y no
   // si el silencio fue deliberado.
+  //
+  // Si fue porque la IA no respondió, el texto es otro: "¿me lo repetís?"
+  // invita a reintentar enseguida, y con la IA caída eso no cambia nada. Si
+  // antes de caerse alcanzó a ejecutar algo con `verbatim` (una reserva
+  // creada), se manda sólo eso: sumarle "problemas técnicos" haría pensar que
+  // la reserva no se hizo y que hay que pedirla de nuevo.
   if (!silenced && outbound.length === 0 && attachments.length === 0) {
-    logger.warn('Agent: empty turn, falling back to generic reply', {
+    logger.warn('Agent: empty turn, falling back to a fixed reply', {
       conversationId,
       iterations: result.iterations,
       exhausted: result.exhausted,
+      degraded: result.degraded === true,
     });
-    outbound.push(templates.genericError());
+    outbound.push(result.degraded ? templates.aiUnavailable(businessName) : templates.genericError());
   }
 
   logEvent('info', 'turn.completed', {
@@ -265,6 +278,7 @@ export async function handleTurn(input: TurnInput): Promise<TurnResult> {
     tools: result.executedToolCalls.map((c) => c.name),
     exhausted: result.exhausted,
     model: result.model,
+    ...(result.degraded && { degraded: true }),
   });
 
   return {

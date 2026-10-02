@@ -27,6 +27,12 @@ export interface ChatWithActionsResult {
   model: string;
   /** Consumo informado por OpenRouter, cuando viene en la respuesta. */
   usage?: OpenRouterChatCompletionResponse['usage'];
+  /**
+   * El modelo no respondió y `content` es el texto genérico de respaldo, no
+   * una respuesta suya. Quien arma una conversación tiene que saberlo: ese
+   * texto no es algo que "dijo" el asistente (ver orchestrator.ts).
+   */
+  degraded?: boolean;
 }
 
 /**
@@ -54,6 +60,11 @@ export interface ToolLoopResult {
   iterations: number;
   /** true si se agotó el tope de iteraciones y hubo que forzar el cierre. */
   exhausted: boolean;
+  /**
+   * El modelo dejó de responder a mitad del turno (sin saldo, caído). `content`
+   * viene vacío; lo que se haya ejecutado antes está en `executedToolCalls`.
+   */
+  degraded?: boolean;
 }
 
 /**
@@ -70,6 +81,25 @@ function safeSerializeToolOutput(output: unknown): string {
     });
     return JSON.stringify({ ok: false, error: { code: 'unserializable_result' } });
   }
+}
+
+/** El código HTTP de un error de OpenRouter, si lo trae (directo o en `cause`). */
+function httpStatusOf(error: unknown): number | undefined {
+  const err = error as { response?: { status?: number }; cause?: unknown } | null;
+  const cause = err?.cause as { response?: { status?: number } } | undefined;
+  return err?.response?.status ?? cause?.response?.status;
+}
+
+/**
+ * ¿Tiene sentido reintentar? Sí ante caídas de red, timeouts, 408, 429 y 5xx.
+ * No ante 400/401/402/403/404: sin saldo, key sin límite disponible o un
+ * request mal armado fallan igual medio segundo después, y el reintento sólo
+ * le suma espera al cliente.
+ */
+function isRetryable(error: unknown): boolean {
+  const status = httpStatusOf(error);
+  if (status === undefined) return true;
+  return status === 408 || status === 429 || status >= 500;
 }
 
 export class OpenRouterService {
@@ -147,6 +177,7 @@ export class OpenRouterService {
           error,
         });
 
+        if (!isRetryable(error)) break;
         if (attempt < this.maxRetries) {
           await this.sleep(this.retryDelay);
         }
@@ -156,13 +187,15 @@ export class OpenRouterService {
     logEvent('error', 'ai.failed', {
       purpose,
       attempts: this.maxRetries,
+      httpStatus: httpStatusOf(lastError),
+      retryable: isRetryable(lastError),
       error: lastError,
     });
 
     // Never let an AI outage break the request — degrade to a fallback
     // response with no tool calls, same resilience contract as before.
     logEvent('warn', 'ai.degraded', { purpose });
-    return { content: buildFallbackResponse(), toolCalls: [], model: 'none' };
+    return { content: buildFallbackResponse(), toolCalls: [], model: 'none', degraded: true };
   }
 
   /**
@@ -209,6 +242,20 @@ export class OpenRouterService {
         purpose
       );
       lastModel = result.model;
+
+      // El modelo dejó de responder: el texto de respaldo no es una respuesta
+      // suya. Se corta acá y quien llamó decide qué decirle al cliente.
+      if (result.degraded) {
+        return {
+          content: '',
+          executedToolCalls: executed,
+          messages: working,
+          model: lastModel,
+          iterations: iteration,
+          exhausted: false,
+          degraded: true,
+        };
+      }
 
       if (result.toolCalls.length === 0) {
         return {
@@ -274,12 +321,13 @@ export class OpenRouterService {
     );
 
     return {
-      content: closing.content,
+      content: closing.degraded ? '' : closing.content,
       executedToolCalls: executed,
       messages: working,
       model: closing.model || lastModel,
       iterations: maxIterations,
       exhausted: true,
+      ...(closing.degraded && { degraded: true }),
     };
   }
 

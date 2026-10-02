@@ -1,13 +1,12 @@
 import { AgentTool, ToolResult, fail, ok } from './types.js';
 import { loadBusinessRules } from './business-rules.js';
+import { slotRejection } from './availability.tools.js';
 import { SupabaseService } from '../../services/supabase.service.js';
 import { BusinessEvent, WaitlistEntry } from '../../types/index.js';
 import {
   describeScheduledAtUtc,
   describeScheduledAtUtcCompact,
   nowInBuenosAires,
-  utcIsoToBaParts,
-  describeBaDateKey,
 } from '../../utils/reservation-datetime.js';
 import * as templates from '../../utils/message-templates.js';
 import { logEvent, logger } from '../../utils/logger.js';
@@ -22,11 +21,11 @@ import {
  * Herramientas que escriben en la base.
  *
  * Regla que las separa de las de disponibilidad: nada acá "decide" si algo se
- * puede — para cuando se llama a `create_reservation`, la fecha ya pasó por
- * `check_availability`. Igual se revalida antes de escribir, porque entre una
- * llamada y otra pueden pasar segundos y el comercio pudo bloquear la fecha.
- * Esa red de seguridad ya existía en `ReservationService.createReservation` y
- * se conserva con el mismo criterio.
+ * puede — eso es `check_availability`. Pero antes de escribir un horario se
+ * revalida con esa misma lógica (`slotRejection`): el modelo puede saltearse
+ * la consulta, y entre una llamada y otra el comercio pudo bloquear la fecha.
+ * Antes sólo se rechazaba un horario ya pasado, y un día bloqueado o un local
+ * cerrado dependían de que el modelo hubiera preguntado.
  */
 
 const MIN_PARTY_SIZE = 1;
@@ -113,6 +112,23 @@ export const createReservationTool: AgentTool<CreateArgs> = {
       }
 
       effectiveScheduledAt = event.startsAt;
+    }
+
+    // Un horario elegido por el cliente se revalida antes de escribir. Los
+    // eventos no: su fecha y hora las fijó el comercio al publicarlo.
+    if (effectiveScheduledAt && !event) {
+      const rules = await loadBusinessRules(ctx.businessId);
+      const rejection = rules ? slotRejection(rules, effectiveScheduledAt) : null;
+      if (rejection) {
+        logEvent('warn', 'reservation.rejected', {
+          reason: rejection.error?.code ?? 'slot_rejected',
+          businessId: ctx.businessId,
+          conversationId: ctx.conversationId,
+          scheduledAt: effectiveScheduledAt,
+          via: 'create_reservation',
+        });
+        return rejection;
+      }
     }
 
     if (ctx.dryRun) {
@@ -400,18 +416,16 @@ export const modifyReservationTool: AgentTool<ModifyArgs> = {
       // Revalidación: el scheduledAt vino del modelo y pudo quedar viejo si la
       // conversación se alargó o si el comercio bloqueó la fecha entretanto.
       const rules = await loadBusinessRules(ctx.businessId);
-      if (rules) {
-        const { dateKey } = utcIsoToBaParts(scheduledAt);
-        if (rules.isBlocked(dateKey)) {
-          return {
-            ok: false,
-            error: {
-              code: 'date_blocked',
-              hint: 'Esa fecha quedó bloqueada. Ofrecele otra.',
-            },
-            verbatim: templates.dateBlocked(describeBaDateKey(dateKey, rules.nowBA), null),
-          };
-        }
+      const rejection = rules ? slotRejection(rules, scheduledAt) : null;
+      if (rejection) {
+        logEvent('warn', 'reservation.rejected', {
+          reason: rejection.error?.code ?? 'slot_rejected',
+          businessId: ctx.businessId,
+          conversationId: ctx.conversationId,
+          scheduledAt,
+          via: 'modify_reservation',
+        });
+        return rejection;
       }
 
       const updated = await SupabaseService.updateReservationSchedule(reservationId, scheduledAt);

@@ -1,5 +1,5 @@
 import { AgentTool, ToolResult, fail, ok } from './types.js';
-import { loadBusinessRules } from './business-rules.js';
+import { BusinessRules, loadBusinessRules } from './business-rules.js';
 import {
   checkBusinessHours,
   combineToUtcISO,
@@ -15,6 +15,7 @@ import {
   parseBaDateKey,
   parseRelativeDay,
   parseTimeOfDay,
+  utcIsoToBaParts,
 } from '../../utils/reservation-datetime.js';
 import * as templates from '../../utils/message-templates.js';
 import { logger } from '../../utils/logger.js';
@@ -160,17 +161,7 @@ export const checkAvailabilityTool: AgentTool<CheckAvailabilityArgs> = {
     const baDate = parseBaDateKey(dateKey);
 
     if (rules.isBlocked(dateKey)) {
-      return {
-        ok: false,
-        error: {
-          code: 'date_blocked',
-          hint: 'Ese día el local no toma reservas. Ya se le explicó el motivo; ofrecele otra fecha.',
-        },
-        verbatim: templates.dateBlocked(
-          describeBaDateKey(dateKey, rules.nowBA),
-          getBlockedDateReasonMessage(dateKey, rules.blockedDates)
-        ),
-      };
+      return dateBlockedResult(rules, dateKey);
     }
 
     // Sin horario: sólo se informa si el día es viable y desde cuándo.
@@ -206,31 +197,7 @@ export const checkAvailabilityTool: AgentTool<CheckAvailabilityArgs> = {
     );
 
     if (!verdict.allowed) {
-      // Se busca la alternativa más cercana ese mismo día para que el modelo
-      // proponga algo concreto en vez de un "no se puede" seco.
-      const alternative = findNextSlotOnDay(
-        baDate,
-        hour * 60 + minute,
-        rules.weeklyHours,
-        rules.openingMargin,
-        rules.closingMargin
-      );
-
-      return {
-        ok: false,
-        error: {
-          code: 'outside_hours',
-          hint: alternative
-            ? `Ese horario no entra (${verdict.reason ?? 'fuera del horario de atención'}). Proponele las ${String(alternative.hour).padStart(2, '0')}:${String(alternative.minute).padStart(2, '0')} de ese mismo día.`
-            : `Ese horario no entra (${verdict.reason ?? 'fuera del horario de atención'}) y no queda ningún otro horario ese día. Ofrecele otra fecha.`,
-        },
-        data: {
-          openingHours: formatDayHoursForDate(baDate, rules.weeklyHours),
-          suggestedAlternative: alternative
-            ? { hour: alternative.hour, minute: alternative.minute, dateKey }
-            : null,
-        },
-      } as ToolResult;
+      return outsideHoursResult(rules, dateKey, hour, minute, verdict.reason);
     }
 
     const scheduledAt = combineToUtcISO(baDate, hour, minute);
@@ -267,25 +234,8 @@ export const checkAvailabilityTool: AgentTool<CheckAvailabilityArgs> = {
 
     // Bloqueo de reservas futuras para hoy: el comercio puede cortar la toma
     // de reservas del día en curso sin bloquear la fecha entera.
-    if (
-      isFutureReservationBlockedToday(
-        dateKey,
-        hour,
-        minute,
-        rules.nowBA,
-        rules.business.future_reservations_blocked_for_date,
-        rules.weeklyHours,
-        rules.closingMargin
-      )
-    ) {
-      return {
-        ok: false,
-        error: {
-          code: 'future_reservations_blocked_today',
-          hint: 'Hoy el local no está tomando reservas anticipadas. Ya se le explicó; ofrecele otro día.',
-        },
-        verbatim: templates.futureReservationsBlockedToday(),
-      };
+    if (isFutureBlockedToday(rules, dateKey, hour, minute)) {
+      return futureBlockedTodayResult();
     }
 
     return ok({
@@ -371,3 +321,110 @@ export const listOpenDaysTool: AgentTool<Record<string, never>> = {
     return ok({ days });
   },
 };
+
+// ─── Por qué un horario no se puede reservar ───
+// Compartido entre `check_availability` y las herramientas que escriben (ver
+// `slotRejection`), para que el cliente reciba lo mismo por cualquier camino.
+
+function dateBlockedResult(rules: BusinessRules, dateKey: string): ToolResult {
+  return {
+    ok: false,
+    error: {
+      code: 'date_blocked',
+      hint: 'Ese día el local no toma reservas. Ya se le explicó el motivo; ofrecele otra fecha.',
+    },
+    verbatim: templates.dateBlocked(
+      describeBaDateKey(dateKey, rules.nowBA),
+      getBlockedDateReasonMessage(dateKey, rules.blockedDates)
+    ),
+  };
+}
+
+function outsideHoursResult(
+  rules: BusinessRules,
+  dateKey: string,
+  hour: number,
+  minute: number,
+  reason: string | undefined
+): ToolResult {
+  const baDate = parseBaDateKey(dateKey);
+  // Se busca la alternativa más cercana ese mismo día para que el modelo
+  // proponga algo concreto en vez de un "no se puede" seco.
+  const alternative = findNextSlotOnDay(
+    baDate,
+    hour * 60 + minute,
+    rules.weeklyHours,
+    rules.openingMargin,
+    rules.closingMargin
+  );
+
+  return {
+    ok: false,
+    error: {
+      code: 'outside_hours',
+      hint: alternative
+        ? `Ese horario no entra (${reason ?? 'fuera del horario de atención'}). Proponele las ${String(alternative.hour).padStart(2, '0')}:${String(alternative.minute).padStart(2, '0')} de ese mismo día.`
+        : `Ese horario no entra (${reason ?? 'fuera del horario de atención'}) y no queda ningún otro horario ese día. Ofrecele otra fecha.`,
+    },
+    data: {
+      openingHours: formatDayHoursForDate(baDate, rules.weeklyHours),
+      suggestedAlternative: alternative
+        ? { hour: alternative.hour, minute: alternative.minute, dateKey }
+        : null,
+    },
+  } as ToolResult;
+}
+
+/** El comercio cortó la toma de reservas del día en curso sin bloquear la fecha entera. */
+function isFutureBlockedToday(rules: BusinessRules, dateKey: string, hour: number, minute: number): boolean {
+  return isFutureReservationBlockedToday(
+    dateKey,
+    hour,
+    minute,
+    rules.nowBA,
+    rules.business.future_reservations_blocked_for_date,
+    rules.weeklyHours,
+    rules.closingMargin
+  );
+}
+
+function futureBlockedTodayResult(): ToolResult {
+  return {
+    ok: false,
+    error: {
+      code: 'future_reservations_blocked_today',
+      hint: 'Hoy el local no está tomando reservas anticipadas. Ya se le explicó; ofrecele otro día.',
+    },
+    verbatim: templates.futureReservationsBlockedToday(),
+  };
+}
+
+/**
+ * Por qué no se puede reservar en `scheduledAt` (un instante ISO UTC), o
+ * `null` si se puede.
+ *
+ * Es lo que verifica `check_availability`, pero sobre un horario ya resuelto.
+ * Lo usan las herramientas que escriben para no depender de que el modelo lo
+ * haya consultado antes: si se lo salteó, o si el local bloqueó la fecha en el
+ * medio, la reserva igual no llega a la base. El horario ya pasado lo rechaza
+ * `SupabaseService.createReservation` por su cuenta.
+ */
+export function slotRejection(rules: BusinessRules, scheduledAt: string): ToolResult | null {
+  const { dateKey, hour, minute } = utcIsoToBaParts(scheduledAt);
+
+  if (rules.isBlocked(dateKey)) return dateBlockedResult(rules, dateKey);
+
+  const verdict = checkBusinessHours(
+    parseBaDateKey(dateKey),
+    hour,
+    minute,
+    rules.weeklyHours,
+    rules.closingMargin,
+    rules.openingMargin
+  );
+  if (!verdict.allowed) return outsideHoursResult(rules, dateKey, hour, minute, verdict.reason);
+
+  if (isFutureBlockedToday(rules, dateKey, hour, minute)) return futureBlockedTodayResult();
+
+  return null;
+}
