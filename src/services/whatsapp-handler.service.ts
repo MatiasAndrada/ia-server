@@ -6,6 +6,7 @@ import { logger, logEvent } from '../utils/logger.js';
 import { withLogContext } from '../utils/log-context.js';
 import { normalizePhone } from '../utils/phone.js';
 import {
+  currentTurnStats,
   withTurnStats,
   recordOutbound,
 } from '../utils/turn-stats.js';
@@ -68,6 +69,20 @@ const DUPLICATE_OUTBOUND_WINDOW_MS = 10000;
 const INACTIVE_FALLBACK_TTL_SECONDS = 120;
 
 /**
+ * Un audio se contesta pidiendo que lo escriba, pero una sola vez en esta
+ * ventana: quien manda tres audios seguidos no necesita leer tres veces lo
+ * mismo.
+ */
+const AUDIO_REPLY_TTL_SECONDS = 10 * 60;
+
+/** Cómo queda un audio en el historial del modelo: sabe que llegó, no qué dice. */
+const AUDIO_HISTORY_PLACEHOLDER = '[audio]';
+
+/** Lo que ve el modelo cuando el cliente mandó un audio además de texto. */
+const AUDIO_ALONGSIDE_TEXT_NOTE =
+  '[Además mandó un audio, que no podés escuchar: si hace falta, pedile que lo escriba.]';
+
+/**
  * Freno de emergencia contra loops bot-contra-bot (dos números automáticos
  * contestándose entre sí sin que ningún humano participe).
  *
@@ -76,16 +91,21 @@ const INACTIVE_FALLBACK_TTL_SECONDS = 120;
  * mensajes (no son idénticos consecutivos) y con minutos de por medio, así que
  * lo esquiva sin problema y el LLM sigue generando una respuesta por turno para
  * siempre. Esto es la red de seguridad genérica: no importa el contenido ni si
- * el texto varía turno a turno, sólo el VOLUMEN de mensajes salientes hacia el
- * mismo número en poco tiempo — algo que una conversación real de reserva casi
- * nunca alcanza, pero que un loop automático supera en minutos.
+ * el texto varía turno a turno, sólo el VOLUMEN de turnos con respuesta hacia
+ * el mismo número en poco tiempo — algo que una conversación real de reserva
+ * casi nunca alcanza, pero que un loop automático supera en minutos.
+ *
+ * Cuenta turnos y no mensajes: un turno puede mandar muchos (un coordinador
+ * que pide nueve mesas recibe nueve confirmaciones), y contándolos uno por uno
+ * ese pedido solo disparaba el freno y dejaba el chat mudo media hora. En un
+ * loop contra otro bot cada mensaje suyo es un turno, así que se corta igual.
  *
  * Vive en Redis (no en memoria) para sobrevivir un restart del proceso a mitad
  * de un loop. Si Redis no está disponible, se deja pasar el mensaje (ver
  * `isOutboundLoopSuspected`): ante la duda, el criterio del resto del sistema
  * es no dejar a un cliente real sin respuesta.
  */
-const LOOP_GUARD_MAX_MESSAGES = 12;
+const LOOP_GUARD_MAX_TURNS = 12;
 const LOOP_GUARD_WINDOW_SECONDS = 30 * 60;
 
 /**
@@ -178,7 +198,15 @@ export class WhatsAppHandler {
       return;
     }
     // Un mensaje propio sin texto (un audio) en modo test: nada que contestar.
-    if (!message.message) return;
+    if (!message.message && message.media !== 'audio') return;
+
+    // En un número compartido, un audio casi siempre es para la persona — un
+    // amigo, un proveedor — y el bot no sabe de qué habla. Ante la duda, ahí
+    // no aparece (ver adaptations/shared-number.ts).
+    if (!message.message && findSharedNumberAdaptation(message.businessId)) {
+      logger.debug('Audio on a shared number, left to the person', { businessId: message.businessId });
+      return;
+    }
 
     const { from, businessId } = message;
     const phone = this.normalizeWhatsAppNumber(from);
@@ -291,11 +319,17 @@ export class WhatsAppHandler {
     // would otherwise merge to "Si\nSi" → normalized "si si" → no opt-in pattern match → loop).
     const deduplicatedTexts = batch
       .map(m => m.message)
+      .filter(msg => msg.trim().length > 0)
       .filter((msg, idx, arr) => idx === 0 || msg.trim() !== arr[idx - 1].trim());
+
+    // Un audio en la tanda la marca aunque también haya texto: el modelo tiene
+    // que saber que llegó algo que no puede escuchar.
+    const hasAudio = batch.some(m => m.media === 'audio');
 
     const combined: BaileysMessage = {
       ...batch[0],
       message: deduplicatedTexts.join('\n'),
+      media: hasAudio ? 'audio' : undefined,
     };
 
     if (batch.length > 1) {
@@ -474,6 +508,11 @@ export class WhatsAppHandler {
       if (await this.shouldSendInactiveFallback(businessId, phone)) {
         await this.sendWhatsAppMessage(businessId, from, templates.inactiveFallback());
       }
+      return;
+    }
+
+    if (message.media === 'audio' && !messageText.trim()) {
+      await this.replyToAudio(businessId, from, conversationId);
       return;
     }
 
@@ -680,7 +719,8 @@ export class WhatsAppHandler {
         conversationId,
         phone,
         jid: from,
-        messageText,
+        messageText:
+          message.media === 'audio' ? `${messageText}\n${AUDIO_ALONGSIDE_TEXT_NOTE}` : messageText,
         language,
         businessName: businessStatus.name,
         humanContext: sharedNumber?.humanContext,
@@ -740,6 +780,41 @@ export class WhatsAppHandler {
     } catch (error) {
       logger.error('Agent turn failed', { error, conversationId, businessId });
       await this.sendWhatsAppMessage(businessId, from, templates.genericError());
+    }
+  }
+
+  /**
+   * El cliente mandó sólo un audio. Se le pide que lo escriba en vez de
+   * callarse: desde el otro lado, un bot que no contesta no se distingue de
+   * uno caído. Nunca en un número compartido (ver `processMessage`).
+   */
+  private async replyToAudio(businessId: string, from: string, conversationId: string): Promise<void> {
+    if (findSharedNumberAdaptation(businessId)) return;
+
+    if (!(await this.claimAudioReply(conversationId))) {
+      logger.debug('Audio already answered recently, staying quiet', { conversationId });
+      return;
+    }
+
+    const text = templates.audioNotSupported();
+    await this.sendWhatsAppMessage(businessId, from, text);
+    // Al historial, para que el modelo sepa que el cliente mandó un audio y
+    // qué se le contestó, si después escribe "lo que te dije en el audio".
+    await appendExchange(conversationId, AUDIO_HISTORY_PLACEHOLDER, text);
+  }
+
+  /** `true` si a este chat todavía no se le contestó un audio en la ventana. Sin Redis, contesta. */
+  private async claimAudioReply(conversationId: string): Promise<boolean> {
+    try {
+      if (!RedisConfig.isReady()) return true;
+      const wasSet = await RedisConfig.getClient().set(`wa:audio-reply:${conversationId}`, '1', {
+        NX: true,
+        EX: AUDIO_REPLY_TTL_SECONDS,
+      });
+      return !!wasSet;
+    } catch (error) {
+      logger.warn('Audio reply throttle failed, answering anyway', { conversationId, error });
+      return true;
     }
   }
 
@@ -948,7 +1023,7 @@ export class WhatsAppHandler {
         logEvent('warn', 'loop.suspected', {
           businessId,
           to,
-          maxMessages: LOOP_GUARD_MAX_MESSAGES,
+          maxTurns: LOOP_GUARD_MAX_TURNS,
           windowSeconds: LOOP_GUARD_WINDOW_SECONDS,
         });
         return;
@@ -973,17 +1048,24 @@ export class WhatsAppHandler {
   }
 
   /**
-   * ¿Ya se mandaron demasiados mensajes a este número en poco tiempo?
+   * ¿Ya hubo demasiados turnos con respuesta a este número en poco tiempo?
    *
-   * Contador de ventana fija en Redis: el primer envío de la ventana crea la
+   * Contador de ventana fija en Redis: el primer turno de la ventana crea la
    * key en 1 y le pone TTL; los siguientes sólo incrementan. Cuando el TTL
    * vence, la ventana arranca de cero sola — no hace falta limpieza manual.
+   *
+   * Se cuenta una vez por turno, en su primer envío, y el veredicto queda para
+   * el resto de los mensajes del turno (ver `TurnStats.loopSuspected`). Fuera
+   * de un turno (rutas HTTP, jobs) cada envío cuenta solo, como antes.
    *
    * Nunca lanza. Sin Redis no hay forma de saber el conteo real, y frenar a un
    * cliente real por no poder confirmar un loop es el peor de los dos errores
    * (mismo criterio que el resto de los guards de este archivo).
    */
   private async isOutboundLoopSuspected(businessId: string, to: string): Promise<boolean> {
+    const turn = currentTurnStats();
+    if (turn?.loopSuspected !== undefined) return turn.loopSuspected;
+
     try {
       if (!RedisConfig.isReady()) return false;
       const client = RedisConfig.getClient();
@@ -992,7 +1074,9 @@ export class WhatsAppHandler {
       if (count === 1) {
         await client.expire(key, LOOP_GUARD_WINDOW_SECONDS);
       }
-      return count > LOOP_GUARD_MAX_MESSAGES;
+      const suspected = count > LOOP_GUARD_MAX_TURNS;
+      if (turn) turn.loopSuspected = suspected;
+      return suspected;
     } catch (error) {
       logger.warn('Failed to check the outbound loop guard, the message is sent anyway', {
         businessId,

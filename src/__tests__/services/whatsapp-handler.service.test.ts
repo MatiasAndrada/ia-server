@@ -11,6 +11,10 @@ import path from 'node:path';
 
 jest.mock('../../utils/logger');
 
+// La ruta temporal que deja jest.setup.js: al terminar se vuelve a ella, nunca
+// a la de por defecto, que es el archivo real de producción.
+const SETUP_HANDOFF_FILE = process.env.SHARED_NUMBER_HANDOFF_FILE;
+
 /**
  * Cubre lo que el orquestador NO puede cubrir por sí solo: lo que pasa antes y
  * después de él — el menú de idioma y el saludo de apertura del primer
@@ -429,7 +433,7 @@ describe('WhatsAppHandler — camino del agente', () => {
     });
 
     afterEach(() => {
-      delete globalThis.process.env.SHARED_NUMBER_HANDOFF_FILE;
+      globalThis.process.env.SHARED_NUMBER_HANDOFF_FILE = SETUP_HANDOFF_FILE;
       delete globalThis.process.env.DE_LA_FONTE_BUSINESS_ID;
     });
 
@@ -718,7 +722,7 @@ describe('WhatsAppHandler — camino del agente', () => {
   /**
    * Freno contra un loop bot-contra-bot: dos números automáticos
    * contestándose entre sí sin ningún humano de por medio (ver
-   * LOOP_GUARD_MAX_MESSAGES en whatsapp-handler.service.ts). El contador vive
+   * LOOP_GUARD_MAX_TURNS en whatsapp-handler.service.ts). El contador vive
    * en Redis, así que estos tests lo mockean con un Map en memoria.
    */
   describe('freno de loop contra otro bot', () => {
@@ -773,6 +777,43 @@ describe('WhatsAppHandler — camino del agente', () => {
       }
 
       expect(sent).toHaveLength(5);
+    });
+
+    /** Un turno completo, como lo corre el handler en producción (con su contexto). */
+    function fullTurn(text: string): Promise<void> {
+      return (
+        handler as unknown as { runTurn: (id: string, m: BaileysMessage) => Promise<void> }
+      ).runTurn(`${BUSINESS_ID}-${PHONE}`, message(text));
+    }
+
+    it('un turno con muchas confirmaciones cuenta como uno: un pedido de mesas no lo dispara', async () => {
+      jest.spyOn(orchestrator, 'handleTurn').mockResolvedValueOnce({
+        messages: Array.from({ length: 14 }, (_, i) => `Mesa ${i + 1} reservada`),
+        attachments: [],
+        toolsCalled: [],
+        iterations: 1,
+      });
+
+      await fullTurn('3 mesas de 4, 2 de 6, 4 de 2 y 5 de 3');
+
+      expect(sent).toHaveLength(14);
+      expect([...counters.values()]).toEqual([1]);
+    });
+
+    it('contando turnos, un loop contra otro bot se sigue cortando', async () => {
+      const turnSpy = jest.spyOn(orchestrator, 'handleTurn');
+      for (let i = 0; i < 20; i++) {
+        turnSpy.mockResolvedValueOnce({
+          messages: [`respuesta ${i}`, `y algo más ${i}`],
+          attachments: [],
+          toolsCalled: [],
+          iterations: 1,
+        });
+        await fullTurn(`mensaje automático ${i}`);
+      }
+
+      // Doce turnos completos, con sus dos mensajes cada uno; del 13 en adelante, nada.
+      expect(sent).toHaveLength(24);
     });
   });
 });

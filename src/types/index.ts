@@ -361,6 +361,12 @@ export interface BaileysMessage {
    * comparar dos mensajes del mismo chat (ver `isPhoneAutoReply`).
    */
   receivedAt?: number;
+  /**
+   * El cliente mandó un audio. El bot no puede escucharlo, pero tampoco puede
+   * quedarse callado como si no hubiera llegado nada (ver
+   * `WhatsAppHandler.processMessage`).
+   */
+  media?: 'audio';
 }
 
 // WebSocket Event Types

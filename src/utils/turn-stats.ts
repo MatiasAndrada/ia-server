@@ -23,6 +23,12 @@ export interface TurnStats {
   step?: string;
   /** Motivo por el que el turno se cortó antes de llegar al agente. */
   blocked?: string;
+  /**
+   * Veredicto del freno anti-loop para este turno, tomado en su primer envío
+   * (ver `isOutboundLoopSuspected` en whatsapp-handler.service.ts): el freno
+   * cuenta turnos, no mensajes.
+   */
+  loopSuspected?: boolean;
 }
 
 const turnStatsStore = new AsyncLocalStorage<TurnStats>();
