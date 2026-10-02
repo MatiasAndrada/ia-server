@@ -1,7 +1,7 @@
 import { SupabaseConfig } from '../config/supabase.js';
 import type { Database } from '../types/supabase.js';
 import { formatName } from '../utils/formatters.js';
-import { normalizePhone } from '../utils/phone.js';
+import { normalizePhone, phoneCandidates } from '../utils/phone.js';
 import {
   CreateReservationRequest,
   CreateReservationResponse,
@@ -19,10 +19,11 @@ import { isInPast } from '../utils/reservation-datetime.js';
 import * as templates from '../utils/message-templates.js';
 
 /**
- * Los `customers` se buscan por igualdad exacta de `phone`, así que toda
- * consulta tiene que usar el mismo formato canónico con el que se insertan
- * (sólo dígitos). Si el valor no tiene un solo dígito se deja como vino: es
- * preferible una búsqueda que no encuentra nada a una que borra el dato.
+ * Formato canónico con el que se insertan los `customers` (sólo dígitos). Las
+ * búsquedas prueban además la variante con o sin el 9 de los móviles
+ * argentinos (ver `findCustomersByPhone`). Si el valor no tiene un solo dígito
+ * se deja como vino: es preferible una búsqueda que no encuentra nada a una
+ * que borra el dato.
  */
 function phoneKey(phone: string): string {
   return normalizePhone(phone) || phone;
@@ -74,6 +75,35 @@ export class SupabaseService {
   }
 
   /**
+   * Las fichas de este comercio para este teléfono, con y sin el 9 de los
+   * móviles argentinos; la del formato exacto primero.
+   *
+   * Las fichas que crea el bot nacen del JID (`549…`), pero las que carga el
+   * personal desde el panel muchas veces van sin el 9 (`54…`). Con igualdad
+   * exacta el bot no veía esas reservas — no podía modificarlas ni
+   * cancelarlas — y el alta creaba una ficha duplicada. Puede haber una ficha
+   * de cada forma para el mismo número; por eso devuelve todas. Lanza si la
+   * consulta falla.
+   */
+  private static async findCustomersByPhone<T extends { phone?: string | null }>(
+    businessId: string,
+    phone: string,
+    columns = '*'
+  ): Promise<T[]> {
+    const exact = phoneKey(phone);
+    const candidates = phoneCandidates(phone);
+    const { data, error } = await this.getClient()
+      .from('customers')
+      .select(columns === '*' ? '*' : `${columns}, phone`)
+      .eq('business_id', businessId)
+      .in('phone', candidates.length > 0 ? candidates : [exact]);
+
+    if (error) throw error;
+    const rows = (data ?? []) as unknown as T[];
+    return [...rows].sort((a, b) => Number(b.phone === exact) - Number(a.phone === exact));
+  }
+
+  /**
    * Get the customer's active reservations (any date) by phone number.
    */
   static async getActiveReservationsByPhone(
@@ -81,19 +111,21 @@ export class SupabaseService {
     businessId: string
   ): Promise<WaitlistEntry[]> {
     try {
-      const client = this.getClient();
+      const customers = await this.findCustomersByPhone<{ id: string; phone: string | null }>(
+        businessId,
+        phone,
+        'id'
+      );
+      if (customers.length === 0) return [];
+      if (customers.length === 1) return this.getActiveReservations(customers[0]!.id, businessId);
 
-      const { data: customerData, error: customerError } = await client
-        .from('customers')
-        .select('id')
-        .eq('business_id', businessId)
-        .eq('phone', phoneKey(phone))
-        .maybeSingle();
-
-      if (customerError) throw customerError;
-      if (!customerData) return [];
-
-      return this.getActiveReservations(customerData.id, businessId);
+      // Una ficha de cada forma: las reservas de las dos son del mismo cliente.
+      const lists = await Promise.all(
+        customers.map((customer) => this.getActiveReservations(customer.id, businessId))
+      );
+      return lists
+        .flat()
+        .sort((a, b) => String(b.queued_at ?? '').localeCompare(String(a.queued_at ?? '')));
     } catch (error) {
       logger.error('Error getting active reservations by phone', { error, phone, businessId });
       return [];
@@ -211,20 +243,11 @@ export class SupabaseService {
       const formattedLastName =
         lastName && lastName.trim().length > 0 ? formatName(lastName) : null;
 
-      // Try to find existing customer for this business
-      const { data: existingCustomerData, error: findError } = await client
-        .from('customers')
-        .select('*')
-        .eq('phone', normalizedPhone)
-        .eq('business_id', businessId)
-        .maybeSingle();
-
-      if (findError) {
-        throw findError;
-      }
+      // Try to find existing customer for this business (con o sin el 9: ver
+      // `findCustomersByPhone`), así no se duplica la ficha que cargó el personal.
+      const [existingCustomer] = await this.findCustomersByPhone<Customer>(businessId, phone);
 
       // If customer exists, update lastSeenAt and return it
-      const existingCustomer = existingCustomerData as Customer | null;
 
       if (existingCustomer) {
         const updateData: CustomersUpdate = {
@@ -285,15 +308,8 @@ export class SupabaseService {
     businessId: string
   ): Promise<Customer | null> {
     try {
-      const client = this.getClient();
-      const { data, error } = await client
-        .from('customers')
-        .select('*')
-        .eq('business_id', businessId)
-        .eq('phone', phoneKey(phone))
-        .maybeSingle();
-      if (error) throw error;
-      return (data as Customer | null) ?? null;
+      const [customer] = await this.findCustomersByPhone<Customer>(businessId, phone);
+      return customer ?? null;
     } catch (error) {
       logger.error('Supabase: getCustomerByPhone failed', { error, phone, businessId });
       return null;
@@ -311,15 +327,11 @@ export class SupabaseService {
    */
   static async getCustomerLanguage(phone: string, businessId: string): Promise<string | null> {
     try {
-      const client = this.getClient();
-      const { data, error } = await client
-        .from('customers')
-        .select('preferred_language')
-        .eq('business_id', businessId)
-        .eq('phone', phoneKey(phone))
-        .maybeSingle();
-      if (error) throw error;
-      return (data as { preferred_language: string | null } | null)?.preferred_language ?? null;
+      const customers = await this.findCustomersByPhone<{
+        preferred_language: string | null;
+        phone: string | null;
+      }>(businessId, phone, 'preferred_language');
+      return customers.find((customer) => customer.preferred_language)?.preferred_language ?? null;
     } catch (error) {
       logger.error('Supabase: getCustomerLanguage failed', { error, phone, businessId });
       return null;
@@ -347,7 +359,8 @@ export class SupabaseService {
         .from('customers')
         .update(updateData)
         .eq('business_id', businessId)
-        .eq('phone', phoneKey(phone));
+        // Las dos fichas, si el mismo número quedó cargado con y sin el 9.
+        .in('phone', phoneCandidates(phone).length > 0 ? phoneCandidates(phone) : [phoneKey(phone)]);
 
       if (error) throw error;
 
@@ -378,15 +391,7 @@ export class SupabaseService {
     try {
       const client = this.getClient();
 
-      const { data: customerData, error: findError } = await client
-        .from('customers')
-        .select('*')
-        .eq('business_id', businessId)
-        .eq('phone', phoneKey(phone))
-        .maybeSingle();
-
-      if (findError) throw findError;
-      const customer = customerData as Customer | null;
+      const [customer] = await this.findCustomersByPhone<Customer>(businessId, phone);
       if (!customer) return null;
 
       const updateData: CustomersUpdate = {
@@ -727,19 +732,16 @@ export class SupabaseService {
     businessId: string
   ): Promise<WaitlistEntry | null> {
     try {
-      const client = this.getClient();
-
-      const { data: customerData, error: customerError } = await client
-        .from('customers')
-        .select('id')
-        .eq('business_id', businessId)
-        .eq('phone', phoneKey(phone))
-        .maybeSingle();
-
-      if (customerError) throw customerError;
-      if (!customerData) return null;
-
-      return this.getActiveReservation(customerData.id, businessId);
+      const customers = await this.findCustomersByPhone<{ id: string; phone: string | null }>(
+        businessId,
+        phone,
+        'id'
+      );
+      for (const customer of customers) {
+        const reservation = await this.getActiveReservation(customer.id, businessId);
+        if (reservation) return reservation;
+      }
+      return null;
     } catch (error) {
       logger.error('Error getting active reservation by phone', { error, phone, businessId });
       return null;
@@ -1175,21 +1177,42 @@ export class SupabaseService {
   /**
    * Check if business AI chat flow is enabled.
    * Defaults to enabled when the flag is missing to avoid accidental service lockout.
+   *
+   * Si Supabase falla, vale el último valor leído para ese comercio. Antes un
+   * error contaba como "prendido" — `getBusinessById` se traga el error y
+   * devuelve `null`, igual que si el comercio no existiera —, así que un local
+   * que había apagado el bot lo veía contestar justo cuando la base fallaba.
+   * Sólo si nunca se leyó se mantiene el `true` por defecto.
    */
   static async isBusinessAiChatEnabled(businessId: string): Promise<boolean> {
     try {
-      const business = await this.getBusinessById(businessId);
+      const { data, error } = await this.getClient()
+        .from('businesses')
+        .select('ai_chat_enabled')
+        .eq('id', businessId)
+        .maybeSingle();
 
-      if (!business) {
-        return true;
+      if (error) {
+        throw error;
       }
 
-      return business.ai_chat_enabled ?? true;
+      const enabled =
+        (data as Pick<Business, 'ai_chat_enabled'> | null)?.ai_chat_enabled ?? true;
+      this.aiChatEnabledByBusiness.set(businessId, enabled);
+      return enabled;
     } catch (error) {
-      logger.error('Error checking AI chat enabled flag', { error, businessId });
-      return true;
+      const lastKnown = this.aiChatEnabledByBusiness.get(businessId);
+      logger.error('Error checking AI chat enabled flag, using the last known value', {
+        error,
+        businessId,
+        lastKnown: lastKnown ?? null,
+      });
+      return lastKnown ?? true;
     }
   }
+
+  /** Último `ai_chat_enabled` leído por comercio (ver `isBusinessAiChatEnabled`). */
+  private static aiChatEnabledByBusiness = new Map<string, boolean>();
 
   /**
    * Update business WhatsApp status
