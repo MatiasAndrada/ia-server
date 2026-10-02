@@ -54,3 +54,9 @@ auth_sessions_archive/
 
 # Estado local del servidor (traspasos permanentes de número compartido)
 data/
+
+# Build temporal de deploy.sh (se renombra a dist/ al terminar)
+dist.new/
+
+# Configuración local de Claude Code
+.claude/

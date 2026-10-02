@@ -524,10 +524,26 @@ npm run pm2:stop
 
 ### Script de Deployment
 
+En producción se despliega siempre con el script:
+
 ```bash
-chmod +x deploy.sh
 ./deploy.sh
 ```
+
+Despliega el commit actual y se corta si:
+
+- hay cambios sin commitear o archivos sin trackear;
+- el commit no está en GitHub;
+- fallan el build o los tests.
+
+Compila desde cero, para que `dist/` no arrastre archivos que ya no existen. Reinicia con `sudo pm2 restart ia-server` y deja un tag `deploy-AAAAMMDD-HHMM`. Para volver a un deploy anterior:
+
+```bash
+git checkout deploy-AAAAMMDD-HHMM && ./deploy.sh
+git checkout main
+```
+
+La CI (`.github/workflows/ci.yml`) corre lo mismo (tipos, lint y tests) en cada push y PR.
 
 ### Systemd Service (Linux)
 
@@ -804,6 +820,7 @@ ia-server/
 - **[docs/TYPES_GENERATION.md](docs/TYPES_GENERATION.md)** - Generación de tipos de TypeScript desde Supabase (2 métodos)
 - **[QUICK_START.md](QUICK_START.md)** - Guía rápida de inicio
 - **[docs/ENDPOINTS.md](docs/ENDPOINTS.md)** - Documentación completa de API endpoints
+- **[docs/SILENCIOS.md](docs/SILENCIOS.md)** - Silencios del bot en los números compartidos: qué los activa, cuánto duran y cómo administrarlos por CLI
 
 ## 🤝 Contribuciones
 

@@ -1,0 +1,59 @@
+# Corre en cada push y PR: tipos, lint y tests.
+#
+# Los tests nunca llaman al modelo real: `OPENROUTER_API_KEY` va vacía a
+# propósito (el saldo de OpenRouter es el mismo que usa el bot en producción).
+# Redis va como servicio porque `integration/reservation-flow.test.ts` lo usa.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      OPENROUTER_API_KEY: ''
+      OPENROUTER_EVAL_API_KEY: ''
+      REDIS_URL: redis://localhost:6379
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Instalar dependencias
+        run: pnpm install --frozen-lockfile
+
+      - name: Tipos
+        run: pnpm exec tsc --noEmit
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Tests
+        run: pnpm exec jest --silent
