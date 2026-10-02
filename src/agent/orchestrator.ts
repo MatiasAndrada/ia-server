@@ -53,9 +53,10 @@ export interface TurnResult {
 }
 
 const GENERATION_OPTIONS = {
-  // Temperatura media-baja: alcanza para que el fraseo varíe y no suene a
-  // plantilla, sin que el modelo se ponga creativo con los datos operativos.
-  temperature: 0.6,
+  // Baja: el tono ya lo fija el prompt, y lo que importa en cada turno es que
+  // siga las reglas y no se ponga creativo con datos operativos. Con 0.6 el
+  // mismo caso salía distinto de una vez a otra.
+  temperature: 0.3,
   maxTokens: 800,
   // Gemini descuenta el "thinking" del mismo presupuesto que la salida visible;
   // sin este techo un turno con varias herramientas puede quedar truncado.
