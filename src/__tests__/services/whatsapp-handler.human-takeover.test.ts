@@ -18,6 +18,10 @@ import type { SharedNumberAdaptation } from '../../adaptations/index.js';
 
 jest.mock('../../utils/logger');
 
+// La ruta temporal que deja jest.setup.js: al terminar se vuelve a ella, nunca
+// a la de por defecto, que es el archivo real de producción.
+const SETUP_HANDOFF_FILE = process.env.SHARED_NUMBER_HANDOFF_FILE;
+
 /**
  * El pedido de los locales de número compartido, de punta a punta por el
  * handler de WhatsApp, para cada uno de los cuatro que tienen saludo propio:
@@ -206,7 +210,7 @@ describe.each(CASES)('$businessName: el bot no se mete en las charlas de la pers
 
   afterEach(() => {
     process.env.NODE_ENV = originalNodeEnv;
-    delete process.env.SHARED_NUMBER_HANDOFF_FILE;
+    process.env.SHARED_NUMBER_HANDOFF_FILE = SETUP_HANDOFF_FILE;
     delete process.env[c.adaptation.businessIdEnvVar];
   });
 
