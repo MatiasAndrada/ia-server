@@ -17,6 +17,10 @@ import { resetHandoffStoreForTests } from '../../adaptations/handoff-store.js';
 
 jest.mock('../../utils/logger');
 
+// La ruta temporal que deja jest.setup.js: al terminar se vuelve a ella, nunca
+// a la de por defecto, que es el archivo real de producción.
+const SETUP_HANDOFF_FILE = process.env.SHARED_NUMBER_HANDOFF_FILE;
+
 /**
  * Lo que pidieron los locales de número compartido: "si Simona o Valentina le
  * mandan un mensaje a un amigo y el amigo le contesta, que no le conteste el
@@ -59,7 +63,7 @@ describe('la persona del local escribió en el chat', () => {
   });
 
   afterEach(() => {
-    delete process.env.SHARED_NUMBER_HANDOFF_FILE;
+    process.env.SHARED_NUMBER_HANDOFF_FILE = SETUP_HANDOFF_FILE;
   });
 
   /**
@@ -125,9 +129,26 @@ describe('la persona del local escribió en el chat', () => {
 
     it('cuando vence, el bot vuelve a atender', async () => {
       await registerHumanReply(adaptation, CHAT);
-      store.delete(`adaptation:${adaptation.id}:human:${CHAT}`); // lo que hace el TTL
+      store.delete(`adaptation:${adaptation.id}:human:${CHAT}`); // lo que hace el TTL de Redis
+      const now = Date.now();
+      jest.spyOn(Date, 'now').mockReturnValue(now + 48 * 60 * 60 * 1000 + 1000);
 
       expect(await intercept(adaptation, 'hola')).toEqual({ action: 'continue' });
+    });
+
+    it('si Redis se reinicia, el silencio sigue: vive en el archivo', async () => {
+      await registerHumanReply(adaptation, CHAT);
+      store.clear(); // Redis reiniciado (o con un flush)
+      resetHandoffStoreForTests(); // y el proceso también
+
+      expect(await intercept(adaptation, 'hola')).toEqual({ action: 'silence', reason: 'human' });
+    });
+
+    it('un traspaso también sobrevive a un reinicio de Redis', async () => {
+      await handOffWithoutReply(adaptation, CHAT);
+      store.clear();
+
+      expect(await intercept(adaptation, 'hola')).toEqual({ action: 'silence', reason: 'handoff' });
     });
 
     it('el silencio es de ese chat, no del comercio', async () => {
@@ -145,11 +166,11 @@ describe('la persona del local escribió en el chat', () => {
       expect(await isBotMuted(adaptation, CHAT)).toBe(false);
     });
 
-    it('con Redis caído no se puede registrar: el bot sigue atendiendo', async () => {
+    it('con Redis caído igual queda registrado en el archivo: el bot no aparece', async () => {
       jest.spyOn(RedisConfig, 'isReady').mockReturnValue(false);
 
-      expect(await registerHumanReply(adaptation, CHAT)).toBe(false);
-      expect(await intercept(adaptation, 'hola')).toEqual({ action: 'continue' });
+      expect(await registerHumanReply(adaptation, CHAT)).toBe(true);
+      expect(await intercept(adaptation, 'hola')).toEqual({ action: 'silence', reason: 'human' });
     });
   });
 
@@ -248,7 +269,7 @@ describe('nombrar a la persona sin hablarle al bot', () => {
   });
 
   afterEach(() => {
-    delete process.env.SHARED_NUMBER_HANDOFF_FILE;
+    process.env.SHARED_NUMBER_HANDOFF_FILE = SETUP_HANDOFF_FILE;
   });
 
   describe('De La Fonte — mensajes reales de los logs', () => {

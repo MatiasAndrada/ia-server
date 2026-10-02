@@ -3,14 +3,22 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   hasPermanentHandoff,
+  hasSilence,
   listPermanentHandoffs,
+  listSilences,
   pendingHandoffChangesForTests,
   removePermanentHandoff,
+  removeSilence,
   resetHandoffStoreForTests,
   savePermanentHandoff,
+  saveSilence,
 } from '../../adaptations/handoff-store.js';
 
 jest.mock('../../utils/logger');
+
+// La ruta temporal que deja jest.setup.js: al terminar se vuelve a ella, nunca
+// a la de por defecto, que es el archivo real de producción.
+const SETUP_HANDOFF_FILE = process.env.SHARED_NUMBER_HANDOFF_FILE;
 
 /**
  * El archivo local es la fuente de verdad del "nunca más" de De La Fonte. Lo que
@@ -27,7 +35,7 @@ describe('handoff-store', () => {
   });
 
   afterAll(() => {
-    delete process.env.SHARED_NUMBER_HANDOFF_FILE;
+    process.env.SHARED_NUMBER_HANDOFF_FILE = SETUP_HANDOFF_FILE;
   });
 
   it('sin archivo no hay traspasos', async () => {
@@ -189,6 +197,73 @@ describe('handoff-store', () => {
       await removePermanentHandoff('delafonte', 'nunca-estuvo');
 
       await expect(fs.readFile(file, 'utf8')).rejects.toThrow();
+    });
+  });
+  describe('silencios que vencen (Antigal, SKY, La Misión)', () => {
+    const HOUR = 60 * 60 * 1000;
+    const inHours = (hours: number) => new Date(Date.now() + hours * HOUR);
+
+    it('rige hasta que vence, y después el bot vuelve', async () => {
+      await saveSilence('antigal', 'c1', { expiresAt: inHours(48) });
+      expect(await hasSilence('antigal', 'c1')).toBe(true);
+
+      const now = Date.now();
+      jest.spyOn(Date, 'now').mockReturnValue(now + 49 * HOUR);
+      expect(await hasSilence('antigal', 'c1')).toBe(false);
+    });
+
+    it('sobrevive a un reinicio, con su vencimiento', async () => {
+      await saveSilence('antigal', 'c1', { expiresAt: inHours(48) });
+      resetHandoffStoreForTests();
+
+      expect(await hasSilence('antigal', 'c1')).toBe(true);
+      const [silence] = await listSilences('antigal');
+      expect(silence).toMatchObject({ conversationId: 'c1', kind: 'handoff' });
+      expect(silence!.expiresAt!.getTime()).toBeGreaterThan(Date.now() + 47 * HOUR);
+    });
+
+    it('"pidió por la persona" y "escribió la persona" son silencios distintos', async () => {
+      await saveSilence('sky', 'c1', { kind: 'human', expiresAt: inHours(48) });
+
+      expect(await hasSilence('sky', 'c1', 'human')).toBe(true);
+      expect(await hasSilence('sky', 'c1', 'handoff')).toBe(false);
+
+      await removeSilence('sky', 'c1', 'human');
+      expect(await hasSilence('sky', 'c1', 'human')).toBe(false);
+    });
+
+    it('renovarlo con cada mensaje no agrega una línea por mensaje', async () => {
+      await saveSilence('sky', 'c1', { kind: 'human', expiresAt: inHours(48) });
+      await saveSilence('sky', 'c1', { kind: 'human', expiresAt: inHours(48.1) });
+      await saveSilence('sky', 'c1', { kind: 'human', expiresAt: inHours(48.2) });
+      expect((await fs.readFile(file, 'utf8')).trim().split('\n')).toHaveLength(1);
+
+      // Pasada una hora sí se estira, y queda escrito.
+      await saveSilence('sky', 'c1', { kind: 'human', expiresAt: inHours(50) });
+      expect((await fs.readFile(file, 'utf8')).trim().split('\n')).toHaveLength(2);
+    });
+
+    it('un silencio permanente nunca se acorta', async () => {
+      await savePermanentHandoff('delafonte', 'c1');
+      await saveSilence('delafonte', 'c1', { expiresAt: inHours(1) });
+
+      const now = Date.now();
+      jest.spyOn(Date, 'now').mockReturnValue(now + 2 * HOUR);
+      expect(await hasPermanentHandoff('delafonte', 'c1')).toBe(true);
+    });
+
+    it('las líneas de antes de los vencimientos siguen siendo traspasos permanentes', async () => {
+      // Tal cual están hoy en el archivo de producción.
+      await fs.writeFile(
+        file,
+        '{"a":"delafonte","c":"c1","t":"2026-09-24T22:27:38.885Z"}\n' +
+          '{"a":"delafonte","c":"c2","t":"2026-09-25T01:06:53.585Z"}\n' +
+          '{"a":"delafonte","c":"c2","t":"2026-09-26T01:06:53.585Z","r":true}\n'
+      );
+
+      expect(await hasPermanentHandoff('delafonte', 'c1')).toBe(true);
+      expect(await hasPermanentHandoff('delafonte', 'c2')).toBe(false);
+      expect(await listPermanentHandoffs('delafonte')).toEqual(['c1']);
     });
   });
 });

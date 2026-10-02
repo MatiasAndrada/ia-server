@@ -75,6 +75,23 @@ describe('adaptación Antigal', () => {
       expect((await intercept('hola?')).action).toBe('silence');
     });
 
+    it.each([
+      '¿Cuánto vale el menú?',
+      'buenas, ¿cuánto vale el cubierto?',
+      'vale, para 4 a las 21',
+      'Vale',
+      'vale gracias',
+    ])('"%s": "vale" como precio o como "de acuerdo" no silencia al cliente', async (text) => {
+      expect((await intercept(text)).action).toBe('continue');
+    });
+
+    it.each(['Hola Vale!', 'buen día vale, ¿cómo estás?', 'gracias vale!!'])(
+      '"%s": "vale" como apodo sí es para ella',
+      async (text) => {
+        expect((await intercept(text)).action).toBe('silence');
+      }
+    );
+
     it('"reservar" a secas no canaliza', async () => {
       expect((await intercept('Reservar')).action).toBe('continue');
     });

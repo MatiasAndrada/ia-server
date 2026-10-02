@@ -1,6 +1,7 @@
 import {
   BOOK_KEYWORDS,
   CANCEL_KEYWORDS,
+  GREETING_UNIT_SOURCE,
   buildExactKeywordPattern,
   buildKeywordPattern,
 } from '../i18n/keywords.js';
@@ -15,6 +16,14 @@ import { capitalize, type SharedNumberAdaptation, type WelcomeEvent } from './sh
  * (`shared-number.ts`) — silencio de cuarenta y ocho horas, con salida antes de
  * tiempo si el cliente escribe una palabra de reserva.
  */
+/**
+ * "Vale" como apodo de Valentina: después de un saludo, de un "gracias" o de un
+ * "con" — "hola vale", "gracias vale", "quiero hablar con vale". El texto llega
+ * normalizado (minúsculas, sin acentos ni signos; ver `normalize` en
+ * shared-number.ts).
+ */
+const VALE_AS_NICKNAME = `(?<=\\b(?:${GREETING_UNIT_SOURCE}|gracias|con)\\s+)vale\\b`;
+
 export const antigalAdaptation: SharedNumberAdaptation = {
   // Parte de la key de Redis desde el primer despliegue: cambiarlo soltaría
   // todos los traspasos activos.
@@ -26,8 +35,14 @@ export const antigalAdaptation: SharedNumberAdaptation = {
    * se escriba al pedir una mesa, así que —igual que "Simona" en De La Fonte—
    * se busca como palabra completa en cualquier parte de la frase: "quiero
    * hablar con Valentina" lleva al mismo lado.
+   *
+   * "Vale", el apodo, no: también es "cuesta" ("¿cuánto vale?") y "de acuerdo"
+   * ("vale, para 4 a las 21"), y como palabra suelta silenciaba cuarenta y ocho
+   * horas a clientes que estaban reservando. Sólo cuenta cuando le hablan a
+   * ella (ver `VALE_AS_NICKNAME`); el resto lo decide el modelo con
+   * `humanContext`, que sabe que muchos la llaman así.
    */
-  handoffPattern: buildKeywordPattern(['valentina', 'vale']),
+  handoffPattern: new RegExp(`${buildKeywordPattern(['valentina']).source}|${VALE_AS_NICKNAME}`),
 
   /**
    * Un proveedor, una instalación, un amigo que le escribe a Valentina: nada

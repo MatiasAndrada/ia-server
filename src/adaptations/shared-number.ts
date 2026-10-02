@@ -1,7 +1,13 @@
 import { RedisConfig } from '../config/redis.js';
 import { GREETING_UNIT_SOURCE } from '../i18n/keywords.js';
 import { logEvent, logger } from '../utils/logger.js';
-import { hasPermanentHandoff, savePermanentHandoff } from './handoff-store.js';
+import {
+  hasPermanentHandoff,
+  hasSilence,
+  removeSilence,
+  savePermanentHandoff,
+  saveSilence,
+} from './handoff-store.js';
 
 /**
  * Motor de las adaptaciones de "número compartido".
@@ -83,11 +89,11 @@ export interface SharedNumberAdaptation {
 
   /**
    * Si es `true`, canalizar a la persona es definitivo para esa conversación:
-   * el traspaso se guarda sin vencimiento en un archivo local (ver
-   * `handoff-store.ts`, no en Redis) y NADA reactiva al bot — ni
-   * `reactivationPattern`, ni el paso del tiempo, ni un saludo al día siguiente.
-   * Sin esto rige el comportamiento por defecto (silencio de cuarenta y ocho
-   * horas con salida por palabra de reserva).
+   * el traspaso se guarda sin vencimiento en el archivo local (ver
+   * `handoff-store.ts`) y NADA reactiva al bot — ni `reactivationPattern`, ni
+   * el paso del tiempo, ni un saludo al día siguiente. Sin esto rige el
+   * comportamiento por defecto (silencio de cuarenta y ocho horas con salida
+   * por palabra de reserva), que también se guarda en ese archivo.
    */
   permanentHandoff?: boolean;
 
@@ -387,12 +393,18 @@ const ASKS_FOR_SOMEONE_PREFIX = new RegExp(
  */
 function talksToTheBot(handoffPattern: RegExp, normalized: string): boolean {
   const request = ASKS_FOR_SOMEONE_PREFIX.exec(normalized);
-  const rest = request ? normalized.slice(request[0].length) : normalized;
-  const match = handoffPattern.exec(rest);
-  if (!match || match.index !== 0) return false;
+  const start = request ? request[0].length : 0;
+  // La palabra tiene que estar justo donde termina el pedido (o al principio).
+  // Se busca sobre el texto entero, anclada en esa posición, y no sobre el
+  // resto recortado: un patrón con lookbehind (el "vale" de Antigal) necesita
+  // ver lo que viene antes.
+  const anchored = new RegExp(handoffPattern.source, `${handoffPattern.flags.replace(/[gy]/g, '')}y`);
+  anchored.lastIndex = start;
+  const match = anchored.exec(normalized);
+  if (!match) return false;
   // Después de un pedido puede venir el motivo; sin pedido, sólo vale la
   // palabra sola.
-  return request !== null || match[0].length === rest.length;
+  return request !== null || match[0].length === normalized.length - start;
 }
 
 /**
@@ -421,21 +433,29 @@ export async function registerHumanReply(
     return true;
   }
 
+  const alreadyHers = await isHumanInCharge(adaptation, conversationId);
+  // El archivo es lo que sobrevive a un reinicio de Redis; Redis queda como
+  // copia, y para los silencios que ya estaban ahí antes del archivo.
+  await saveSilence(adaptation.id, conversationId, {
+    kind: 'human',
+    expiresAt: new Date(Date.now() + HUMAN_REPLY_TTL_SECONDS * 1000),
+  });
   try {
-    if (!RedisConfig.isReady()) return false;
-    const client = RedisConfig.getClient();
-    const key = humanReplyKey(adaptation, conversationId);
-    const alreadyHers = (await client.get(key)) !== null;
-    await client.setEx(key, HUMAN_REPLY_TTL_SECONDS, '1');
-    return !alreadyHers;
+    if (RedisConfig.isReady()) {
+      await RedisConfig.getClient().setEx(
+        humanReplyKey(adaptation, conversationId),
+        HUMAN_REPLY_TTL_SECONDS,
+        '1'
+      );
+    }
   } catch (error) {
-    logger.warn('Failed to persist the human-reply flag', {
+    logger.warn('Failed to persist the human-reply flag in Redis, the file keeps it', {
       conversationId,
       adaptation: adaptation.id,
       error: error instanceof Error ? error.message : 'Unknown error',
     });
-    return false;
   }
+  return !alreadyHers;
 }
 
 /**
@@ -485,6 +505,9 @@ async function isHumanInCharge(
   // (ver `registerHumanReply`): ya lo responde `isHandedOff`.
   if (adaptation.permanentHandoff) return false;
 
+  if (await hasSilence(adaptation.id, conversationId, 'human')) return true;
+
+  // Los silencios anteriores al archivo viven sólo en Redis hasta que vencen.
   try {
     if (!RedisConfig.isReady()) return false;
     const raw = await RedisConfig.getClient().get(humanReplyKey(adaptation, conversationId));
@@ -509,6 +532,9 @@ async function isHandedOff(
     return hasPermanentHandoff(adaptation.id, conversationId);
   }
 
+  if (await hasSilence(adaptation.id, conversationId)) return true;
+
+  // Los silencios anteriores al archivo viven sólo en Redis hasta que vencen.
   try {
     if (!RedisConfig.isReady()) return false;
     const raw = await RedisConfig.getClient().get(handoffKey(adaptation, conversationId));
@@ -534,6 +560,10 @@ async function handOffToHuman(
     return;
   }
 
+  // El archivo es lo que sobrevive a un reinicio de Redis (ver `handoff-store.ts`).
+  await saveSilence(adaptation.id, conversationId, {
+    expiresAt: new Date(Date.now() + HANDOFF_TTL_SECONDS * 1000),
+  });
   try {
     if (!RedisConfig.isReady()) return;
     await RedisConfig.getClient().setEx(
@@ -542,7 +572,7 @@ async function handOffToHuman(
       '1'
     );
   } catch (error) {
-    logger.warn('Failed to persist the shared-number handoff flag', {
+    logger.warn('Failed to persist the shared-number handoff flag in Redis, the file keeps it', {
       conversationId,
       adaptation: adaptation.id,
       error: error instanceof Error ? error.message : 'Unknown error',
@@ -555,6 +585,8 @@ async function resumeBot(
   adaptation: SharedNumberAdaptation,
   conversationId: string
 ): Promise<void> {
+  await removeSilence(adaptation.id, conversationId, 'human');
+  await removeSilence(adaptation.id, conversationId, 'handoff');
   try {
     if (!RedisConfig.isReady()) return;
     const client = RedisConfig.getClient();
