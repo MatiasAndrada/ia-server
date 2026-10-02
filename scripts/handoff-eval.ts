@@ -47,6 +47,7 @@ import { laMisionAdaptation } from '../src/adaptations/la-mision';
 import { skyAdaptation } from '../src/adaptations/sky';
 import type { SharedNumberAdaptation } from '../src/adaptations';
 import { EnvConfig, LlmMessage } from '../src/types';
+import { evalOpenRouterKey } from './eval-openrouter-key';
 
 /**
  * `handoff`: tiene que derivar. `answer`: tiene que contestar algo.
@@ -318,7 +319,7 @@ async function main(): Promise<void> {
   SupabaseConfig.initialize(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
   await RedisConfig.initialize(process.env.REDIS_URL || 'redis://localhost:6379');
   OpenRouterConfig.initialize({
-    openRouterApiKey: process.env.OPENROUTER_API_KEY as string,
+    openRouterApiKey: evalOpenRouterKey(),
     openRouterModel: process.env.OPENROUTER_MODEL || 'openrouter/auto',
     openRouterFallbackModels: [],
     openRouterTimeout: parseInt(process.env.OPENROUTER_TIMEOUT || '30000', 10),

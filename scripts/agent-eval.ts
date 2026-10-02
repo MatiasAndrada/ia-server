@@ -31,6 +31,7 @@ import { clearHistory } from '../src/agent/state';
 import { runWithLanguage } from '../src/i18n';
 import { ALL_SCENARIOS, ConversationScenario } from '../src/__tests__/scenarios/conversation-scenarios';
 import { EnvConfig } from '../src/types';
+import { evalOpenRouterKey } from './eval-openrouter-key';
 
 const BUSINESS_ID = process.env.TEST_BUSINESS_ID;
 
@@ -66,14 +67,26 @@ interface ScenarioOutcome {
  * escenario espera un bloqueo sí lo es.
  */
 function checkViolations(
-  reply: string,
+  messages: string[],
   tools: string[],
   expect: ConversationScenario['turns'][number]['expect']
 ): string[] {
   const violations: string[] = [];
+  const reply = messages.join(' ');
 
-  if (!reply.trim()) {
+  if (!reply.trim() && !expect.mayBeSilent) {
     violations.push('respuesta vacía');
+  }
+
+  // Por mensaje y no sobre el turno entero: un `verbatim` con su pregunta y el
+  // texto del modelo con otra son dos mensajes, y eso también es la falla.
+  if (expect.maxQuestionsPerMessage !== undefined) {
+    for (const message of messages) {
+      const questions = (message.match(/\?/g) ?? []).length;
+      if (questions > expect.maxQuestionsPerMessage) {
+        violations.push(`${questions} preguntas en un mismo mensaje`);
+      }
+    }
   }
 
   if (expect.isBlocked && tools.includes('create_reservation')) {
@@ -142,7 +155,7 @@ async function runScenario(scenario: ConversationScenario): Promise<ScenarioOutc
         tools: result.toolsCalled,
         iterations: result.iterations,
         latencyMs,
-        violations: checkViolations(reply, result.toolsCalled, turn.expect),
+        violations: checkViolations(result.messages, result.toolsCalled, turn.expect),
       });
       outcome.totalLatencyMs += latencyMs;
     }
@@ -217,7 +230,7 @@ async function main(): Promise<void> {
   SupabaseConfig.initialize(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
   await RedisConfig.initialize(process.env.REDIS_URL || 'redis://localhost:6379');
   OpenRouterConfig.initialize({
-    openRouterApiKey: process.env.OPENROUTER_API_KEY as string,
+    openRouterApiKey: evalOpenRouterKey(),
     openRouterModel: process.env.OPENROUTER_MODEL || 'openrouter/auto',
     openRouterFallbackModels: [],
     openRouterTimeout: parseInt(process.env.OPENROUTER_TIMEOUT || '30000', 10),

@@ -34,6 +34,7 @@ import { clearCachedLanguage } from '../src/i18n/language-store';
 import { resetConversation as resetAgentConversation } from '../src/agent/orchestrator';
 import { clearNotified, menuSendKey } from '../src/utils/notification-dedup';
 import { BaileysMessage, EnvConfig } from '../src/types';
+import { evalOpenRouterKey } from './eval-openrouter-key';
 
 const BUSINESS_ID = process.env.TEST_BUSINESS_ID;
 
@@ -43,10 +44,8 @@ if (!BUSINESS_ID) {
   process.exit(1);
 }
 
-if (!process.env.OPENROUTER_API_KEY) {
-  console.error('❌ Configurá OPENROUTER_API_KEY en tu .env — lo necesita el fallback conversacional del agente.');
-  process.exit(1);
-}
+// El simulador llama al modelo real: con la key de pruebas, nunca la del bot.
+const OPENROUTER_KEY = evalOpenRouterKey();
 
 let phone = process.env.TEST_PHONE || '5493540000000';
 
@@ -124,7 +123,7 @@ async function main(): Promise<void> {
   // src/index.ts al arrancar el servidor real, acá replicado a mano porque
   // este script no pasa por ese bootstrap.
   OpenRouterConfig.initialize({
-    openRouterApiKey: process.env.OPENROUTER_API_KEY as string,
+    openRouterApiKey: OPENROUTER_KEY,
     openRouterModel: process.env.OPENROUTER_MODEL || 'openrouter/auto',
     openRouterFallbackModels: (process.env.OPENROUTER_FALLBACK_MODELS || '')
       .split(',')
